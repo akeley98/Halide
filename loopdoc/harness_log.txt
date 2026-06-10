@@ -1,0 +1,3 @@
+Behavior difference: build/examples/box_blur_halide.debug_0.log not equal to build/examples/box_blur_micro_halide.log
+Not all runtime tests passed.
+Logged to harness_log.txt

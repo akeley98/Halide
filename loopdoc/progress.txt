@@ -1,0 +1,38 @@
+Put a WIP into the [ ] when you start working on a task.
+Put a ✅ into the [ ] when the task is more-or-less done.
+Since every feature interacts with everything else, "done" is a judgment call, especially for earlier tasks.
+You may add to the NOTES section of future tasks to help coordinate finishing the incomplete work, or for any other purpose really.
+
+
+[WIP] Bootstrap: Brief overview of Halide programming model, document basic pure functions, `compute_at`, `compute_root`, loop generation from only these basic features, and the format of the print_loop_nest() output.
+    Explain the distinction between inlined and non-inlined functions.
+
+[ ] `store_at`, `store_root`
+    NOTES:
+
+[ ] `hoist_storage`, `hoist_storage_root`
+    NOTES:
+
+[ ] `split`, `fuse`, `tile`, `reorder`
+    NOTES:
+
+[ ] `reorder_storage`
+    NOTES:
+
+[ ] Update definitions (see e.g. `../apps/hist`)
+    NOTES:
+
+[ ] `in` (wrapper functions) and `clone_in`
+    NOTES:
+
+[ ] `compute_with` (this is where things get very confusing)
+    NOTES:
+
+[ ] `compute_inline`
+    NOTES:
+
+[ ] `specialize`
+    NOTES:
+
+[ ] `gpu`, `gpu_lanes`, `gpu_threads`, `gpu_blocks`, `gpu_tile`
+    NOTES:
