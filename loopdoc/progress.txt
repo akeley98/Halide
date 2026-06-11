@@ -26,11 +26,13 @@ Marking convention:
       * A minimal first example (e.g. two pure funcs, one `compute_root`) passes.
       * `micro_halide` actually implements `print_loop_nest` (no hardcoded output).
       * The `CHEATING` ifdef block is removed from every example (see README rule:
-        examples must not branch on USE_MICRO_HALIDE except around print_loop_nest).
+        examples must not branch on USE_MICRO_HALIDE at all; the only ifdef is the
+        include/using block at the top of the file).
     NOTES:
-      * box_blur.cpp is currently too rich for a first example (ImageParam,
-        repeat_edge with auto-named _0/_1/_2 vars, cast, 4 stages). Add a simpler
-        example to isolate the core mechanics; keep box_blur for later.
+      * box_blur.cpp may be too rich for a first example (ImageParam,
+        repeat_edge with auto-named _0/_1/_2 vars, cast, 4 stages).
+        For bootstrapping, you may want to start writing simpler examples first.
+        The box_blur.cpp should work correctly (no cheating) at the end of the bootstrap milestone.
 
 [ ] `store_at`, `store_root`
     NOTES: These won't visibly change the loop nest output, but reasoning about illegal store_at requires comprehension of the loop nest structure.
