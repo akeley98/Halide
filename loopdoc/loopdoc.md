@@ -233,36 +233,63 @@ The injection is recursive: a Func computed inside a Func that is itself
 computed inside another nests accordingly, because each Func's loops are
 generated the same way and children are injected at each of *its* loop levels.
 
-### Caveat: how many loops a `compute_at` Func emits (bounds-dependent)
+### Loop elision: a `compute_at` Func may emit fewer loops than its dimensions
 
 A root Func always emits one loop per dimension (§5). A `compute_at` Func does
-**not**, in general. Halide only computes the *region* of the producer needed
-at that loop iteration of the host, and a dimension whose needed extent is a
-single point becomes an extent-1 loop that Halide **simplifies away entirely**.
+**not**, in general. Halide computes only the *region* of the producer needed
+per iteration of the host, and a dimension whose needed extent is a single
+point becomes an extent-1 loop that Halide **simplifies away entirely** — no
+`for` line is printed for it. Conceptually:
 
-So the loop count of a `compute_at` Func depends on *bounds inference* — how
-large a region of the producer each host iteration reads:
+> A dimension `d` of `f.compute_at(g, L)` survives as a loop iff the values of
+> `f`'s `d`-coordinate read by `g` span more than one point as `g`'s loops
+> *inner to `L`* run. Reading `f` at a multi-tap stencil in `d`, or at an index
+> that varies with an inner host loop, keeps the loop; a single-point read
+> collapses it.
 
-* In `compute_at.cpp`, `consumer` reads `producer` at `y` and `y+1` (a 2-wide
-  stencil in `y`) for each `consumer` scanline, so the producer's `y` loop has
-  extent 2 and survives; its `x` loop spans the whole row and survives. Both
-  dimensions print — which is why this example's loop count happens to equal
-  the dimension count.
-* But if a producer is computed at an *inner* loop where the host reads it at
-  only one point along some dimension, that dimension's loop vanishes. A
-  pointwise read at the innermost loop can erase *all* of the producer's loops,
-  leaving just `produce f: f(...) = ...`.
+Worked cases, all `f.compute_at(output, x)` with `output` reading `f` at offsets
+`(0,0), (dx,0), (0,dy), (dx,dy)`:
 
-<!-- DOC GAP (bootstrap): predicting the exact loop count of a compute_at Func
-requires modeling read offsets / bounds inference, which this revision does not
-yet cover. The clean examples here are chosen so no dimension is elided. This
-should be made precise alongside split + bounds inference. -->
+* dx = dy = 1: both loops survive — [examples/loop_elide_test.cpp](examples/loop_elide_test.cpp).
+* dx = 0: `f`'s `x` is read at one point → `x` loop elided — [examples/loop_elide_x.cpp](examples/loop_elide_x.cpp).
+* dy = 0: `y` loop elided — [examples/loop_elide_y.cpp](examples/loop_elide_y.cpp).
+* dx = dy = 0: both elided, `f` emits no loops at all (`produce f: f(...) =
+  ...`) — [examples/loop_elide_both.cpp](examples/loop_elide_both.cpp). This is
+  why `compute_at` at the innermost loop of a pointwise consumer behaves almost
+  like inlining.
 
-This document does not yet give the rule for predicting *which* dimensions
-survive — that requires the bounds-inference model introduced with splitting.
-For now, treat the loop count of a `compute_at` Func as bounds-dependent and
-rely on the structural nesting (produce/consume placement), which is fully
-determined by the schedule and described above.
+**Predicting exactly which dimensions collapse requires bounds inference**,
+which is undecidable in general and out of scope for this document. We therefore
+*declare* elision rather than derive it: an example annotates it with
+
+    f.compute_at(output, x);
+    collapses(f, {x});   // f's x loop has extent 1 here and is elided
+
+`collapses(f, {vars...})` is a no-op under real Halide; it tells micro_halide
+which loops to drop. The split between *structure* (taught here, derived from
+the schedule) and *elision* (declared) is described in the README. The loop
+*structure* — produce/consume placement, ordering, and the surviving loops — is
+fully determined by the schedule as described in §§4–8.
+
+### An elided loop is still a `compute_at` injection site
+
+Eliding a loop only removes its `for` line; the loop's *position* in the nest is
+preserved. So a Func computed at an elided loop is still injected there, as a
+prefix of the host's body, outside any surviving inner loops of the host. See
+[examples/compute_at_elided_level.cpp](examples/compute_at_elided_level.cpp):
+`h.compute_at(output, x)` elides `h`'s `y` loop, yet `p.compute_at(h, y)` still
+places `p` at that (loop-less) level:
+
+```
+produce h:
+  produce p:
+    for y:
+      for x:
+        p(...) = ...
+  consume p:
+    for x:           # h's surviving x loop
+      h(...) = ...
+```
 
 ---
 
@@ -275,8 +302,10 @@ Combining the rules, the loop nest for a pipeline is produced by:
 3. Partition realized Funcs: root-level Funcs form the top-level chain; each
    `compute_at(g, var)` Func is filed under `g`'s loop over `var`.
 4. Emit the root chain (§4). Within each Func's `produce`, emit its loops
-   (§5), and at each loop level inject the realizations of the Funcs filed
-   there (§7), whose `consume` wraps the remainder of that Func's body.
+   (§5) — omitting the `for` line of any dimension declared elided (§7), but
+   keeping that level as an injection site — and at each loop level inject the
+   realizations of the Funcs filed there (§7), whose `consume` wraps the
+   remainder of that Func's body.
 
 Inlined Funcs are never emitted; they only contribute producer edges that shape
 realization order.

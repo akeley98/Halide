@@ -34,17 +34,20 @@ Marking convention:
         For bootstrapping, you may want to start writing simpler examples first.
         The box_blur.cpp should work correctly (no cheating) at the end of the bootstrap milestone.
       * DONE. Passing examples: two_funcs_root, inline_default, compute_at,
-        diamond_root, box_blur. micro_halide builds the nest from realization
+        diamond_root, box_blur, loop_elide_test/_x/_y/_both,
+        compute_at_elided_level. micro_halide builds the nest from realization
         order + produce/consume nesting + per-Func loops; loopdoc.md §§1-8 and
         src_doc/loop_nest_construction.md document and justify it.
-      * PARTIAL: compute_at. The structural nesting (where the produce/consume
-        block lands) is fully covered. The *loop count* of a compute_at Func is
-        bounds-dependent (extent-1 dims are simplified away) and is only
-        described qualitatively in loopdoc §7 -- it is NOT yet predictable from
-        the doc. This is the gap below; it should be made precise together with
-        the `split`/bounds-inference milestone, which is the natural home for the
-        bounds model. The `nested_compute_at` example that exposed it was removed
-        to keep the suite green; re-add it once the loop-count rule is documented.
+      * compute_at loop ELISION resolved via the design decision below: the loop
+        *structure* is derived from the schedule (validated), and point-loop
+        elision (extent-1 dims simplified away) is *declared* per example with
+        the `collapses(f, {vars})` annotation -- a no-op shim under real Halide
+        (halide_compat/halide_compat.h), honored by micro_halide. loopdoc §7
+        documents the qualitative rule, the four loop_elide_* cases, and that an
+        elided loop is still a valid compute_at injection site
+        (compute_at_elided_level.cpp). README documents the structure-vs-declared
+        factoring. This is the standing policy for all future bounds-driven
+        elision (incl. RDom/update reduction loops).
 
 [ ] `store_at`, `store_root`
     NOTES: These won't visibly change the loop nest output, but reasoning about illegal store_at requires comprehension of the loop nest structure.
@@ -54,10 +57,14 @@ Marking convention:
 
 [ ] `split`, `fuse`, `tile`, `reorder`
     NOTES:
-      * Carry over the bootstrap compute_at gap here: this milestone should
-        introduce the bounds-inference model that lets a reader predict exactly
-        which dimensions of a compute_at Func survive as loops (extent-1 dims are
-        elided). Re-add a nested_compute_at example once that rule is written.
+      * Loop elision is handled by the `collapses` annotation (see bootstrap),
+        so this milestone does NOT need to make bounds inference predictable.
+        Keep declaring elision via `collapses`; do not try to derive it.
+      * split/fuse/reorder DO add/rename/merge loops the schedule controls
+        directly -- those are structural and must be derived (not declared).
+        Watch the interaction: a split introduces new Vars that can themselves
+        be compute_at sites and can be elided; `collapses` keys on Var name, so
+        annotate the post-split Var names.
 
 [ ] Update definitions (see e.g. `../apps/hist`)
     NOTES:
@@ -88,4 +95,4 @@ concrete question needed to build the loop nest, record it here:
 The micro-agent creates [open] issues.
 The main-agent may mark issues as [fixed] if changes to the docs seem to have caused later micro-agents to not run into the same confusion.
 
-  - [open] split/bounds (raised during bootstrap) | how many `for` loops does a `compute_at` Func emit? Its dimension count is an upper bound, but dims whose required extent at the compute site is 1 are simplified away. Predicting which survive needs a bounds/stencil model not yet in the doc. | (removed) nested_compute_at.cpp
+  - [fixed] bootstrap | how many `for` loops does a `compute_at` Func emit? Dims whose required extent at the compute site is 1 are simplified away. RESOLUTION: not derived (needs bounds inference, out of scope); declared per example via `collapses(f,{vars})` + no-op Halide shim. loopdoc §7 + README document it; examples loop_elide_x/_y/_both and compute_at_elided_level cover it. | loop_elide_*.cpp, compute_at_elided_level.cpp

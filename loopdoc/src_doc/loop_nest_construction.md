@@ -152,3 +152,14 @@ dimensionality.
 To see it directly, `HL_DEBUG_CODEGEN=2` dumps the bounds and the pre-simplify
 loop nest; compare the `for` over a collapsed dimension (min == max) before
 `simplify` with its absence afterwards.
+
+Note the elision is purely a *printing/simplification* effect: the producer's
+realization is injected at the loop level during `schedule_functions` (before
+simplify), so when the loop is later collapsed into a `LetStmt`, anything that
+was injected at that level — including a `compute_at` child of the collapsed
+loop — stays at that position; only the `For` node disappears. This is the
+source-level basis for "an elided loop is still an injection site" in loopdoc
+§7 (see `examples/compute_at_elided_level.cpp`). Because predicting min == max
+requires the full bounds model, loopdoc declares elision via the `collapses`
+annotation rather than deriving it; that annotation has no counterpart in the
+real compiler (it is a no-op shim, `halide_compat/halide_compat.h`).
