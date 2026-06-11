@@ -158,6 +158,18 @@ struct FuncContents
     std::shared_ptr<FuncContents> at_func; // host, for Level::At
     std::string at_var;                    // host loop var name, for Level::At
 
+    // Store level (where this Func's buffer is allocated), set by store_at /
+    // store_root. Defaults to "same as the compute level" (has_store_level ==
+    // false), which prints no `store` node.
+    //
+    // NOTE TO MICRO-AGENT: the emission of the `store` node and the legality of
+    // a store level are NOT yet implemented -- they are your task, per
+    // loopdoc.md section 8. The fields below just record what was requested.
+    bool has_store_level = false;          // a store level was explicitly set
+    bool store_is_root = false;            // store_root() (else store_at)
+    std::shared_ptr<FuncContents> store_func; // host, for store_at
+    std::string store_var;                 // host loop var name, for store_at
+
     // Names of this Func's loop variables that Halide elides because their
     // required extent is provably 1 (a "point loop"). See `micro_halide_collapses`
     // below and loopdoc.md: this is *declared* per example (it depends on bounds
@@ -304,6 +316,27 @@ class Func
         contents->level = FuncContents::Level::At;
         contents->at_func = f.contents;
         contents->at_var = var.name();
+        return *this;
+    }
+
+    // store_at / store_root: record the store level. See the note on
+    // FuncContents -- the loop-nest effect (the `store` node) and legality are
+    // for the micro-agent to implement from loopdoc.md section 8.
+    Func &store_at(const Func &f, const Var &var)
+    {
+        contents->has_store_level = true;
+        contents->store_is_root = false;
+        contents->store_func = f.contents;
+        contents->store_var = var.name();
+        return *this;
+    }
+
+    Func &store_root()
+    {
+        contents->has_store_level = true;
+        contents->store_is_root = true;
+        contents->store_func.reset();
+        contents->store_var.clear();
         return *this;
     }
 
