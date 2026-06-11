@@ -5,14 +5,13 @@ nest*, at the level of detail needed to predict the output of
 `Func::print_loop_nest()` by hand. It is built up holistically: each section
 adds to a single mental model rather than describing an isolated feature.
 
-> Scope of this revision: the programming model, pure Funcs, the default
-> (inline) schedule, `compute_root`, `compute_at`, `store_at` / `store_root`,
-> `hoist_storage` / `hoist_storage_root`, the loop transforms `split` / `fuse` /
-> `reorder` / `tile`, **update (reduction) definitions** with `RDom` / `RVar`,
-> and the `print_loop_nest()` output format. Wrappers (`in`/`clone_in`),
+> Scope of this revision: the programming model, pure Funcs, update (reduction)
+> definitions with `RDom` / `RVar`, the default (inline) schedule,
+> `compute_root`, `compute_at`, `store_at` / `store_root`, `hoist_storage` /
+> `hoist_storage_root`, the loop transforms `split` / `fuse` / `reorder` /
+> `tile`, and the `print_loop_nest()` output format. Wrappers (`in`/`clone_in`),
 > `rfactor`, loop-type directives (`parallel`/`vectorize`/`unroll`), and GPU
-> scheduling are deferred to later revisions. Where one of those interacts with
-> the model below in a way you can already observe, it is flagged explicitly.
+> scheduling are deferred to later revisions.
 
 ---
 
@@ -21,14 +20,19 @@ adds to a single mental model rather than describing an isolated feature.
 A Halide program is built in two separable parts:
 
 1. **The algorithm** — *what* each pixel's value is. You declare `Func`s and
-   define them as pure mathematical functions of their argument `Var`s.
+   define them as pure mathematical functions of their argument `Var`s, plus
+   optional **update definitions** that refine those values (§3).
 2. **The schedule** — *when and where* each value is computed and stored. This
    is expressed by scheduling directives (`compute_root`, `compute_at`, …)
-   attached to each `Func`.
+   attached to each `Func` (§§4–8).
 
 Crucially, the schedule never changes the *result*; it only changes the order
 of computation, the amount of redundant recomputation, and the temporary
-storage used. This document is only about how the schedule maps to a loop nest.
+storage used. This document is only about how the program maps to a loop nest.
+
+This split drives the document's order: §§2–3 cover the loops implied by the
+**algorithm alone** (a single Func, possibly with update stages), and §§4–8
+add the **schedule** that places and reshapes those loops across the pipeline.
 
 ### Objects and their conceptual state
 
@@ -40,20 +44,18 @@ storage used. This document is only about how the schedule maps to a loop nest.
   `Func` produces another handle to the *same* underlying function; scheduling
   through either handle affects the one function. The conceptual state of a
   Func is:
-    * its **name** (used for printing; see §7,
-      and computation order tie-breaking, see §4),
-    * its ordered list of **pure dimensions** (the `Var`s on the left-hand
-      side of its *initial* definition; the first listed is the *innermost*
-      loop — see §5),
+    * its **name** (used for printing; see §9, and computation-order
+      tie-breaking, see §5),
     * its ordered list of **stages**: an initial (pure) definition plus zero or
-      more **update definitions** (§10). A Func with no updates has just one
-      stage; each stage gets its own loops and its own per-stage schedule.
+      more **update definitions** (§3). Each stage has its own ordered list of
+      **loop dimensions** (the `Var`s/`RVar`s that drive its loops; the first
+      listed is the *innermost* loop — see §3),
     * the set of **other Funcs it reads from** (its *producers*), derived from
       the right-hand sides (and update left-hand-side indices) of all its
       stages,
-    * its **compute level** and **store level**: `inline` (the default),
-      `root`, or `at(host, var)`. These apply to the Func as a whole (all
-      stages move together).
+    * its **compute level** and **store level** — `inline` (the default),
+      `root`, or `at(host, var)` — set by the schedule (§§4–7). These apply to
+      the Func as a whole (all stages move together).
 
 * **`ImageParam`** — an input buffer. It is a *leaf*: it is never computed and
   never appears in the loop nest. A Func that reads an `ImageParam` simply has
@@ -65,11 +67,11 @@ storage used. This document is only about how the schedule maps to a loop nest.
   Pointwise arithmetic, constants, `cast<T>(...)`, and the like are invisible
   in the loop nest — they live *inside* the `f(...) = ...` leaf line.
   Exception: 1-iteration loops are removed; this relies on bounds inference,
-  which depends more deeply on the contents of an Expr. See §8.
+  which depends more deeply on the contents of an Expr. See §6.
 
 * **`RDom` / `RVar`** — a *reduction domain* and its *reduction variables*. An
   `RDom r(min, extent, …)` declares one or more `RVar`s (`r.x`, `r.y`, …, or
-  just `r` for a 1-D domain) used in **update definitions** (§10). An `RVar`
+  just `r` for a 1-D domain) used in **update definitions** (§3). An `RVar`
   names a loop just like a `Var`, but the loop iterates the declared reduction
   range and is *ordered* (unlike a pure `Var`, its iterations may carry a
   dependency). RVars only appear in update definitions and produce extra loops
@@ -95,20 +97,16 @@ produce <f>:        # contains a region computing (storing into) Func f
 consume <f>:        # contains a region that reads f's stored values
 for <var>:          # a loop over one dimension
 <f>(...) = ...      # the leaf: store one point of f (arguments and RHS elided)
-store <f>:          # f's storage scope, shown only when it differs from compute (§9)
+store <f>:          # f's storage scope, shown only when it differs from compute (§7)
 ```
 
 Indentation is containment. `produce f` contains the loops that compute `f` and
 ends at the matching `consume`/dedent; everything that reads `f` is nested
 under `consume f`. A `for` contains its loop body. The leaf `f(...) = ...` is
-the body executed at the innermost point.
-
-A consequence worth stating up front: when several Funcs are produced in
-sequence, their `consume` blocks *nest* — the rest of the program, **including
-any later producers**, sits inside the current `consume` rather than appearing
-as a flat list of siblings. How deeply each producer's block nests is set by its
-realization order and its compute level (§4, §8), so two producers of the same
-Func need not appear at the same depth.
+the body executed at the innermost point. `consume`/`store` arise only once the
+schedule places multiple Funcs or separates storage from computation, so they
+are introduced with the schedule (§§4–7); §3 needs only `produce`, `for`, and
+the leaf.
 
 Two cosmetic details are *not* part of the model and are normalized away by the
 test harness (`../canonicalize.py`): the exact loop-variable names, and constant
@@ -118,12 +116,122 @@ revisions) their type (`parallel`, `vectorized`, …).
 
 ---
 
-## 3. The default schedule: inlining
+## 3. A single Func's loops and its stages
 
-By default every Func **except the output is inlined**. An inlined Func has no
-loops and no `produce`/`consume` of its own: wherever a consumer reads it, the
-inlined Func's definition is substituted in, as if textually pasted. It simply
-*disappears* from the loop nest.
+This section is pure *algorithm*: the loops below follow from a Func's
+definitions alone, with no scheduling yet. (For the output Func — or any Func
+realized on its own — this is exactly what appears inside its `produce`.)
+
+### The dimension list
+
+Inside `produce f`, a stage of a Func is computed by a loop nest over an ordered
+list of **loop dimensions**:
+
+> Each definition (stage) carries an ordered **dimension list**, *innermost
+> first*. For the pure definition it starts as the argument `Var`s in order —
+> the first argument is the innermost dimension — with an implicit `outermost`
+> sentinel pinned at the end (which you can ignore). The stage emits **one `for`
+> loop per dimension**, printed *outermost first* (the reverse of the list),
+> with the leaf `f(...) = ...` at the center.
+
+So `f(x, y, c) = ...` has dimension list `[x, y, c]` and produces, from outside
+in, `for c: for y: for x:`. This is row-major traversal: the first dimension
+varies fastest. (A scheduling directive, `reorder` (§8), can change this order;
+`split`/`fuse`/`tile` (§8) can change the *number* of loops.)
+
+```
+produce f:
+  for c:
+    for y:
+      for x:
+        f(...) = ...
+```
+
+### Update definitions: a Func may have several stages
+
+A Func may have **update definitions**: extra assignments, written after the
+initial one, that *modify* the Func's values in place. The initial (pure)
+definition plus the updates form an ordered list of **stages**.
+
+```cpp
+Func hist("hist");
+hist(x) = 0;              // stage 0: the pure / initial definition
+RDom r(0, N, "r");
+hist(in(r)) += 1;         // stage 1: an update definition
+```
+
+Each stage runs to completion before the next begins, and they all write to the
+**same** storage. A Func with `k` update definitions has `k + 1` stages,
+numbered `s0` (pure), `s1`, …, `sk` in definition order. Stages are part of the
+algorithm — they say *what* `hist` is — so they need no scheduling to
+understand.
+
+#### Stages share one `produce`
+
+All of a Func's stages are emitted **inside the single `produce f` block**, as
+consecutive sibling loop nests — *not* as separate `produce`/`consume` blocks.
+There is no `consume` between stages; once the Func is scheduled, a consumer's
+`consume f` (if any) wraps the whole thing, because a reader sees the Func's
+*final*, post-update values. For the histogram above (see
+[examples/hist_1d.cpp](examples/hist_1d.cpp)):
+
+```
+produce hist:
+  for x:              # stage 0: initialise hist(x) = 0
+    hist(...) = ...
+  for r:              # stage 1: the scatter update
+    hist(...) = ...
+```
+
+#### A stage's loops: free `Var`s plus `RVar`s
+
+Each stage has its **own dimension list**, built from its own left-hand side:
+
+> An update stage loops over the **free `Var`s** appearing on its left-hand
+> side **plus the `RVar`s** of any `RDom` it uses. Default order, innermost
+> first: the `RVar`s are innermost — and *within* the `RVar`s the first-declared
+> dimension (`r.x`) is the **innermost** loop, matching the `Var` convention
+> that the first dimension varies fastest — and the free pure `Var`s sit outside
+> them (in the usual order, first LHS argument innermost among the pures). A
+> pure dimension whose left-hand-side slot is occupied by an `RVar` or a general
+> expression (e.g. the `in(r)` index in the histogram, or `f(x, r)`) does
+> **not** produce a loop in that stage.
+
+`RVar` loops print like any other (`for r in [min, max]`); the harness drops the
+constant bound, so they read as plain `for`. A `k`-dimensional `RDom`
+contributes `k` nested reduction loops. So `f(x, y) += in(x + r.x, y + r.y)`
+with a 2-D `RDom` gives the update stage loops `for y: for x: for r.y: for r.x:`
+(`r.x` innermost; [examples/update_2d_rdom.cpp](examples/update_2d_rdom.cpp)),
+while the pure stage `f(x, y) = 0` just gives `for y: for x:`. A reduction with
+no free variable on the left, like the histogram scatter, gives a stage with
+only the reduction loop(s).
+
+* [examples/sum_reduction.cpp](examples/sum_reduction.cpp): `f(x) = 0; f(x) +=
+  in(x, r)` — the pure stage loops over `x`, the update stage over `x` then the
+  reduction `r`.
+* [examples/two_updates.cpp](examples/two_updates.cpp): three stages (`s0`,
+  `s1`, `s2`) printed in order inside one `produce`.
+
+So the number of `for` loops a stage emits equals the length of *that stage's*
+dimension list. (Two things in the schedule modify this: `compute_at` can elide
+single-point loops, §6; and `split`/`fuse`/`reorder`/`tile` reshape a stage's
+dimension list, §8 — and those reshape each stage independently.)
+
+> One legality note that this document does **not** model mechanically: an
+> `RVar` loop is *ordered*, so reordering two `RVar`s — or otherwise reshuffling
+> them past each other — is rejected unless the reduction is associative *and*
+> commutative, which Halide decides by analysing the update's arithmetic.
+> Predicting that needs the actual expression semantics, which is out of scope
+> here, just like bounds inference for loop elision (§6).
+
+---
+
+## 4. The default schedule: inlining
+
+We now turn to the *schedule*. By default every Func **except the output is
+inlined**. An inlined Func has no loops and no `produce`/`consume` of its own:
+wherever a consumer reads it, the inlined Func's definition is substituted in,
+as if textually pasted. It simply *disappears* from the loop nest.
 
 So a pipeline of pure Funcs with no scheduling at all collapses to a single
 loop nest over the output's dimensions, with every producer folded into the
@@ -133,20 +241,57 @@ loops are emitted.
 
 Inlining trades memory for redundant computation: each use re-evaluates the
 producer (here `producer` is effectively computed twice per output pixel). The
-output Func itself is never inlined — it is always realized at the root (§4).
+output Func itself is never inlined — it is always realized at the root (§5).
+
+### Funcs that cannot be inlined: the default for update definitions
+
+Only a Func with a *pure* definition (no updates) can be textually inlined — an
+update definition (§3) cannot be pasted in as an expression. So for a Func with
+updates the default schedule is *still* "inline", but it means something
+slightly different: Halide **materializes the Func at the innermost point where
+it is used** — a small `produce f` / `consume f` block wrapped around the
+consumer's innermost loop (in fact, around the very leaf statement that reads
+it), recomputed on every iteration, exactly where and as often as inlining a
+pure Func would re-evaluate it. So an unscheduled reduction Func feeding
+`g(x, y) = f(x)` (see [examples/update_default_inline.cpp](examples/update_default_inline.cpp))
+appears as:
+
+```
+produce g:
+  for y:
+    for x:
+      produce f:          # all of f's stages, recomputed every (x, y)
+        f(...) = ...
+        for r:
+          f(...) = ...
+      consume f:
+        g(...) = ...
+```
+
+This is the deepest legal site (the innermost loop of the consumer that
+encloses every use of `f`; §6) — the same position inlining a pure Func would
+occupy. Like inlining, it maximises recomputation and minimises storage; lifting
+it out is exactly what `compute_root` / `compute_at` are for.
+
+<!-- User: explain what is the default behavior for the non-pure? See (but don't fix) examples/weird_histogram_sampling.cpp. The explanation for this default does not necessarily belong in this section (since it's not inlined) but should be placed elsewhere and referenced here. -->
 
 ---
 
-## 4. `compute_root`: realize once at the top
+## 5. `compute_root`: realize once at the top
 
 `f.compute_root()` sets `f`'s compute level to `root`: `f` is computed in full,
 once, at the outermost level, *before* anything that uses it. It gets its own
-loop nest (§5) wrapped in `produce f`, and the rest of the program is nested
-under `consume f`. Note that `consume f` is **not** selective: as in §2, it
-mechanically wraps everything emitted after `produce f` — typically the entire
-remainder of the pipeline — regardless of which parts actually read `f`. (The
-name reflects that `f`'s values are now available to be consumed there, not that
-the wrapped code is exactly `f`'s readers.)
+loop nest (§3, all of its stages) wrapped in `produce f`, and the rest of the
+program is nested under `consume f`. Note that `consume f` is **not** selective:
+it mechanically wraps everything emitted after `produce f` — typically the
+entire remainder of the pipeline — regardless of which parts actually read `f`.
+(The name reflects that `f`'s values are now available to be consumed there, not
+that the wrapped code is exactly `f`'s readers.)
+
+This is the first source of `consume` nesting worth stating plainly: when
+several Funcs are realized in sequence, their `consume` blocks **nest** — the
+rest of the program, *including any later producers*, sits inside the current
+`consume` rather than appearing as a flat list of siblings.
 
 When several Funcs are `compute_root` (plus the output, which is always at
 root), they are emitted in **realization order**: a topological order of the
@@ -208,54 +353,355 @@ first because `"a2d" < "b1d"`. The left-to-right order of `+` is irrelevant. The
 first-visitation tie-break only matters when two prefixes are equal (e.g.
 auto-named Funcs sharing a prefix); examples here use distinct prefixes so the
 order is purely alphabetical. This same ordering decides the order of sibling
-producers filed at any single `compute_at` level, not just root (§8).
+producers filed at any single `compute_at` level, not just root (§6).
 
 ---
 
-## 5. A single Func's own loops
+## 6. `compute_at`: realize inside a consumer's loop
 
-Inside `produce f`, the Func is computed by a loop nest over an ordered list of
-**loop dimensions**. Make that list explicit, because the loop transforms in §6
-rewrite it:
+`f.compute_at(g, var)` sets `f`'s level to `at(g, var)`: `f` is realized
+*inside* `g`'s loop over `var`, recomputed on each iteration of that loop, just
+before the part of `g`'s body that uses it. Its `produce`/`consume` block is
+injected as a prefix to that loop level's body; the rest of `g`'s body (the
+deeper loops and eventually `g`'s leaf) becomes the content of `f`'s `consume`.
 
-> Each Func (more precisely, each definition) carries an ordered **dimension
-> list**, *innermost first*. It starts as the pure arguments in definition
-> order — the first argument is the innermost dimension — with an implicit
-> `outermost` sentinel pinned at the end (which you can ignore). The Func emits
-> **one `for` loop per dimension**, printed *outermost first* (the reverse of
-> the list), with the leaf `f(...) = ...` at the center.
+For `producer.compute_at(consumer, y)` where `consumer(x, y) = producer(x, y) +
+producer(x, y + 1)` (see [examples/compute_at.cpp](examples/compute_at.cpp)):
 
-So `f(x, y, c) = ...` has dimension list `[x, y, c]` and produces, from outside
-in, `for c: for y: for x:`. This is row-major traversal: the first dimension
-varies fastest. (`reorder`, §6, is what changes this order.)
+```
+produce consumer:
+  for y:
+    produce producer:
+      for y:
+        for x:
+          producer(...) = ...
+    consume producer:
+      for x:
+        consumer(...) = ...
+```
 
-(Strictly, the dimension list belongs to a *stage*. A Func with only a pure
-definition has one stage, described here. A Func with update definitions has
-several stages, each with its own dimension list — possibly including reduction
-loops — emitted one after another inside the single `produce f`; see §10.)
+The injection is recursive: a Func computed inside a Func that is itself
+computed inside another nests accordingly, because each Func's loops are
+generated the same way and children are injected at each of *its* loop levels.
+
+The named `var` must be a dimension of `g` — one of `g`'s argument `Var`s, or a
+dimension a loop transform created on `g` (§8), or one of `g`'s `RVar` loops
+(see "reduction loops as sites" below).
+
+### Multiple producers of one consumer
+
+When a consumer reads several producers, each producer is placed according to
+*its own* compute level; they do not share a single flat `consume` block.
+
+* **Both at the same level** (e.g. both `compute_at(output, y)`, or both at
+  root): they form a nested produce/consume chain at that level, ordered by the
+  realization-order tie-break (§5) — alphabetical by name, *not* expression
+  order. The first producer's `consume` wraps the second producer, whose
+  `consume` wraps the rest. (Root is just the special case where the "level" is
+  the outermost one; see [examples/diamond_root.cpp](examples/diamond_root.cpp).)
+
+* **At different levels.** Each producer is injected at its own loop level of the
+  consumer, so the producer at the *outer* level appears first and its `consume`
+  contains both the consumer's inner loops *and* the inner producer's block. In
+  [examples/producers_diff_levels.cpp](examples/producers_diff_levels.cpp),
+  `h.compute_at(output, y)` (outer) and `g.compute_at(output, x)` (inner) give:
+
+  ```
+  produce output:
+    for y:
+      produce h:
+        ...
+      consume h:
+        for x:
+          produce g:
+            ...
+          consume g:
+            output(...) = ...
+  ```
+
+  `g` is nested *inside* `consume h` not because `g` depends on `h` (it does
+  not), but because `g`'s loop level (`x`) is inside `h`'s (`y`). Compute level,
+  not the producer/consumer graph, determines this nesting.
+
+* **One at root, one `compute_at`.** The root producer joins the top-level chain
+  (§5) and never nests inside the consumer; the `compute_at` producer nests
+  inside the consumer's loops as usual. See
+  [examples/producers_root_and_at.cpp](examples/producers_root_and_at.cpp).
+
+### Loop elision: a `compute_at` Func may emit fewer loops than its dimensions
+
+A root Func always emits one loop per dimension (§3). A `compute_at` Func does
+**not**, in general. Halide computes only the *region* of the producer needed
+per iteration of the host, and a dimension whose needed extent is a single
+point becomes an extent-1 loop that Halide **simplifies away entirely** — no
+`for` line is printed for it. Conceptually:
+
+> A dimension `d` of `f.compute_at(g, L)` survives as a loop iff the values of
+> `f`'s `d`-coordinate read by `g` span more than one point as `g`'s loops
+> *inner to `L`* run. Reading `f` at a multi-tap stencil in `d`, or at an index
+> that varies with an inner host loop, keeps the loop; a single-point read
+> collapses it.
+
+Worked cases, all `f.compute_at(output, x)` with `output` reading `f` at offsets
+`(0,0), (dx,0), (0,dy), (dx,dy)`:
+
+* dx = dy = 1: both loops survive — [examples/loop_elide_test.cpp](examples/loop_elide_test.cpp).
+* dx = 0: `f`'s `x` is read at one point → `x` loop elided — [examples/loop_elide_x.cpp](examples/loop_elide_x.cpp).
+* dy = 0: `y` loop elided — [examples/loop_elide_y.cpp](examples/loop_elide_y.cpp).
+* dx = dy = 0: both elided, `f` emits no loops at all (`produce f: f(...) =
+  ...`) — [examples/loop_elide_both.cpp](examples/loop_elide_both.cpp). This is
+  why `compute_at` at the innermost loop of a pointwise consumer behaves almost
+  like inlining.
+
+**Predicting exactly which dimensions collapse requires bounds inference**,
+which is undecidable in general and out of scope for this document. We therefore
+*declare* elision rather than derive it: an example annotates it with
+
+    f.compute_at(output, x);
+    micro_halide_collapses(f, {x});   // f's x loop has extent 1 here and is elided
+
+`micro_halide_collapses(f, {vars...})` is a no-op under real Halide; it tells
+micro_halide which loops to drop. (It is declared per stage, mirroring the
+schedule API: `micro_halide_collapses(f, …)` targets the pure stage and
+`micro_halide_collapses(f.update(N), …)` an update stage.) The split between
+*structure* (taught here, derived from the schedule) and *elision* (declared) is
+described in the README. The loop *structure* — produce/consume placement,
+ordering, and the surviving loops — is fully determined by the schedule as
+described in §§4–8.
+
+### An elided loop is still a `compute_at` injection site
+
+Eliding a loop only removes its `for` line; the loop's *position* in the nest is
+preserved. So a Func computed at an elided loop is still injected there, as a
+prefix of the host's body, outside any surviving inner loops of the host. See
+[examples/compute_at_elided_level.cpp](examples/compute_at_elided_level.cpp):
+`h.compute_at(output, x)` elides `h`'s `y` loop, yet `p.compute_at(h, y)` still
+places `p` at that (loop-less) level:
+
+```
+produce h:
+  produce p:
+    for y:
+      for x:
+        p(...) = ...
+  consume p:
+    for x:           # h's surviving x loop
+      h(...) = ...
+```
+
+### What `(g, var)` points to when `g` has several stages
+
+`compute_at` names a host **Func and a `Var`**, never a stage — yet a Func with
+update definitions (§3) has several stages, each a separate loop nest that may
+*each* contain a loop named `var`. So which one does `f.compute_at(g, var)`
+target? The answer: **all of them, but `f` is only materialized where it is
+actually read.** Concretely:
+
+> `(g, var)` denotes the loop named `var` in **every** stage of `g` (the stage
+> is left unspecified). When the nest is built, `f`'s realization is injected
+> just inside that loop in each stage of `g` **that actually reads `f`** —
+> stages that don't read `f` get nothing. So `f` lands once per *using* stage,
+> each as its own `produce f`/`consume f` (the stages are sibling nests, §3).
+
+Two consequences:
+
+* A producer read inside a reduction can be `compute_at` that **`RVar` loop**;
+  it is placed inside that one stage's reduction loop, because only that stage
+  reads it ([examples/producer_at_rvar.cpp](examples/producer_at_rvar.cpp)):
+
+  ```
+  produce f:
+    for x:                      # stage 0 -- does not read p, gets nothing
+      f(...) = ...
+    for x:                      # stage 1 -- reads p
+      for r:
+        produce p:              # p injected inside the reduction loop
+          p(...) = ...
+        consume p:
+          f(...) = ...
+  ```
+
+* When several stages read `f` and all share the named loop, `f` is injected
+  into **each** of those stages
+  ([examples/cross_stage_compute_at_shared.cpp](examples/cross_stage_compute_at_shared.cpp)).
+  Each injection is independent, so `f`'s *required region* — and hence how many
+  of its loops survive (§6 elision) — is computed **per stage**: the same
+  `compute_at` can leave `f` with no loops in one stage and a real loop in
+  another, if the two stages read different ranges of `f`. (This per-stage
+  elision is why `micro_halide_collapses` is declared per stage; see above.)
+
+Going the other way, `f`'s own compute level applies to `f` as a **whole**: the
+entire `produce f` — all of `f`'s stages — is realized together at the chosen
+site. Computing a Func with updates inside a consumer drops its whole
+multi-stage block at that loop level
+([examples/func_update_compute_at.cpp](examples/func_update_compute_at.cpp)).
+
+### When a `compute_at` is illegal
+
+`f.compute_at(g, v)` is not always legal. Halide computes the set of **legal
+compute sites** for `f` as the loop levels that **enclose every use of `f`** —
+formally, the intersection of the loop-level stacks at all of `f`'s call sites
+(across **all** stages that read `f`), plus `root`. If the requested site is not
+in that set, Halide rejects the schedule with *"Func f is computed at the
+following invalid location"* and lists the legal ones; no loop nest is produced.
+Ways to land outside the legal set:
+
+* **The loop does not exist.** `v` must be a current dimension of `g` (an
+  argument, a transform-created dimension, or an `RVar` loop). Naming a `Var`
+  that `g` never loops over has no site to inject into —
+  [examples/neg_compute_at_bad_var.cpp](examples/neg_compute_at_bad_var.cpp).
+* **The host is not a consumer.** `g` must actually read `f` (directly, or
+  through Funcs inlined into it); otherwise `g` has no point that needs `f` —
+  [examples/neg_compute_at_nonconsumer.cpp](examples/neg_compute_at_nonconsumer.cpp).
+* **A consumer lies outside the chosen site.** If `f` is read in more than one
+  place, the site must enclose *all* of them. Computing `f` inside one consumer
+  when another consumer (e.g. the output at root) also needs it leaves that
+  other read with no values. When `f` is used at two unrelated places the only
+  common enclosing site is `root` —
+  [examples/neg_compute_at_two_consumers.cpp](examples/neg_compute_at_two_consumers.cpp).
+* **A reduction loop does not enclose another stage's use.** The site must be a
+  loop present in *every* stage that reads the producer. An `RVar` loop exists
+  only within its own stage, so a producer also read by another stage cannot be
+  computed there —
+  [examples/neg_compute_at_update_rvar.cpp](examples/neg_compute_at_update_rvar.cpp),
+  where `p` is read by both the pure and update stages, so the update's `r` loop
+  is not a legal site.
+
+The third case is the fundamental one: a Func computed at a single site can only
+feed consumers within that site. Feeding consumers that live at different,
+non-nested locations is exactly what the wrapper Funcs `in()` / `clone_in()` (a
+later milestone) exist to enable; until then, such a schedule is simply illegal.
+
+These are *negative* examples: both Halide and `micro_halide` must reject them
+(exit with an error) rather than print a loop nest.
+
+---
+
+## 7. `store_at` / `store_root`: storage level vs. compute level
+
+So far a Func has had a single *compute level* (§5, §6) that fixes both where it
+is computed and where its storage is allocated. These can be separated. Besides
+its compute level, a Func has a **store level**: the loop at which its buffer is
+allocated. By default the store level **equals** the compute level. Two
+directives change it (and *only* it — they do not move the computation):
+
+* `f.store_at(g, v)` — allocate `f`'s storage in host `g`'s loop over `v`.
+* `f.store_root()` — allocate `f`'s storage at the outermost level.
+
+The point of separating them is to allocate storage at an *outer* loop while
+computing at an *inner* loop: values computed on one iteration of the inner loop
+can then be reused on later iterations (Halide's *sliding window* optimization),
+and the buffer can be folded down to a small size. Those are changes to *which
+values are recomputed* and to *buffer sizes* — they do **not** change the
+produce/consume/`for` structure that `print_loop_nest` prints (buffer sizes only
+affect constant bounds, which the harness ignores). The single visible effect on
+the loop nest is an added `store` node.
+
+### The `store` node
+
+`print_loop_nest` prints `store f:` **only when `f`'s store level differs from
+its compute level.** When they are equal — the default, and also
+`store_root().compute_root()` (both at root) — there is no `store` line at all.
+
+When shown, the `store f:` node sits at the **store level** and contains
+everything from there down to `f`'s `produce`/`consume` at the compute level. The
+`produce`/`consume` of `f` and every `for` loop stay exactly where `compute_at`
+alone (§6) would place them; `store_at` only adds the enclosing `store f:` line
+(and the host loops between the store level and the compute level fall inside
+it). The `store f:` node wraps `f`'s *whole* realization — all of its stages
+(§3), since the store level is per-Func.
+
+For `g.store_at(f, y).compute_at(f, x)` — store at the outer loop `y`, compute at
+the inner loop `x` (see [examples/store_at_compute_at.cpp](examples/store_at_compute_at.cpp)):
 
 ```
 produce f:
-  for c:
-    for y:
-      for x:
-        f(...) = ...
+  for y:
+    store g:          # at the store level (f's y)
+      for x:          # host loop between store and compute level
+        produce g:    # at the compute level (f's x)
+          for y:
+            for x:
+              g(...) = ...
+        consume g:
+          f(...) = ...
 ```
 
-The number of `for` loops at a root realization equals the length of the
-Func's dimension list — its argument count by default, but adjusted by the
-transforms in §6. (For `compute_at`, see the caveat in §8.)
+`store_root()` puts the `store` node at the **outermost** level — outside even
+the output's `produce`, wrapping the entire pipeline body. For
+`g.store_root().compute_at(f, y)` with `f` the output (see
+[examples/store_root_compute_at.cpp](examples/store_root_compute_at.cpp)):
+
+```
+store g:              # outermost: storage for the whole pipeline body
+  produce f:
+    for y:
+      produce g: ...
+      consume g:
+        for x:
+          f(...) = ...
+```
+
+When the host of the compute level is itself an intermediate Func, the `store`
+node still lands at the named store loop and wraps that Func's whole realization
+(its `produce` *and* `consume`); see
+[examples/store_root_chain.cpp](examples/store_root_chain.cpp). A `store_root`
+Func with update stages wraps all of them
+([examples/store_root_update.cpp](examples/store_root_update.cpp)).
+
+### Legality
+
+* The store level must **enclose** the compute level — it must be the same loop
+  or an *outer* one. Storing inside the compute loop is illegal
+  ([examples/neg_store_inside_compute.cpp](examples/neg_store_inside_compute.cpp)).
+* A Func with a store level must also have a non-inline compute level: using
+  `store_at`/`store_root` without `compute_at`/`compute_root` is illegal
+  ([examples/neg_store_at_inlined.cpp](examples/neg_store_at_inlined.cpp)).
+* Like the compute level, the store level must enclose every use of `f` (§6's
+  legal-site rule applies to it too).
+
+### `hoist_storage` / `hoist_storage_root`: no effect on the printed nest
+
+There is a third, even more physical level: the **hoist-storage level**, set by
+`f.hoist_storage(g, v)` or `f.hoist_storage_root()`. It moves the actual memory
+*allocation* further out (to avoid re-allocating inside a loop) **without**
+triggering the sliding-window reuse that `store_at` enables. By default it
+coincides with the store level.
+
+For `print_loop_nest` this directive is **invisible**: it changes neither the
+`produce`/`consume`/`store`/`for` structure nor the loop order. A schedule with
+`hoist_storage` prints exactly the same nest as the same schedule without it
+([examples/hoist_storage_noop.cpp](examples/hoist_storage_noop.cpp) prints
+identically to plain `compute_at`). It only affects allocation placement and
+buffer sizing, which the loop nest does not display.
+
+The one way `hoist_storage` shows up is by making an otherwise-fine schedule
+**illegal**:
+
+* Like `store_at`, it requires a non-inline compute level — `hoist_storage` /
+  `hoist_storage_root` on an inlined Func is illegal
+  ([examples/neg_hoist_at_inlined.cpp](examples/neg_hoist_at_inlined.cpp)).
+* The hoist-storage level must **enclose the store level** (which encloses the
+  compute level): allocation cannot live inside the loop whose iterations reuse
+  it. Hoisting to a loop inside the compute level is illegal
+  ([examples/neg_hoist_inside_compute.cpp](examples/neg_hoist_inside_compute.cpp)).
+
+So: `hoist_storage` is a no-op for the structure this document teaches, except
+that it adds these two legality constraints.
 
 ---
 
-## 6. Reshaping a Func's loops: `split`, `fuse`, `reorder`, `tile`
+## 8. Reshaping a Func's loops: `split`, `fuse`, `reorder`, `tile`
 
-These four directives rewrite a Func's **dimension list** (§5) — they add,
-remove, rename, and reorder its loops. They change *only this Func's own loops*
-(and the dimension names you may later use as `compute_at`/`store_at` sites);
-they never move the Func relative to other Funcs and never change which values
-are computed. A `compute_at`/`store_at` may name any dimension *currently* in
-the list, including ones these transforms created.
+These four directives rewrite a **stage's dimension list** (§3) — they add,
+remove, rename, and reorder its loops. They change *only that stage's own loops*
+(and the dimension names you may use as `compute_at`/`store_at` sites); they
+never move the Func relative to other Funcs and never change which values are
+computed. They apply **per stage**: `f.<directive>(…)` schedules the pure stage,
+and `f.update(i).<directive>(…)` schedules update stage `s(i+1)`, leaving the
+others untouched ([examples/update_stage_split.cpp](examples/update_stage_split.cpp),
+[examples/update_stage_reorder.cpp](examples/update_stage_reorder.cpp)). Within a
+stage the transforms treat `RVar`s exactly like `Var`s in the list.
 
 ### `split`
 
@@ -300,8 +746,7 @@ host loops fall inside that producer's block.
 [examples/reorder_topological.cpp](examples/reorder_topological.cpp) reorders a
 consumer's dimensions so the producer's `compute_at` site moves to the innermost
 loop; contrast [examples/reorder_baseline.cpp](examples/reorder_baseline.cpp),
-the same pipeline without the `reorder`, where the producer sits one level out
-with a surviving inner loop inside its block. (`reorder` also becomes directly
+the same pipeline without the `reorder`. (`reorder` also becomes directly
 visible once loops carry distinct *types* — `vectorize`/`parallel`/`unroll`, a
 later milestone — which the harness *does* keep.)
 
@@ -325,7 +770,7 @@ xi:`. Net effect: **two extra `for` loops**, in tiled order. See
 The dimensions these transforms produce are first-class loop levels. A producer
 filed at host dimension `d` is injected just inside `d`'s loop, with the host
 loops *inner* to `d` (those earlier in the list) falling inside the producer's
-`consume` — the same rule as §8, now applied to the *post-transform* list. In
+`consume` — the same rule as §6, now applied to the *post-transform* list. In
 [examples/split_compute_at.cpp](examples/split_compute_at.cpp), a producer is
 `compute_at` the consumer's split *outer* loop and so lands between the outer
 and inner loops of the split.
@@ -338,13 +783,12 @@ and inner loops of the split.
   ([examples/neg_reorder_bad_var.cpp](examples/neg_reorder_bad_var.cpp)) errors,
   and `compute_at` at a dimension a `fuse` removed
   ([examples/neg_compute_at_fused_away.cpp](examples/neg_compute_at_fused_away.cpp))
-  is just the §8 "site must be a current loop" rule applied after a transform —
-  only the fused var remains a legal site.
+  is just the §6 "site must be a current loop" rule applied after a transform.
 * `reorder` must reference each dimension at most once.
 
 ---
 
-## 7. Function names and identity in the output
+## 9. Function names and identity in the output
 
 Halide prints each Func's name, but the test harness replaces names with
 positional ids (`F0`, `F1`, … in order of first appearance), so you only need
@@ -360,421 +804,17 @@ Halide's exact names. This matters because some Funcs are auto-named:
 
 ---
 
-## 8. `compute_at`: realize inside a consumer's loop
-
-`f.compute_at(g, var)` sets `f`'s level to `at(g, var)`: `f` is realized
-*inside* `g`'s loop over `var`, recomputed on each iteration of that loop, just
-before the part of `g`'s body that uses it. Its `produce`/`consume` block is
-injected as a prefix to that loop level's body; the rest of `g`'s body (the
-deeper loops and eventually `g`'s leaf) becomes the content of `f`'s `consume`.
-
-For `producer.compute_at(consumer, y)` where `consumer(x, y) = producer(x, y) +
-producer(x, y + 1)` (see [examples/compute_at.cpp](examples/compute_at.cpp)):
-
-```
-produce consumer:
-  for y:
-    produce producer:
-      for y:
-        for x:
-          producer(...) = ...
-    consume producer:
-      for x:
-        consumer(...) = ...
-```
-
-The injection is recursive: a Func computed inside a Func that is itself
-computed inside another nests accordingly, because each Func's loops are
-generated the same way and children are injected at each of *its* loop levels.
-
-### Multiple producers of one consumer
-
-When a consumer reads several producers, each producer is placed according to
-*its own* compute level; they do not share a single flat `consume` block.
-
-* **Both at the same level** (e.g. both `compute_at(output, y)`, or both at
-  root): they form a nested produce/consume chain at that level, ordered by the
-  realization-order tie-break (§4) — alphabetical by name, *not* expression
-  order. The first producer's `consume` wraps the second producer, whose
-  `consume` wraps the rest. (Root is just the special case where the "level" is
-  the outermost one; see [examples/diamond_root.cpp](examples/diamond_root.cpp).)
-
-* **At different levels.** Each producer is injected at its own loop level of the
-  consumer, so the producer at the *outer* level appears first and its `consume`
-  contains both the consumer's inner loops *and* the inner producer's block. In
-  [examples/producers_diff_levels.cpp](examples/producers_diff_levels.cpp),
-  `h.compute_at(output, y)` (outer) and `g.compute_at(output, x)` (inner) give:
-
-  ```
-  produce output:
-    for y:
-      produce h:
-        ...
-      consume h:
-        for x:
-          produce g:
-            ...
-          consume g:
-            output(...) = ...
-  ```
-
-  `g` is nested *inside* `consume h` not because `g` depends on `h` (it does
-  not), but because `g`'s loop level (`x`) is inside `h`'s (`y`). Compute level,
-  not the producer/consumer graph, determines this nesting.
-
-* **One at root, one `compute_at`.** The root producer joins the top-level chain
-  (§4) and never nests inside the consumer; the `compute_at` producer nests
-  inside the consumer's loops as usual. See
-  [examples/producers_root_and_at.cpp](examples/producers_root_and_at.cpp).
-
-### Loop elision: a `compute_at` Func may emit fewer loops than its dimensions
-
-A root Func always emits one loop per dimension (§5). A `compute_at` Func does
-**not**, in general. Halide computes only the *region* of the producer needed
-per iteration of the host, and a dimension whose needed extent is a single
-point becomes an extent-1 loop that Halide **simplifies away entirely** — no
-`for` line is printed for it. Conceptually:
-
-> A dimension `d` of `f.compute_at(g, L)` survives as a loop iff the values of
-> `f`'s `d`-coordinate read by `g` span more than one point as `g`'s loops
-> *inner to `L`* run. Reading `f` at a multi-tap stencil in `d`, or at an index
-> that varies with an inner host loop, keeps the loop; a single-point read
-> collapses it.
-
-Worked cases, all `f.compute_at(output, x)` with `output` reading `f` at offsets
-`(0,0), (dx,0), (0,dy), (dx,dy)`:
-
-* dx = dy = 1: both loops survive — [examples/loop_elide_test.cpp](examples/loop_elide_test.cpp).
-* dx = 0: `f`'s `x` is read at one point → `x` loop elided — [examples/loop_elide_x.cpp](examples/loop_elide_x.cpp).
-* dy = 0: `y` loop elided — [examples/loop_elide_y.cpp](examples/loop_elide_y.cpp).
-* dx = dy = 0: both elided, `f` emits no loops at all (`produce f: f(...) =
-  ...`) — [examples/loop_elide_both.cpp](examples/loop_elide_both.cpp). This is
-  why `compute_at` at the innermost loop of a pointwise consumer behaves almost
-  like inlining.
-
-**Predicting exactly which dimensions collapse requires bounds inference**,
-which is undecidable in general and out of scope for this document. We therefore
-*declare* elision rather than derive it: an example annotates it with
-
-    f.compute_at(output, x);
-    micro_halide_collapses(f, {x});   // f's x loop has extent 1 here and is elided
-
-`micro_halide_collapses(f, {vars...})` is a no-op under real Halide; it tells micro_halide
-which loops to drop. The split between *structure* (taught here, derived from
-the schedule) and *elision* (declared) is described in the README. The loop
-*structure* — produce/consume placement, ordering, and the surviving loops — is
-fully determined by the schedule as described in §§4–11.
-
-### An elided loop is still a `compute_at` injection site
-
-Eliding a loop only removes its `for` line; the loop's *position* in the nest is
-preserved. So a Func computed at an elided loop is still injected there, as a
-prefix of the host's body, outside any surviving inner loops of the host. See
-[examples/compute_at_elided_level.cpp](examples/compute_at_elided_level.cpp):
-`h.compute_at(output, x)` elides `h`'s `y` loop, yet `p.compute_at(h, y)` still
-places `p` at that (loop-less) level:
-
-```
-produce h:
-  produce p:
-    for y:
-      for x:
-        p(...) = ...
-  consume p:
-    for x:           # h's surviving x loop
-      h(...) = ...
-```
-
-### When a `compute_at` is illegal
-
-`f.compute_at(g, v)` is not always legal. Halide computes the set of **legal
-compute sites** for `f` as the loop levels that **enclose every use of `f`** —
-formally, the intersection of the loop-level stacks at all of `f`'s call sites,
-plus `root`. If the requested site is not in that set, Halide rejects the
-schedule with *"Func f is computed at the following invalid location"* and lists
-the legal ones; no loop nest is produced. Three ways to land outside the legal
-set, all with only the features so far:
-
-* **The loop does not exist.** `v` must be one of `g`'s pure dimensions. Naming
-  a `Var` that `g` never loops over has no site to inject into —
-  [examples/neg_compute_at_bad_var.cpp](examples/neg_compute_at_bad_var.cpp).
-* **The host is not a consumer.** `g` must actually read `f` (directly, or
-  through Funcs inlined into it); otherwise `g` has no point that needs `f`, and
-  `f`'s real consumer lies outside `g` —
-  [examples/neg_compute_at_nonconsumer.cpp](examples/neg_compute_at_nonconsumer.cpp).
-* **A consumer lies outside the chosen site.** If `f` is read in more than one
-  place, the site must enclose *all* of them. Computing `f` inside one consumer
-  when another consumer (e.g. the output at root) also needs it leaves that
-  other read with no values. When `f` is used at two unrelated places the only
-  common enclosing site is `root` —
-  [examples/neg_compute_at_two_consumers.cpp](examples/neg_compute_at_two_consumers.cpp).
-
-The last case is the fundamental one: a Func computed at a single site can only
-feed consumers within that site. Feeding consumers that live at different,
-non-nested locations is exactly what the wrapper Funcs `in()` / `clone_in()` (a
-later milestone) exist to enable; until then, such a schedule is simply illegal.
-
-These are *negative* examples: both Halide and `micro_halide` must reject them
-(exit with an error) rather than print a loop nest. `micro_halide` validates the
-same rule — host realized, loop exists, and every reader of `f` enclosed by the
-site — before emitting.
-
----
-
-## 9. `store_at` / `store_root`: storage level vs. compute level
-
-So far a Func has had a single *compute level* (§4, §8) that fixes both where it
-is computed and where its storage is allocated. These can be separated. Besides
-its compute level, a Func has a **store level**: the loop at which its buffer is
-allocated. By default the store level **equals** the compute level. Two
-directives change it (and *only* it — they do not move the computation):
-
-* `f.store_at(g, v)` — allocate `f`'s storage in host `g`'s loop over `v`.
-* `f.store_root()` — allocate `f`'s storage at the outermost level.
-
-The point of separating them is to allocate storage at an *outer* loop while
-computing at an *inner* loop: values computed on one iteration of the inner loop
-can then be reused on later iterations (Halide's *sliding window* optimization),
-and the buffer can be folded down to a small size. Those are changes to *which
-values are recomputed* and to *buffer sizes* — they do **not** change the
-produce/consume/`for` structure that `print_loop_nest` prints (buffer sizes only
-affect constant bounds, which the harness ignores). The single visible effect on
-the loop nest is an added `store` node.
-
-### The `store` node
-
-`print_loop_nest` prints `store f:` **only when `f`'s store level differs from
-its compute level.** When they are equal — the default, and also
-`store_root().compute_root()` (both at root) — there is no `store` line at all.
-
-When shown, the `store f:` node sits at the **store level** and contains
-everything from there down to `f`'s `produce`/`consume` at the compute level. The
-`produce`/`consume` of `f` and every `for` loop stay exactly where `compute_at`
-alone (§8) would place them; `store_at` only adds the enclosing `store f:` line
-(and the host loops between the store level and the compute level fall inside
-it).
-
-For `g.store_at(f, y).compute_at(f, x)` — store at the outer loop `y`, compute at
-the inner loop `x` (see [examples/store_at_compute_at.cpp](examples/store_at_compute_at.cpp)):
-
-```
-produce f:
-  for y:
-    store g:          # at the store level (f's y)
-      for x:          # host loop between store and compute level
-        produce g:    # at the compute level (f's x)
-          for y:
-            for x:
-              g(...) = ...
-        consume g:
-          f(...) = ...
-```
-
-`store_root()` puts the `store` node at the **outermost** level — outside even
-the output's `produce`, wrapping the entire pipeline body. For
-`g.store_root().compute_at(f, y)` with `f` the output (see
-[examples/store_root_compute_at.cpp](examples/store_root_compute_at.cpp)):
-
-```
-store g:              # outermost: storage for the whole pipeline body
-  produce f:
-    for y:
-      produce g: ...
-      consume g:
-        for x:
-          f(...) = ...
-```
-
-When the host of the compute level is itself an intermediate Func, the `store`
-node still lands at the named store loop and wraps that Func's whole realization
-(its `produce` *and* `consume`); see
-[examples/store_root_chain.cpp](examples/store_root_chain.cpp).
-
-### Legality
-
-* The store level must **enclose** the compute level — it must be the same loop
-  or an *outer* one. Storing inside the compute loop is illegal
-  ([examples/neg_store_inside_compute.cpp](examples/neg_store_inside_compute.cpp)).
-* A Func with a store level must also have a non-inline compute level: using
-  `store_at`/`store_root` without `compute_at`/`compute_root` is illegal
-  ([examples/neg_store_at_inlined.cpp](examples/neg_store_at_inlined.cpp)).
-* Like the compute level, the store level must enclose every use of `f` (§8's
-  legal-site rule applies to it too).
-
-### `hoist_storage` / `hoist_storage_root`: no effect on the printed nest
-
-There is a third, even more physical level: the **hoist-storage level**, set by
-`f.hoist_storage(g, v)` or `f.hoist_storage_root()`. It moves the actual memory
-*allocation* further out (to avoid re-allocating inside a loop) **without**
-triggering the sliding-window reuse that `store_at` enables. By default it
-coincides with the store level.
-
-For `print_loop_nest` this directive is **invisible**: it changes neither the
-`produce`/`consume`/`store`/`for` structure nor the loop order. A schedule with
-`hoist_storage` prints exactly the same nest as the same schedule without it
-([examples/hoist_storage_noop.cpp](examples/hoist_storage_noop.cpp) prints
-identically to plain `compute_at`). It only affects allocation placement and
-buffer sizing, which the loop nest does not display.
-
-The one way `hoist_storage` shows up is by making an otherwise-fine schedule
-**illegal**:
-
-* Like `store_at`, it requires a non-inline compute level — `hoist_storage` /
-  `hoist_storage_root` on an inlined Func is illegal
-  ([examples/neg_hoist_at_inlined.cpp](examples/neg_hoist_at_inlined.cpp)).
-* The hoist-storage level must **enclose the store level** (which encloses the
-  compute level): allocation cannot live inside the loop whose iterations reuse
-  it. Hoisting to a loop inside the compute level is illegal
-  ([examples/neg_hoist_inside_compute.cpp](examples/neg_hoist_inside_compute.cpp)).
-
-So: `hoist_storage` is a no-op for the structure this document teaches, except
-that it adds these two legality constraints.
-
----
-
-## 10. Update (reduction) definitions
-
-So far each Func has had a single definition. A Func may also have **update
-definitions**: extra assignments, written after the initial one, that *modify*
-the Func's values in place. The initial definition plus the updates form an
-ordered list of **stages**.
-
-```cpp
-Func hist("hist");
-hist(x) = 0;              // stage 0: the pure / initial definition
-RDom r(0, N, "r");
-hist(in(r)) += 1;         // stage 1: an update definition
-```
-
-Each stage runs to completion before the next begins, and they all write to the
-**same** storage. A Func with `k` update definitions has `k + 1` stages,
-numbered `s0` (pure), `s1`, …, `sk` in definition order.
-
-### Stages share one `produce`
-
-All of a Func's stages are emitted **inside the single `produce f` block**, as
-consecutive sibling loop nests — *not* as separate `produce`/`consume` blocks.
-There is no `consume` between stages; a consumer's `consume f` (if any) wraps the
-whole thing, because a reader sees the Func's *final*, post-update values. For
-the histogram above (see [examples/hist_1d.cpp](examples/hist_1d.cpp)):
-
-```
-produce hist:
-  for x:              # stage 0: initialise hist(x) = 0
-    hist(...) = ...
-  for r:              # stage 1: the scatter update
-    hist(...) = ...
-```
-
-### A stage's loops: free `Var`s plus `RVar`s
-
-Each stage has its **own dimension list** (§5), built from its own
-left-hand side:
-
-> An update stage loops over the **free `Var`s** appearing on its left-hand
-> side **plus the `RVar`s** of any `RDom` it uses. Default order, innermost
-> first: the `RVar`s are innermost — and *within* the `RVar`s the first-declared
-> dimension (`r.x`) is the **innermost** loop, matching the `Var` convention
-> that the first dimension varies fastest (§5) — and the free pure `Var`s sit
-> outside them (in the usual order, first LHS argument innermost among the
-> pures). A pure dimension whose left-hand-side slot is occupied by an `RVar` or
-> a general expression (e.g. the `in(r)` index in the histogram, or `f(x, r)`)
-> does **not** produce a loop in that stage.
-
-`RVar` loops print like any other (`for r in [min, max]`); the harness drops the
-constant bound, so they read as plain `for`. A `k`-dimensional `RDom` contributes
-`k` nested reduction loops. So `f(x, y) += in(x + r.x, y + r.y)` with a 2-D
-`RDom` gives the update stage loops `for y: for x: for r.y: for r.x:` (`r.x`
-innermost; [examples/update_2d_rdom.cpp](examples/update_2d_rdom.cpp)), while the pure
-stage `f(x, y) = 0` just gives `for y: for x:`. A reduction with no free
-variable on the left, like the histogram scatter, gives a stage with only the
-reduction loop(s).
-
-* [examples/sum_reduction.cpp](examples/sum_reduction.cpp): `f(x) = 0; f(x) +=
-  in(x, r)` — the pure stage loops over `x`, the update stage over `x` then the
-  reduction `r`.
-* [examples/two_updates.cpp](examples/two_updates.cpp): three stages (`s0`, `s1`,
-  `s2`) printed in order inside one `produce`.
-
-### Scheduling stages independently
-
-Every stage carries its own schedule, so the loop transforms of §6 (and, later,
-loop types) apply **per stage**:
-
-* `f.<directive>(…)` schedules the **pure** stage (`s0`).
-* `f.update(i).<directive>(…)` schedules update stage `s(i+1)` (so
-  `f.update(0)` is the first update).
-
-A `split`/`reorder`/`fuse`/`tile` on one stage rewrites only *that stage's*
-dimension list and leaves the others alone — and these transforms treat `RVar`s
-just like `Var`s in the list. In [examples/update_stage_split.cpp](examples/update_stage_split.cpp)
-only the update stage's `x` is split; the pure stage is untouched.
-[examples/update_stage_reorder.cpp](examples/update_stage_reorder.cpp) reorders a
-free `Var` inside the reduction loop of the update stage only.
-
-(One legality note that this document does **not** model mechanically: an `RVar`
-loop is *ordered*, so reordering two `RVar`s — or otherwise reshuffling them past
-each other — is rejected unless the reduction is associative *and* commutative,
-which Halide decides by analysing the update's arithmetic. Predicting that needs
-the actual expression semantics, which is out of scope here, just like bounds
-inference for loop elision in §8.)
-
-### Compute / store level, and `RVar`s as injection sites
-
-A Func's compute and store levels (§§7–9) apply to the Func as a **whole**: the
-entire `produce f` — all its stages — is realized together at the chosen site.
-Computing a Func with updates inside a consumer therefore drops the whole
-multi-stage block at that loop level
-([examples/func_update_compute_at.cpp](examples/func_update_compute_at.cpp)).
-
-Going the other way, a stage's loops — **including its `RVar` loops** — are
-valid sites at which to inject *other* Funcs. A producer read inside a reduction
-can be `compute_at` that reduction loop, and it is placed inside that specific
-stage's loop ([examples/producer_at_rvar.cpp](examples/producer_at_rvar.cpp)):
-
-```
-produce f:
-  for x:                      # stage 0
-    f(...) = ...
-  for x:                      # stage 1
-    for r:
-      produce p:              # p computed inside the reduction loop
-        p(...) = ...
-      consume p:
-        f(...) = ...
-```
-
-When the compute site is a loop that appears in **several** stages of the host
-(typically a pure `Var` that survives in more than one stage), the producer is
-injected **once into each such stage**, serving that stage's reads. The stages
-are sibling loop nests (§10), so each gets its own copy of the producer's
-`produce`/`consume`. In [examples/cross_stage_compute_at_shared.cpp](examples/cross_stage_compute_at_shared.cpp),
-`p` is read by both of `f`'s stages and computed at the shared `x` loop, so a
-`produce p`/`consume p` appears inside *both* stages' `x` loops.
-
-The legality rule of §8 carries over, now spanning **all** stages: a producer's
-compute site must be a loop present in **every** stage that reads the producer
-(so each reading stage can host an injection). An `RVar` loop exists only within
-its own stage, so a producer that is also read by another stage cannot be
-computed there — its only common sites are loops shared by all the using stages
-(and `root`). In
-[examples/neg_compute_at_update_rvar.cpp](examples/neg_compute_at_update_rvar.cpp),
-`p` is read by both the pure stage and the update stage, so computing it at the
-update's reduction loop is illegal.
-
----
-
-## 11. Putting the algorithm together (how the nest is built)
+## 10. Putting the algorithm together (how the nest is built)
 
 The whole loop nest follows from the rules above, assembled into one procedure:
 
 1. **Force the output to `root`** — the Func you call `print_loop_nest()` on is
-   always computed at the outermost level (§3, §4).
+   always computed at the outermost level (§4, §5).
 
 2. **Compute the realization order** — topologically sort the pipeline so every
-   producer precedes its consumers, breaking ties by name (§4). Inlined Funcs
+   producer precedes its consumers, breaking ties by name (§5). Inlined Funcs
    remain in this order so they can pass dependencies along, but they are never
-   realized and so drop out of the steps below (§3).
+   realized and so drop out of the steps below (§4).
 
 3. **Give every realized Func a site.** A *realized* Func is one that is not
    inlined: the output, plus anything scheduled `compute_root` or `compute_at`.
@@ -783,26 +823,25 @@ The whole loop nest follows from the rules above, assembled into one procedure:
        realization order;
      * a `compute_at(g, v)` Func is **filed under** host `g`'s loop over `v`. If
        several Funcs are filed at the same `(g, v)`, they keep realization order.
-   Each realized Func also has a **store level** (§9), defaulting to its compute
-   level; remember it for step 4. The `compute_at`/`store_at` site `v` is a
-   dimension of the host's **(possibly transformed) dimension list** (§5, §6):
-   `split`/`fuse`/`reorder`/`tile` have already rewritten that list before this
-   step, so `v` is matched against the post-transform dimensions.
+   Each realized Func also has a **store level** (§7), defaulting to its compute
+   level. The site `v` is a dimension of the host's **(possibly transformed)
+   dimension list** for the relevant stage (§3, §8): `split`/`fuse`/`reorder`/
+   `tile` have already rewritten that list before this step.
 
-4. **Emit from the outside in.** Walk the top-level chain (§4): for each Func
+4. **Emit from the outside in.** Walk the top-level chain (§5): for each Func
    print `produce f`, then `f`'s loop nest(s), then — for every Func but the
    last — `consume f` wrapping everything that follows. A Func with update
-   definitions (§10) emits **one loop nest per stage**, in stage order, all
+   definitions (§3) emits **one loop nest per stage**, in stage order, all
    inside that single `produce f` (no `consume` between stages). Printing a
-   *stage's* loop nest (§5) means working through *that stage's* dimension list
-   (after its own §6 transforms; an update stage's list also contains its
+   *stage's* loop nest (§3) means working through *that stage's* dimension list
+   (after its own §8 transforms; an update stage's list also contains its
    `RVar`s) from its outermost dimension inward, and at each dimension:
-     * if that dimension was declared elided (§8), skip its `for` line but still
+     * if that dimension was declared elided (§6), skip its `for` line but still
        treat the level as a valid injection site;
      * if this `(f, stage, dim)` level is the **store level** of some Func `h`
-       whose compute level is deeper (§9), open an `h`'s `store h:` node here
-       first; everything emitted below at this level — the intervening loops and
-       `h`'s own `produce`/`consume` further in — falls inside that `store h:`;
+       whose compute level is deeper (§7), open an `h`'s `store h:` node here
+       first; everything emitted below at this level falls inside that
+       `store h:`;
      * inject the Funcs filed at this `(f, stage, dim)` level (from step 3) —
        each as a `produce`/`consume` pair whose `consume` wraps the rest of the
        stage's body;
@@ -810,25 +849,22 @@ The whole loop nest follows from the rules above, assembled into one procedure:
        `f(...) = ...`.
    Injection is recursive: an injected Func's own loop nest is emitted the same
    way, so a Func filed inside a Func that is itself filed inside a third nests
-   accordingly (§8). A Func scheduled `store_root()` is the special case where
-   its `store` node opens at the very outermost level, wrapping the whole nest
-   (it has no `for`-level host to attach to).
+   accordingly (§6). A Func scheduled `store_root()` is the special case where
+   its `store` node opens at the very outermost level, wrapping the whole nest.
 
-[examples/many_compute_root.cpp](examples/many_compute_root.cpp) puts the
-core pieces together: `f1`, `f2`, `f3` are `compute_root` and so form the
-top-level chain in that order; `f4` is `compute_at(output, y)` and is injected
-under the output's `y` loop; and `clamped` is inlined, so it never appears — it
-is folded into `f1`'s leaf.
-[examples/many_store_at.cpp](examples/many_store_at.cpp) extends it to exercise
-the storage level: a `store_root` Func, a `store_at`-at-an-outer-loop Func
-(distinct `store`/compute levels), and a Func whose store level equals its
-compute level (no `store` node).
+[examples/many_compute_root.cpp](examples/many_compute_root.cpp) puts the core
+pieces together: `f1`, `f2`, `f3` are `compute_root` and so form the top-level
+chain in that order; `f4` is `compute_at(output, y)` and is injected under the
+output's `y` loop; and `clamped` is inlined, so it never appears.
+[examples/many_store_at.cpp](examples/many_store_at.cpp) exercises the storage
+level: a `store_root` Func, a `store_at`-at-an-outer-loop Func (distinct
+`store`/compute levels), and a Func whose store level equals its compute level.
 
 ---
 
 ## Source-level evidence
 
 The compiler-level justification for the above — where outputs are forced to
-`compute_root`, where the produce/consume nodes and realization order come
-from, and why extent-1 loops disappear — is in
-[src_doc/loop_nest_construction.md](src_doc/loop_nest_construction.md).
+`compute_root`, where the produce/consume nodes and realization order come from,
+how update stages become sibling loop nests, and why extent-1 loops disappear —
+is in [src_doc/loop_nest_construction.md](src_doc/loop_nest_construction.md).
