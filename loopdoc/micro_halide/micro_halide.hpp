@@ -373,6 +373,41 @@ class Func
         return *this;
     }
 
+    // ---- Loop transforms (loopdoc.md section 6) --------------------------
+    // STUBS provided by the main agent only so the examples COMPILE. They are
+    // no-ops; implementing the real effect on the loop nest -- rewriting this
+    // Func's ordered dimension list (and the legality of naming transformed /
+    // consumed vars as compute_at/store_at sites) -- is for the micro-agent,
+    // working from loopdoc.md section 6 ALONE.
+    Func &split(const Var &old_var, const Var &outer, const Var &inner, int factor)
+    {
+        (void)old_var; (void)outer; (void)inner; (void)factor;
+        return *this; // TODO(micro-agent): implement split (loopdoc section 6)
+    }
+
+    Func &fuse(const Var &inner, const Var &outer, const Var &fused)
+    {
+        (void)inner; (void)outer; (void)fused;
+        return *this; // TODO(micro-agent): implement fuse (loopdoc section 6)
+    }
+
+    Func &tile(const Var &x, const Var &y,
+               const Var &xo, const Var &yo,
+               const Var &xi, const Var &yi,
+               int xfactor, int yfactor)
+    {
+        (void)x; (void)y; (void)xo; (void)yo; (void)xi; (void)yi;
+        (void)xfactor; (void)yfactor;
+        return *this; // TODO(micro-agent): implement tile (loopdoc section 6)
+    }
+
+    template <typename... Vars>
+    Func &reorder(const Vars &...vars)
+    {
+        (void)std::initializer_list<int>{(static_cast<void>(vars.name()), 0)...};
+        return *this; // TODO(micro-agent): implement reorder (loopdoc section 6)
+    }
+
     void print_loop_nest();
 };
 

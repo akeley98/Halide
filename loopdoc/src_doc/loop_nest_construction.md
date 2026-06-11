@@ -1,6 +1,6 @@
 # Source evidence: loop-nest construction (bootstrap subset)
 
-This file backs the claims in [../loopdoc.md](../loopdoc.md) §§3–9 with
+This file backs the claims in [../loopdoc.md](../loopdoc.md) §§3–10 with
 citations into the Halide compiler. Paths are relative to the Halide source
 root (`../src` from the loopdoc directory). Line numbers are approximate and
 may drift; the surrounding function names are the stable anchors.
@@ -21,7 +21,7 @@ lowering:
     }
 
 This is why the output never inlines and always appears as the outermost
-`produce` (loopdoc §3, §4, §9 step 1). In the real `realize`/`compile` path the
+`produce` (loopdoc §3, §4, §10 step 1). In the real `realize`/`compile` path the
 same effect comes from the output simply being the realized buffer.
 
 ## 2. The default schedule is "inlined"
@@ -52,7 +52,7 @@ The topological producers-before-consumers order is computed by
 `print_loop_nest` calls it (`auto [order, fused_groups] =
 realization_order(outputs, env);`) and `schedule_functions` injects each
 function's realization in that order. This backs loopdoc §4 ("realization
-order") and §9 step 2. Inlined Funcs remain in `env` and so still contribute
+order") and §10 step 2. Inlined Funcs remain in `env` and so still contribute
 edges to the ordering even though they get no realization.
 
 ### Sibling tie-break
@@ -156,7 +156,7 @@ producer's realization at that point. The matching is done by the
 
 The realization (`produce`/loops/`consume`) is spliced in as a prefix of that
 loop's body, with the remainder of the body becoming the `consume` content.
-This backs loopdoc §7's nesting picture and §9 steps 3–4.
+This backs loopdoc §8's nesting picture and §10 steps 3–4.
 
 ### Legality of a compute_at site
 
@@ -187,7 +187,7 @@ Func (their common ancestors), always including `root`. The requested
         user_error << err.str();   // aborts (no exceptions build) / throws CompileError
     }
 
-This is the source basis for loopdoc §7 "When a compute_at is illegal":
+This is the source basis for loopdoc §8 "When a compute_at is illegal":
 
 * loop does not exist  → requested level matches no `Site` → not found.
 * host is not a consumer → the host's loops never appear in any use's stack, so
@@ -219,7 +219,7 @@ value:
 are gone before printing. A root Func is required over its full output region,
 so none of its loops collapse; a `compute_at` Func is required only over the
 sub-region read per host iteration, so any pointwise dimension collapses. This
-is the source-level basis for the caveat in loopdoc §7: the loop *count* of a
+is the source-level basis for the caveat in loopdoc §8: the loop *count* of a
 `compute_at` Func is a function of bounds inference, not just its
 dimensionality.
 
@@ -233,14 +233,14 @@ simplify), so when the loop is later collapsed into a `LetStmt`, anything that
 was injected at that level — including a `compute_at` child of the collapsed
 loop — stays at that position; only the `For` node disappears. This is the
 source-level basis for "an elided loop is still an injection site" in loopdoc
-§7 (see `examples/compute_at_elided_level.cpp`). Because predicting min == max
+§8 (see `examples/compute_at_elided_level.cpp`). Because predicting min == max
 requires the full bounds model, loopdoc declares elision via the `micro_halide_collapses`
 annotation rather than deriving it; that annotation has no counterpart in the
 real compiler (it is a no-op shim, `halide_compat/halide_compat.h`).
 
 ## 8. store_at / store_root: the `store` node
 
-Backs loopdoc §8.
+Backs loopdoc §9.
 
 ### Where the storage (Realize) node is injected
 
@@ -261,7 +261,7 @@ So the `Realize` wraps everything from the store-level loop down (including the
 host loops between the store and compute levels, and the `produce`/`consume`
 spliced in deeper at the compute level). `store_root()` is `LoopLevel::root()`,
 the outermost level, so its `Realize` ends up wrapping the whole pipeline body —
-this is why loopdoc §8's `store_root` node prints outside the output's
+this is why loopdoc §9's `store_root` node prints outside the output's
 `produce`.
 
 ### Why the `store` line appears only when store != compute
@@ -281,7 +281,7 @@ from the compute level:
     }
 
 This is the source basis for "the `store` node is shown only when store !=
-compute" (loopdoc §8), and for `store_root().compute_root()` printing no store
+compute" (loopdoc §9), and for `store_root().compute_root()` printing no store
 node (both at root, so equal).
 
 ### Legality
@@ -298,7 +298,7 @@ the list of legal `Site`s (the enclosing-loop stack intersection from
     if (!all_ok()) user_error << "... is computed at the following invalid location ...";
 
 Because `compute_idx` is only set once `store_idx >= 0`, a store level inside
-the compute level can never satisfy both — hence loopdoc §8's "store must
+the compute level can never satisfy both — hence loopdoc §9's "store must
 enclose compute" and `neg_store_inside_compute.cpp`. Separately, a store level
 on an inlined Func is rejected up front:
 
@@ -310,7 +310,7 @@ which backs `neg_store_at_inlined.cpp`.
 
 ## 9. hoist_storage / hoist_storage_root: invisible to print_loop_nest
 
-Backs loopdoc §8's hoist-storage subsection.
+Backs loopdoc §9's hoist-storage subsection.
 
 ### No print effect
 
@@ -322,7 +322,7 @@ for `For`, `Realize` (the `store` line, gated on store != compute),
 hoist-storage level, so changing it does not change the printed nest. (In the
 full lowering pipeline the hoist level affects where the allocation is
 physically placed, but that is past what `print_loop_nest` shows.) This backs
-loopdoc §8: a legal `hoist_storage` schedule prints identically to the same
+loopdoc §9: a legal `hoist_storage` schedule prints identically to the same
 schedule without it.
 
 ### Legality
@@ -349,3 +349,96 @@ so a hoist level inside the store/compute level can never satisfy all three and
 yields the "invalid location" error. This backs `neg_hoist_at_inlined.cpp` and
 `neg_hoist_inside_compute.cpp`. By default the hoist level coincides with the
 store level, so an unset hoist level adds no constraint.
+
+## 10. split / fuse / reorder / tile: rewriting the dimension list
+
+Backs loopdoc §6. These directives never touch the producer/consumer graph or
+the scheduling *levels*; they only mutate one stage's representation of its own
+loops.
+
+### The representation: `dims` and `splits`
+
+A stage's schedule (`src/Schedule.h`) holds two relevant vectors:
+
+    // src/Schedule.h ~446
+    struct Dim { std::string var; ForType for_type; ... };   // one entry per loop
+    // src/Schedule.h ~332
+    struct Split { std::string old_var, outer, inner; Expr factor;
+                   enum SplitType { SplitVar, RenameVar, FuseVars } split_type; };
+
+`StageSchedule::dims()` is the ordered loop list, **innermost first**, and always
+ends with the `Var::outermost()` sentinel. `splits()` records the split/rename/
+fuse operations in application order (used later by bounds inference to relate
+the new vars to the original ones). For `print_loop_nest`, what matters is the
+`dims` list: `build_provide`/`build_produce_definition` in
+`src/ScheduleFunctions.cpp` (see §5 above) emit one `For` per `Dim`, outermost
+first (the reverse of `dims`). So the only structural lever the transforms have
+is how they edit `dims`.
+
+### split (`Stage::split`, `src/Func.cpp` ~1076)
+
+    // ~1117: find old in dims, then
+    dims.insert(dims.begin() + i, dims[i]);   // duplicate the slot
+    dims[i].var     = old + "." + inner;      // innermost copy
+    dims[i + 1].var = old + "." + outer;      // just outside it
+
+So `old` at position `i` is replaced by two adjacent dims — `inner` at `i`
+(innermost), `outer` at `i+1` — and a `Split{old,outer,inner,factor,SplitVar}`
+is appended. Net: `dims` grows by one, i.e. one extra `For`. The new names are
+the dotted `old.inner` / `old.outer` seen in raw output. Backs `split_basic.cpp`.
+
+### fuse (`Stage::fuse`, `src/Func.cpp` ~1308)
+
+    // ~1331: erase the outer dim
+    dims.erase(dims.begin() + i);             // outer removed
+    // ~1347: rename the inner dim's slot to the fused name
+    dims[i].var = inner + "." + fused;        // fused takes inner's position
+
+`outer` is removed and `inner`'s slot is renamed to the fused var (covering the
+product of the two extents); a `Split{..., FuseVars}` is appended. Net: `dims`
+shrinks by one, i.e. one fewer `For`. Backs `fuse_basic.cpp`.
+
+### reorder (`Stage::reorder`, `src/Func.cpp` ~1813)
+
+    // ~1822: record each listed var's current position
+    for i: idx[i] = position of vars[i] in dims;   // user_error if not found
+    // ~1870: place the listed vars into the SORTED set of those positions
+    sorted = sort(idx);
+    for i: dims[sorted[i]] = dims_old[idx[i]];
+
+So `reorder` permutes **only the slots the listed vars currently occupy** —
+unlisted dims keep their positions — filling those slots in the given
+innermost-first order. The `user_assert(found)` at ~1831 is the
+"could not find var … to reorder" error backing `neg_reorder_bad_var.cpp`;
+duplicates are rejected at ~1838. Note `dims` ordering is the *only* thing
+reorder changes.
+
+### Why a pure-serial reorder is invisible
+
+The `For` printer (§5) emits `op->for_type` and `simplify_var_name(op->name)`,
+and prints `" in [min, max]"` only for constant bounds. The test harness's
+`canonicalize.py` then drops the var name entirely and drops constant bounds.
+A serial-loop `reorder` changes only names and the order of otherwise-identical
+`for` lines, both erased — hence loopdoc §6's "invisible except through a
+topological consequence". The consequence is real because `compute_at`
+injection (§6 above) matches the *level name* in the post-reorder `dims`: moving
+a dim inward/outward moves the loop a producer is filed under, changing how many
+host loops land inside its `consume`. Backs `reorder_topological.cpp` vs
+`reorder_baseline.cpp`. (A loop-type change — `parallel`/`vectorize`/`unroll`,
+which set `Dim::for_type` — *is* kept by both the printer and canonicalizer, so
+reordering typed loops would be visible; that is a later milestone.)
+
+### tile (`Stage::tile`, `src/Func.cpp` ~1754)
+
+The two-var `tile` is implemented as two `split`s followed by a `reorder` of the
+four resulting vars to `{xi, yi, xo, yo}` (innermost first), exactly as loopdoc
+§6 states. Net: `dims` grows by two. Backs `tile_basic.cpp`.
+
+### Sites are matched post-transform
+
+Because `compute_at`/`store_at` resolve their level by matching the name against
+the host's `dims` at scheduling time, the transformed vars are the legal sites,
+and consumed vars are gone. `g.compute_at(out, x)` after `out.fuse(x, y, xy)`
+fails the `ComputeLegalSchedules` lookup (§6 above) since no loop named `x`
+remains — only `xy` (and `outermost`/`root`). Backs
+`neg_compute_at_fused_away.cpp` and `split_compute_at.cpp`.
