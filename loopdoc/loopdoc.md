@@ -358,6 +358,40 @@ produce h:
       h(...) = ...
 ```
 
+### When a `compute_at` is illegal
+
+`f.compute_at(g, v)` is not always legal. Halide computes the set of **legal
+compute sites** for `f` as the loop levels that **enclose every use of `f`** —
+formally, the intersection of the loop-level stacks at all of `f`'s call sites,
+plus `root`. If the requested site is not in that set, Halide rejects the
+schedule with *"Func f is computed at the following invalid location"* and lists
+the legal ones; no loop nest is produced. Three ways to land outside the legal
+set, all with only the features so far:
+
+* **The loop does not exist.** `v` must be one of `g`'s pure dimensions. Naming
+  a `Var` that `g` never loops over has no site to inject into —
+  [examples/neg_compute_at_bad_var.cpp](examples/neg_compute_at_bad_var.cpp).
+* **The host is not a consumer.** `g` must actually read `f` (directly, or
+  through Funcs inlined into it); otherwise `g` has no point that needs `f`, and
+  `f`'s real consumer lies outside `g` —
+  [examples/neg_compute_at_nonconsumer.cpp](examples/neg_compute_at_nonconsumer.cpp).
+* **A consumer lies outside the chosen site.** If `f` is read in more than one
+  place, the site must enclose *all* of them. Computing `f` inside one consumer
+  when another consumer (e.g. the output at root) also needs it leaves that
+  other read with no values. When `f` is used at two unrelated places the only
+  common enclosing site is `root` —
+  [examples/neg_compute_at_two_consumers.cpp](examples/neg_compute_at_two_consumers.cpp).
+
+The last case is the fundamental one: a Func computed at a single site can only
+feed consumers within that site. Feeding consumers that live at different,
+non-nested locations is exactly what the wrapper Funcs `in()` / `clone_in()` (a
+later milestone) exist to enable; until then, such a schedule is simply illegal.
+
+These are *negative* examples: both Halide and `micro_halide` must reject them
+(exit with an error) rather than print a loop nest. `micro_halide` validates the
+same rule — host realized, loop exists, and every reader of `f` enclosed by the
+site — before emitting.
+
 ---
 
 ## 8. Putting the algorithm together (how the nest is built)

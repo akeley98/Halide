@@ -435,6 +435,120 @@ struct LoopNestPrinter
         order.push_back(f);
     }
 
+    // --- Schedule validation (rejects illegal compute_at, like Halide) -------
+
+    static bool is_realized(FuncContents *f)
+    {
+        return f->level != FuncContents::Level::Inline;
+    }
+
+    // Index of a Var name among a Func's pure dims (arg0 = innermost), or -1.
+    static int dim_index(FuncContents *g, const std::string &var)
+    {
+        for (int i = 0; i < (int)g->args.size(); i++)
+        {
+            if (g->args[i].name() == var)
+            {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    // Does realized Func h's loop body reference f? f is referenced if it is a
+    // direct producer of h, or reachable from h through a chain of *inlined*
+    // producers (which are substituted into h). A realized intermediate stops
+    // the search: h then reads that intermediate, not f.
+    bool body_reads(FuncContents *h, FuncContents *f, std::set<FuncContents *> &seen)
+    {
+        if (!seen.insert(h).second)
+        {
+            return false;
+        }
+        for (auto &p : h->producers)
+        {
+            if (p.get() == f)
+            {
+                return true;
+            }
+            if (p->level == FuncContents::Level::Inline && body_reads(p.get(), f, seen))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Is realized reader h enclosed by (i.e. computed inside) the loop (g, v)?
+    bool enclosed_by(FuncContents *h, FuncContents *g, const std::string &v)
+    {
+        if (h == g)
+        {
+            // The host reads f within its own body, which runs inside this loop.
+            return true;
+        }
+        if (h->level == FuncContents::Level::At)
+        {
+            if (h->at_func.get() == g)
+            {
+                // h is computed at (g, h->at_var); it sits inside (g, v) iff
+                // h->at_var is v or an inner loop of g (inner = lower index).
+                int ih = dim_index(g, h->at_var);
+                int iv = dim_index(g, v);
+                return ih >= 0 && iv >= 0 && ih <= iv;
+            }
+            return enclosed_by(h->at_func.get(), g, v);
+        }
+        return false; // h is at root (and not g): not inside g's loop
+    }
+
+    [[noreturn]] static void fail(FuncContents *f, const std::string &why)
+    {
+        throw std::runtime_error("micro_halide: invalid schedule for Func \"" + f->name +
+                                 "\": " + why);
+    }
+
+    // Validate every compute_at in the pipeline. `funcs` is every reachable Func.
+    void validate(const std::vector<FuncContents *> &funcs)
+    {
+        for (FuncContents *f : funcs)
+        {
+            if (f->level != FuncContents::Level::At)
+            {
+                continue;
+            }
+            FuncContents *g = f->at_func.get();
+            const std::string &v = f->at_var;
+
+            // The host must itself be computed (have a loop nest).
+            if (!g || !is_realized(g))
+            {
+                fail(f, "compute_at host is inlined/undefined, so it has no loop to compute at");
+            }
+            // The named loop must exist as a dimension of the host.
+            if (dim_index(g, v) < 0)
+            {
+                fail(f, "compute_at loop variable does not exist in the host Func");
+            }
+            // Every consumer of f must be computed inside (g, v); otherwise some
+            // reader cannot see f's values. (A consumer outside g is the classic
+            // producer/consumer break that requires a wrapper Func to fix.)
+            for (FuncContents *h : funcs)
+            {
+                if (h == f || !is_realized(h))
+                {
+                    continue;
+                }
+                std::set<FuncContents *> seen;
+                if (body_reads(h, f, seen) && !enclosed_by(h, g, v))
+                {
+                    fail(f, "it is read by a Func that is not computed inside the "
+                            "compute_at loop (the producer/consumer relationship is broken)");
+                }
+            }
+        }
+    }
+
     // Emit the realizations in `funcs` as a chain of produce/consume blocks.
     // `cont` (if non-null) is the continuation that follows the last func and
     // is wrapped by its consume block.
@@ -513,6 +627,9 @@ struct LoopNestPrinter
         std::set<FuncContents *> visited;
         std::vector<FuncContents *> order;
         realization_order(output, visited, order);
+
+        // Reject illegal schedules before emitting (mirrors Halide aborting).
+        validate(order);
 
         std::vector<FuncContents *> root_list;
         for (FuncContents *f : order)

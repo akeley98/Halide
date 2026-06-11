@@ -51,6 +51,18 @@ Marking convention:
         levels -> outer-level producer wraps inner-level producer; root+at mixes
         the two mechanisms. loopdoc §2 (clarified) + §7 (new subsection);
         examples producers_diff_levels.cpp, producers_root_and_at.cpp.
+      * NEGATIVE EXAMPLES (illegal compute_at; both Halide and micro_halide must
+        error -> harness "Negative example PASS"). Halide's rule: the compute_at
+        site must enclose EVERY use of the Func (intersection of the enclosing
+        loop stacks across all uses, + root; ComputeLegalSchedules). Three
+        structural failures, none bounds-dependent:
+          - neg_compute_at_bad_var.cpp: loop var not a dim of the host.
+          - neg_compute_at_nonconsumer.cpp: host (realized) does not read f.
+          - neg_compute_at_two_consumers.cpp: f used at two root sites, computed
+            inside one -> only root is legal. (THE producer/consumer break.)
+        micro_halide validates this in LoopNestPrinter::validate (host realized,
+        loop exists, every reader enclosed_by the site). loopdoc §7 "When a
+        compute_at is illegal" + src_doc §6 document/justify it.
       * compute_at loop ELISION resolved via the design decision below: the loop
         *structure* is derived from the schedule (validated), and point-loop
         elision (extent-1 dims simplified away) is *declared* per example with
@@ -100,6 +112,12 @@ Marking convention:
       * Also confirm the prefix computation (strip `$n` suffix, then trailing
         digits) against real wrapper/clone names, which is where `$`-suffixes
         and trailing digits actually show up.
+      * POSITIVE counterpart to the bootstrap producer/consumer-break negative
+        (neg_compute_at_two_consumers.cpp): wrappers are exactly the fix. When
+        this milestone lands, add the positive version -- give one consumer its
+        own `f.in(consumer)` so each wrapper has a single consumer and can be
+        compute_at'd legally. Cross-check it against that negative example so the
+        before/after contrast is documented.
 
 [ ] `compute_with` (this is where things get very confusing)
     NOTES:

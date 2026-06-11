@@ -158,6 +158,48 @@ The realization (`produce`/loops/`consume`) is spliced in as a prefix of that
 loop's body, with the remainder of the body becoming the `consume` content.
 This backs loopdoc §7's nesting picture and §8 steps 3–4.
 
+### Legality of a compute_at site
+
+Before injecting, `schedule_functions` validates the requested level against the
+set of legal sites computed by `ComputeLegalSchedules` (`src/ScheduleFunctions.cpp`).
+That visitor walks the loop nest maintaining the current stack of enclosing loop
+levels (`sites`) and, at every *use* of the Func, intersects:
+
+    // src/ScheduleFunctions.cpp, ComputeLegalSchedules::register_use (~1936)
+    if (!found) { sites_allowed = sites; }      // first use: its enclosing loops
+    else {
+        // keep only loop levels common to this use and all previous uses
+        for (s1 : sites) for (s2 : sites_allowed)
+            if (s1.loop_level.match(s2.loop_level)) common_sites.push_back(s1);
+        sites_allowed.swap(common_sites);
+    }
+
+So `sites_allowed` ends up as the loop levels that **enclose every use** of the
+Func (their common ancestors), always including `root`. The requested
+`compute_at` is then looked up in that set:
+
+    // src/ScheduleFunctions.cpp (~2333, ~2380)
+    for (i : sites) if (sites[i].loop_level.match(compute_at) && ...) compute_idx = i;
+    ...
+    if (!all_ok()) {
+        err << "Func \"" << f.name() << "\" is computed at the following invalid location:\n" ...
+            << "Legal locations for this function are:\n" ...   // prints sites_allowed
+        user_error << err.str();   // aborts (no exceptions build) / throws CompileError
+    }
+
+This is the source basis for loopdoc §7 "When a compute_at is illegal":
+
+* loop does not exist  → requested level matches no `Site` → not found.
+* host is not a consumer → the host's loops never appear in any use's stack, so
+  they are never in `sites_allowed`.
+* a consumer lies outside the site → that consumer's use stack does not contain
+  the site, so intersection drops it; with two unrelated uses only `root`
+  survives.
+
+micro_halide mirrors this with `LoopNestPrinter::validate` (`enclosed_by` =
+"the site is a common ancestor of this use"), throwing instead of printing,
+which makes the binary exit non-zero exactly as Halide's `user_error` does.
+
 ## 7. Why a compute_at Func can emit fewer loops than it has dimensions
 
 Bounds inference computes, for each realization, the *region* of the Func
