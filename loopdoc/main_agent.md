@@ -49,6 +49,7 @@ Instead, the main agent delegates this to sub-agents that are reading the main a
       As needed, insert `debug(1) << "text";` logging into the Halide compiler itself, and include transcripts of the debug log to illustrate the compiler's internal logic.
     * Make a git commit
     * If this is not the bootstrap milestone, spawn micro-agents to edit `micro_halide` based on the documentation you've written.
+      Spawn them as described in "Launching logged micro-agents" below.
       You may wish to leave comments using `<!-- -->` syntax in `loopdoc.md` highlighting what changed to guide the micro-agent.
     * If this is the bootstrap milestone, edit `micro_halide` yourself to make the tests (`sh test.sh`) pass.
     * Make a git commit, with commentary on whether the tests are passing or failing.
@@ -85,6 +86,34 @@ Instead, the main agent delegates this to sub-agents that are reading the main a
 
 * The human is not experienced in agentic coding and indeed has not a very clear picture of what he's doing.
   You may stop to give suggestions if the harness or milestone list or overall way of doing things seem counterproductive.
+
+
+## Launching logged micro-agents
+
+Always spawn micro-agents as the **`micro-halide` agent type** (defined in
+`.claude/agents/micro-halide.md`), i.e. call the Agent tool with
+`subagent_type: "micro-halide"`. That agent type is tool-restricted and has a
+PreToolUse hook that logs every tool call to `loopdoc/tool_audit.jsonl` for
+integrity review. Do NOT use a generic sub-agent for micro_halide work -- it
+would be unlogged and unrestricted.
+
+When writing the spawn prompt:
+
+* DO NOT paste anything derived from the Halide source. The whole experiment
+  rests on the micro-agent reconstructing structure from `loopdoc.md` alone;
+* Remind it that its canonical instructions are `loopdoc/micro_agent.md`.
+
+After the micro-agent returns, BEFORE trusting its results:
+
+* Run `python3 review_micro.py --last` (or `--agent <id>`).
+* If it reports `INTEGRITY FLAGGED` (the micro-agent read Halide source/expected
+  output, or committed), flag for human review -- a contaminated run
+  tells you nothing about doc quality.
+* If it warns the micro-agent never read `loopdoc.md`, treat any pass with
+  suspicion and consider re-running.
+
+The audit log accumulates across runs and is gitignored; `review_micro.py` with
+no arguments summarizes every micro-agent run on record.
 
 
 ## Halide Source Code References
