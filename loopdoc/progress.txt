@@ -119,6 +119,22 @@ Marking convention:
         Watch the interaction: a split introduces new Vars that can themselves
         be compute_at sites and can be elided; `micro_halide_collapses` keys on Var name,
         so annotate the post-split Var names.
+      * GOTCHA (from canonicalize.py, important for designing reorder tests):
+        the canonicalizer DROPS loop variable names and keeps only loop TYPE
+        (for/parallel/...) + nesting. So a pure serial `reorder` of two plain
+        `for` loops is INVISIBLE to the comparison (both sides print just
+        `for`/`for`) -- a reorder-only example would pass trivially and prove
+        nothing. To actually test reorder, give it a *topological consequence*:
+        e.g. reorder so a compute_at producer ends up under a different loop, or
+        combine with a loop-type change (vectorize/parallel/unroll, a later
+        milestone) that the canonicalizer DOES keep. Same caveat for the order
+        of split's inner/outer loops when both are plain serial.
+      * split's inner loop is named like the split var; bounds become constant
+        (split factor) for the inner loop -- but canonicalize normalizes constant
+        bounds away, so only the *number* and nesting of loops is the signal.
+        micro_halide will need real Var objects for the new split/fuse vars
+        (Var x_outer, x_inner; f.split(x, x_outer, x_inner, factor)) so that
+        compute_at/store_at can later name them.
 
 [ ] Update definitions (see e.g. `../apps/hist`)
     NOTES:
