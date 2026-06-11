@@ -107,11 +107,16 @@ def test_all():
                 any_diff_fail = True
                 print_log(f"Behavior difference: {e.halide_bin} exited successfully, but {e.micro_halide_bin} failed")
             if not halide_runtime_fail and not micro_halide_runtime_fail:
-                halide_log = open(e.halide_debug_0_log).read()
-                micro_halide_log = open(e.micro_halide_log).read()
-                if halide_log != micro_halide_log:
+                diff_cmd = f"python3 canonicalize.py --diff {e.halide_debug_0_log} {e.micro_halide_log}"
+                diff_code = os.system(diff_cmd) >> 8
+                if diff_code == 0:
+                    pass
+                elif diff_code == 1:
                     any_diff_fail = True
-                    print_log(f"Behavior difference: {e.halide_debug_0_log} not equal to {e.micro_halide_log}")
+                    print_log(f"Non-trivial loop nest difference (failed command: {diff_cmd!r})")
+                else:
+                    any_diff_fail = True
+                    print_log(f"Canonicalizer failed; check if micro_halide output {e.micro_halide_log} seems syntactically correct, and flag for human review if no issues spotted (failed command: {diff_cmd!r})")
 
     if any_cpp_fail:
         print_log("Not all C++ files compiled successfully. DO NOT spawn micro-agents.")
