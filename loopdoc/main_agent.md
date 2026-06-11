@@ -26,7 +26,7 @@ Instead, the main agent delegates this to sub-agents that are reading the main a
     * Reading the Halide compiler's source code itself.
 
   Please write a large number of examples comprehensively analyzing the interaction between the current milestone's features and previously documented features.
-  Consider:
+  When the time is right, consider:
     * Multiple functions `b1`, `b2`, `b3`... relying on a common producer `a`, and possibly another function `c` consuming `b1`, `b2`, `b3`, ...; and consider `in()`, `clone_in()`, and the "transitivity" documented for these scheduling operators
     * Complicated patterns involving update functions
 
@@ -54,14 +54,15 @@ Instead, the main agent delegates this to sub-agents that are reading the main a
     * Make a git commit, with commentary on whether the tests are passing or failing.
     * If the tests passed:
         * Check that the micro-agent didn't do something stupid like delete test cases; flag for human review if so.
+        * Mark as [fixed] the discovered doc gaps that seem to have been resolved.
         * Exit the loop: milestone complete.
     * If the tests don't pass:
         * Try to understand what difficulties the micro-agent ran into. They should have
           left comments in `loopdoc.md` and appended one-line entries to the
           `DISCOVERED DOC GAPS` section of `progress.txt`.
         * Treat each open gap as a precise statement of what the documentation failed to
-          convey. Improve `loopdoc.md` (and `src_doc`/examples) to answer it, then mark
-          the gap `[fixed]`. A failing test is a *useful result*: the deliverable of this
+          convey. Improve `loopdoc.md` (and `src_doc`/examples) to answer it.
+          A failing test is a *useful result*: the deliverable of this
           campaign is documentation that closes these gaps, not merely a green test run.
 
 

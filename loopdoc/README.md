@@ -11,7 +11,7 @@ This is particularly the case for scheduling that results in generating "interme
 
 I want to test using LLMs to generate clear documentation that gives a mental model of the "state" of each Halide object in scheduling, and how these scheduled functions get transformed into a loop nest.
 What I want is a holistic overview of the underlying API principles and how the loop nest is constructed from the scheduled functions.
-For now, we will ignore scheduling involved in debugging (tracing, profiling, etc.), bounds inference hints, and the weird Hexagon DSP.
+For now, we will ignore scheduling involved in debugging (tracing, profiling, etc.), bounds inference hints, storage re-ordering, and the weird Hexagon DSP.
 
 To validate that the documentation is good, we will spawn sub-agents (micro-agents) that read the docs and use them to write a tiny header-only re-implementation of Halide: `micro_halide`.
 `micro_halide` will only implement a subset of the Halide function and schedule definition API, and `print_loop_nest`.

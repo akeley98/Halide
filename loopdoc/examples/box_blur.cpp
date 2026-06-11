@@ -35,6 +35,12 @@ int main()
 
     ImageParam input(type_of<uint8_t>(), 3, "input");
 
+    // NOTE FOR IMPLEMENTING micro_halide:
+    // For the purposes of micro_halide faking that it is the real Halide,
+    // BoundaryConditions::* and cast<...> should both be implemented as
+    // anonymous functions that are just reliant on the underlying input function.
+    // Since we don't care about typing or bounds inference, the actual behavior doesn't matter.
+
     Func clamped = BoundaryConditions::repeat_edge(input);
 
     clamped.compute_root();
