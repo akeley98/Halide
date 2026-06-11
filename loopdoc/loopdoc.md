@@ -82,7 +82,7 @@ produce <f>:        # contains a region computing (storing into) Func f
 consume <f>:        # contains a region that reads f's stored values
 for <var>:          # a loop over one dimension
 <f>(...) = ...      # the leaf: store one point of f (arguments and RHS elided)
-store <f>:          # (later revision) storage scope, when distinct from compute
+store <f>:          # f's storage scope, shown only when it differs from compute (§8)
 ```
 
 Indentation is containment. `produce f` contains the loops that compute `f` and
@@ -339,7 +339,7 @@ which is undecidable in general and out of scope for this document. We therefore
 which loops to drop. The split between *structure* (taught here, derived from
 the schedule) and *elision* (declared) is described in the README. The loop
 *structure* — produce/consume placement, ordering, and the surviving loops — is
-fully determined by the schedule as described in §§4–8.
+fully determined by the schedule as described in §§4–9.
 
 ### An elided loop is still a `compute_at` injection site
 
@@ -397,7 +397,94 @@ site — before emitting.
 
 ---
 
-## 8. Putting the algorithm together (how the nest is built)
+## 8. `store_at` / `store_root`: storage level vs. compute level
+
+So far a Func has had a single *compute level* (§4, §7) that fixes both where it
+is computed and where its storage is allocated. These can be separated. Besides
+its compute level, a Func has a **store level**: the loop at which its buffer is
+allocated. By default the store level **equals** the compute level. Two
+directives change it (and *only* it — they do not move the computation):
+
+* `f.store_at(g, v)` — allocate `f`'s storage in host `g`'s loop over `v`.
+* `f.store_root()` — allocate `f`'s storage at the outermost level.
+
+The point of separating them is to allocate storage at an *outer* loop while
+computing at an *inner* loop: values computed on one iteration of the inner loop
+can then be reused on later iterations (Halide's *sliding window* optimization),
+and the buffer can be folded down to a small size. Those are changes to *which
+values are recomputed* and to *buffer sizes* — they do **not** change the
+produce/consume/`for` structure that `print_loop_nest` prints (buffer sizes only
+affect constant bounds, which the harness ignores). The single visible effect on
+the loop nest is an added `store` node.
+
+### The `store` node
+
+`print_loop_nest` prints `store f:` **only when `f`'s store level differs from
+its compute level.** When they are equal — the default, and also
+`store_root().compute_root()` (both at root) — there is no `store` line at all.
+
+When shown, the `store f:` node sits at the **store level** and contains
+everything from there down to `f`'s `produce`/`consume` at the compute level. The
+`produce`/`consume` of `f` and every `for` loop stay exactly where `compute_at`
+alone (§7) would place them; `store_at` only adds the enclosing `store f:` line
+(and the host loops between the store level and the compute level fall inside
+it).
+
+For `g.store_at(f, y).compute_at(f, x)` — store at the outer loop `y`, compute at
+the inner loop `x` (see [examples/store_at_compute_at.cpp](examples/store_at_compute_at.cpp)):
+
+```
+produce f:
+  for y:
+    store g:          # at the store level (f's y)
+      for x:          # host loop between store and compute level
+        produce g:    # at the compute level (f's x)
+          for y:
+            for x:
+              g(...) = ...
+        consume g:
+          f(...) = ...
+```
+
+`store_root()` puts the `store` node at the **outermost** level — outside even
+the output's `produce`, wrapping the entire pipeline body. For
+`g.store_root().compute_at(f, y)` with `f` the output (see
+[examples/store_root_compute_at.cpp](examples/store_root_compute_at.cpp)):
+
+```
+store g:              # outermost: storage for the whole pipeline body
+  produce f:
+    for y:
+      produce g: ...
+      consume g:
+        for x:
+          f(...) = ...
+```
+
+When the host of the compute level is itself an intermediate Func, the `store`
+node still lands at the named store loop and wraps that Func's whole realization
+(its `produce` *and* `consume`); see
+[examples/store_root_chain.cpp](examples/store_root_chain.cpp).
+
+### Legality
+
+* The store level must **enclose** the compute level — it must be the same loop
+  or an *outer* one. Storing inside the compute loop is illegal
+  ([examples/neg_store_inside_compute.cpp](examples/neg_store_inside_compute.cpp)).
+* A Func with a store level must also have a non-inline compute level: using
+  `store_at`/`store_root` without `compute_at`/`compute_root` is illegal
+  ([examples/neg_store_at_inlined.cpp](examples/neg_store_at_inlined.cpp)).
+* Like the compute level, the store level must enclose every use of `f` (§7's
+  legal-site rule applies to it too).
+
+<!-- store_at/store_root added in this revision. The store node placement and
+"shown only when store != compute" rule are the new structure to implement;
+sliding-window/folding are value/bounds effects with no print_loop_nest
+structure change. -->
+
+---
+
+## 9. Putting the algorithm together (how the nest is built)
 
 The whole loop nest follows from the rules above, assembled into one procedure:
 
@@ -416,6 +503,8 @@ The whole loop nest follows from the rules above, assembled into one procedure:
        realization order;
      * a `compute_at(g, v)` Func is **filed under** host `g`'s loop over `v`. If
        several Funcs are filed at the same `(g, v)`, they keep realization order.
+   Each realized Func also has a **store level** (§8), defaulting to its compute
+   level; remember it for step 4.
 
 4. **Emit from the outside in.** Walk the top-level chain (§4): for each Func
    print `produce f`, then `f`'s loop nest, then — for every Func but the last —
@@ -424,7 +513,10 @@ The whole loop nest follows from the rules above, assembled into one procedure:
      * if that dimension was declared elided (§7), skip its `for` line but still
        treat the level as a valid injection site;
      * inject the Funcs filed at this `(f, dim)` level (from step 3) — each as a
-       `produce`/`consume` pair whose `consume` wraps the rest of `f`'s body;
+       `produce`/`consume` pair whose `consume` wraps the rest of `f`'s body. If
+       an injected Func's store level differs from its compute level (§8), wrap
+       it in a `store` node at the matching outer level instead (a `store_root`
+       Func's node goes at the very outermost level, around the whole nest);
      * descend to the next-inner dimension, bottoming out at the leaf
        `f(...) = ...`.
    Injection is recursive: an injected Func's own loop nest is emitted the same

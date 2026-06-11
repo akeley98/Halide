@@ -74,7 +74,7 @@ Marking convention:
         factoring. This is the standing policy for all future bounds-driven
         elision (incl. RDom/update reduction loops).
 
-[ ] `store_at`, `store_root`
+[WIP] `store_at`, `store_root`
     NOTES: These won't visibly change the loop nest output, but reasoning about illegal store_at requires comprehension of the loop nest structure.
 
 [ ] `hoist_storage`, `hoist_storage_root`

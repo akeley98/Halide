@@ -1,6 +1,6 @@
 # Source evidence: loop-nest construction (bootstrap subset)
 
-This file backs the claims in [../loopdoc.md](../loopdoc.md) §§3–8 with
+This file backs the claims in [../loopdoc.md](../loopdoc.md) §§3–9 with
 citations into the Halide compiler. Paths are relative to the Halide source
 root (`../src` from the loopdoc directory). Line numbers are approximate and
 may drift; the surrounding function names are the stable anchors.
@@ -21,7 +21,7 @@ lowering:
     }
 
 This is why the output never inlines and always appears as the outermost
-`produce` (loopdoc §3, §4, §8 step 1). In the real `realize`/`compile` path the
+`produce` (loopdoc §3, §4, §9 step 1). In the real `realize`/`compile` path the
 same effect comes from the output simply being the realized buffer.
 
 ## 2. The default schedule is "inlined"
@@ -52,7 +52,7 @@ The topological producers-before-consumers order is computed by
 `print_loop_nest` calls it (`auto [order, fused_groups] =
 realization_order(outputs, env);`) and `schedule_functions` injects each
 function's realization in that order. This backs loopdoc §4 ("realization
-order") and §8 step 2. Inlined Funcs remain in `env` and so still contribute
+order") and §9 step 2. Inlined Funcs remain in `env` and so still contribute
 edges to the ordering even though they get no realization.
 
 ### Sibling tie-break
@@ -156,7 +156,7 @@ producer's realization at that point. The matching is done by the
 
 The realization (`produce`/loops/`consume`) is spliced in as a prefix of that
 loop's body, with the remainder of the body becoming the `consume` content.
-This backs loopdoc §7's nesting picture and §8 steps 3–4.
+This backs loopdoc §7's nesting picture and §9 steps 3–4.
 
 ### Legality of a compute_at site
 
@@ -237,3 +237,73 @@ source-level basis for "an elided loop is still an injection site" in loopdoc
 requires the full bounds model, loopdoc declares elision via the `micro_halide_collapses`
 annotation rather than deriving it; that annotation has no counterpart in the
 real compiler (it is a no-op shim, `halide_compat/halide_compat.h`).
+
+## 8. store_at / store_root: the `store` node
+
+Backs loopdoc §8.
+
+### Where the storage (Realize) node is injected
+
+`schedule_functions` injects each Func's storage as a `Realize` node at its
+**store level**, separately from the `produce`/`consume` (ProducerConsumer) and
+loops that go at its compute level. In the For-loop mutator:
+
+    // src/ScheduleFunctions.cpp (~1307)
+    if (funcs[i].schedule().store_level().match(for_loop->name)) {
+        ...
+        body = build_realize_function_from_group(body, i);   // wrap body in Realize
+    }
+
+    // build_realize (~1394)
+    s = Realize::make(name, func.output_types(), memory_type, bounds, const_true(), s);
+
+So the `Realize` wraps everything from the store-level loop down (including the
+host loops between the store and compute levels, and the `produce`/`consume`
+spliced in deeper at the compute level). `store_root()` is `LoopLevel::root()`,
+the outermost level, so its `Realize` ends up wrapping the whole pipeline body —
+this is why loopdoc §8's `store_root` node prints outside the output's
+`produce`.
+
+### Why the `store` line appears only when store != compute
+
+The `Realize` node is *always* present (storage must be allocated somewhere),
+but `print_loop_nest` only prints a `store` line when the store level differs
+from the compute level:
+
+    // src/PrintLoopNest.cpp, visit(const Realize *)
+    if (it != env.end() &&
+        !(it->second.schedule().store_level() ==
+          it->second.schedule().compute_level())) {
+        out << "store " << simplify_func_name(op->name) << ":\n";
+        indent += 2; op->body.accept(this); indent -= 2;
+    } else {
+        op->body.accept(this);   // no store line; just recurse
+    }
+
+This is the source basis for "the `store` node is shown only when store !=
+compute" (loopdoc §8), and for `store_root().compute_root()` printing no store
+node (both at root, so equal).
+
+### Legality
+
+`validate_schedule` (~2285) looks up the requested store and compute levels in
+the list of legal `Site`s (the enclosing-loop stack intersection from
+`ComputeLegalSchedules`, see §6 above) and requires the store site to be found
+*before* (i.e. outside) the compute site:
+
+    // src/ScheduleFunctions.cpp (~2333)
+    if (sites[i].loop_level.match(store_at) && hoist_storage_idx >= 0) store_idx = i;
+    if (sites[i].loop_level.match(compute_at) && store_idx >= 0 ...)   compute_idx = i;
+    ...
+    if (!all_ok()) user_error << "... is computed at the following invalid location ...";
+
+Because `compute_idx` is only set once `store_idx >= 0`, a store level inside
+the compute level can never satisfy both — hence loopdoc §8's "store must
+enclose compute" and `neg_store_inside_compute.cpp`. Separately, a store level
+on an inlined Func is rejected up front:
+
+    // src/ScheduleFunctions.cpp (~2300)
+    user_error << "Func \"" << f.name() << "\" is scheduled store_at(), but is "
+               << "inlined. Funcs that use store_at must also call compute_at.\n";
+
+which backs `neg_store_at_inlined.cpp`.
