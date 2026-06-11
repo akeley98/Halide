@@ -1,2 +1,0 @@
-All tests passed.
-Logged to harness_log.txt
