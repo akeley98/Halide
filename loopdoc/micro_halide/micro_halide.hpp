@@ -73,11 +73,19 @@ class FuncRef;
 // "producers"). That dependency set is all that is needed to deduce the
 // producer/consumer graph and therefore the loop nest.
 // ---------------------------------------------------------------------------
+class RVar; // reduction variable (defined below, after Expr)
+
 class Expr
 {
   public:
     // Funcs this expression reads from (may contain duplicates; deduped later).
     std::vector<std::shared_ptr<FuncContents>> deps;
+    // Names of reduction variables (RVars) referenced anywhere in this
+    // expression (may contain duplicates; deduped later). Captured so that an
+    // update definition can tell which reduction loops it needs. RVar names are
+    // distinct per RVar (e.g. "r", or "r$x"/"r$y" for a multi-dim RDom); the
+    // harness drops loop names, so only the COUNT/identity matters.
+    std::vector<std::string> rvars;
 
     Expr()
     {
@@ -94,6 +102,8 @@ class Expr
     Expr(const Var &)
     {
     }
+    // An RVar used as an expression carries its name (see definition below).
+    Expr(const RVar &);
     // Reading a Func (a FuncRef) inside an expression adds it as a producer.
     Expr(const FuncRef &);
 };
@@ -103,6 +113,8 @@ inline Expr combine(const Expr &a, const Expr &b)
     Expr r;
     r.deps = a.deps;
     r.deps.insert(r.deps.end(), b.deps.begin(), b.deps.end());
+    r.rvars = a.rvars;
+    r.rvars.insert(r.rvars.end(), b.rvars.begin(), b.rvars.end());
     return r;
 }
 
@@ -130,6 +142,82 @@ Expr cast(const Expr &e)
 {
     return e;
 }
+
+// clamp(e, lo, hi): bounds an index/value. Typing and bounds are irrelevant to
+// the loop nest, so this is a pass-through preserving e's deps and rvars (lo/hi
+// are plain Exprs and contribute their own, if any).
+inline Expr clamp(const Expr &e, const Expr &lo, const Expr &hi)
+{
+    return combine(e, combine(lo, hi));
+}
+
+// ---------------------------------------------------------------------------
+// RVar: one dimension of a reduction domain. Like a Var it just names a loop,
+// but it only appears in update definitions and yields reduction loops there.
+// ---------------------------------------------------------------------------
+class RVar
+{
+    std::string _name;
+
+  public:
+    explicit RVar(std::string n) : _name(std::move(n))
+    {
+    }
+    const std::string &name() const
+    {
+        return _name;
+    }
+};
+
+inline Expr::Expr(const RVar &r)
+{
+    rvars.push_back(r.name());
+}
+
+// ---------------------------------------------------------------------------
+// RDom: a reduction domain. Declares one or more RVars. Bounds are irrelevant
+// to the loop structure (the harness drops constant bounds), so only the
+// RVars' identities matter. A 1-D RDom is usable directly as its single RVar
+// (and hence as an Expr / a scheduling handle).
+// ---------------------------------------------------------------------------
+class RDom
+{
+  public:
+    RVar x, y, z, w;
+    int dims;
+
+    // 1-D: RDom r(min, extent, name);
+    RDom(int /*min*/, int /*extent*/, std::string name)
+        : x(name), y(name + "$y"), z(name + "$z"), w(name + "$w"), dims(1),
+          _name(std::move(name))
+    {
+    }
+    // 2-D: RDom r(minx, extentx, miny, extenty, name); RVars are name$x, name$y.
+    RDom(int, int, int, int, std::string name)
+        : x(name + "$x"), y(name + "$y"), z(name + "$z"), w(name + "$w"), dims(2),
+          _name(std::move(name))
+    {
+    }
+    // 3-D.
+    RDom(int, int, int, int, int, int, std::string name)
+        : x(name + "$x"), y(name + "$y"), z(name + "$z"), w(name + "$w"), dims(3),
+          _name(std::move(name))
+    {
+    }
+
+    // A 1-D RDom is usable as its single RVar.
+    const std::string &name() const
+    {
+        return dims == 1 ? x.name() : _name;
+    }
+    operator Expr() const
+    {
+        return Expr(x);
+    }
+
+  private:
+    std::string _name;
+};
 
 // ---------------------------------------------------------------------------
 // FuncContents: the shared, mutable state behind a Func handle (mirrors
@@ -187,7 +275,33 @@ struct FuncContents
     // below and loopdoc.md: this is *declared* per example (it depends on bounds
     // inference, which is out of scope), not derived. An elided loop drops its
     // `for` line but is still a valid injection site for compute_at children.
+    // (For a Func with updates this collapse-set is shared by all stages; the
+    // current examples only need per-Func collapsing.)
     std::set<std::string> collapsed;
+
+    // ---- Update (reduction) definitions (loopdoc.md section 10) ----------
+    //
+    // The fields above describe stage 0 (the pure/initial definition): `args`
+    // is its dimension list and `producers` its reads. A Func may also have
+    // UPDATE stages, captured here in definition order (updates[0] == s1, ...).
+    //
+    // The main agent has CAPTURED the raw per-stage data that only the C++
+    // types can distinguish -- which LHS args are plain (free) Vars vs. general
+    // expressions, and which RVars the stage references. Turning that into each
+    // stage's DIMENSION LIST (free Vars + RVars, in the documented order) and
+    // EMITTING the multiple stages inside one `produce` (plus per-stage
+    // scheduling, RVar sites, and the cross-stage legal-site rule) is the
+    // micro-agent's task, from loopdoc.md section 10. `dims` is intentionally
+    // left for you to populate.
+    struct Update
+    {
+        std::vector<Var> pure_args;  // bare-Var LHS args (free dims), in order
+        std::vector<std::string> rvars; // distinct RVar names used, in order
+        std::vector<std::shared_ptr<FuncContents>> producers; // funcs this stage reads
+        std::vector<Var> dims;       // this stage's loop list (micro-agent fills)
+        std::set<std::string> collapsed; // per-stage point-loop elision
+    };
+    std::vector<Update> updates;
 };
 
 // ---------------------------------------------------------------------------
@@ -215,31 +329,108 @@ class FuncRef
         arg_exprs.push_back(e);
     }
 
-    // Define the Func: f(x, y, ...) = rhs;
-    void operator=(const Expr &rhs)
+    // All Funcs read by the RHS plus the LHS index expressions (deduped),
+    // excluding `self` (a Func's update may read itself; that is not a
+    // producer edge).
+    std::vector<std::shared_ptr<FuncContents>> collect_producers(const Expr &rhs) const
     {
-        func->args = vars;
-        // Dependencies are the funcs read by the RHS plus any read in the
-        // index expressions, deduplicated by identity.
         std::vector<std::shared_ptr<FuncContents>> deps = rhs.deps;
         for (const Expr &a : arg_exprs)
         {
             deps.insert(deps.end(), a.deps.begin(), a.deps.end());
         }
-        std::set<FuncContents *> seen;
-        func->producers.clear();
+        std::vector<std::shared_ptr<FuncContents>> out;
+        std::set<FuncContents *> seen{func.get()}; // exclude self
         for (auto &d : deps)
         {
             if (d && seen.insert(d.get()).second)
             {
-                func->producers.push_back(d);
+                out.push_back(d);
             }
         }
+        return out;
+    }
+
+    // Distinct RVar names referenced by the LHS index expressions and the RHS,
+    // in first-appearance order.
+    std::vector<std::string> collect_rvars(const Expr &rhs) const
+    {
+        std::vector<std::string> all = rhs.rvars;
+        for (const Expr &a : arg_exprs)
+        {
+            all.insert(all.end(), a.rvars.begin(), a.rvars.end());
+        }
+        std::vector<std::string> out;
+        std::set<std::string> seen;
+        for (const std::string &n : all)
+        {
+            if (seen.insert(n).second)
+            {
+                out.push_back(n);
+            }
+        }
+        return out;
+    }
+
+    // Record one update stage (loopdoc.md section 10). Captures the raw,
+    // type-distinguished data; the micro-agent turns it into a dimension list.
+    void record_update(const Expr &rhs)
+    {
+        FuncContents::Update u;
+        for (size_t i = 0; i < vars.size(); i++)
+        {
+            if (is_var[i])
+            {
+                u.pure_args.push_back(vars[i]); // a bare Var LHS arg = free dim
+            }
+        }
+        u.rvars = collect_rvars(rhs);
+        u.producers = collect_producers(rhs);
+        // Union this stage's producers into the Func's overall producer set
+        // (used for realization order and cross-stage legality).
+        std::set<FuncContents *> have;
+        for (auto &p : func->producers)
+        {
+            have.insert(p.get());
+        }
+        for (auto &p : u.producers)
+        {
+            if (have.insert(p.get()).second)
+            {
+                func->producers.push_back(p);
+            }
+        }
+        func->updates.push_back(std::move(u));
+    }
+
+    // Define or update the Func: f(x, y, ...) = rhs;
+    // The first definition is the pure (initial) stage; any later assignment is
+    // an update definition (loopdoc.md section 10).
+    void operator=(const Expr &rhs)
+    {
+        if (func->defined)
+        {
+            record_update(rhs);
+            return;
+        }
+        func->args = vars;
+        func->producers = collect_producers(rhs);
         func->defined = true;
     }
     void operator=(const FuncRef &rhs)
     {
         *this = Expr(rhs);
+    }
+
+    // f(...) += rhs;  /  f(...) *= rhs;  -- both add an update stage. The user's
+    // rhs is the increment/factor (the implicit self-read is not a producer).
+    void operator+=(const Expr &rhs)
+    {
+        record_update(rhs);
+    }
+    void operator*=(const Expr &rhs)
+    {
+        record_update(rhs);
     }
 };
 
@@ -249,6 +440,7 @@ inline Expr::Expr(const FuncRef &ref)
     for (const Expr &a : ref.arg_exprs)
     {
         deps.insert(deps.end(), a.deps.begin(), a.deps.end());
+        rvars.insert(rvars.end(), a.rvars.begin(), a.rvars.end());
     }
 }
 
@@ -277,11 +469,16 @@ class ImageParam
         return _name;
     }
 
-    // Reading an ImageParam is not a Func dependency (it is already stored).
+    // Reading an ImageParam is not a Func dependency (it is already stored),
+    // but its index expressions still carry RVars (and any Func reads), which
+    // must propagate so an update definition can see which reduction loops it
+    // uses (e.g. in(x, r)).
     template <typename... Args>
-    Expr operator()(Args...) const
+    Expr operator()(Args... args) const
     {
-        return Expr();
+        Expr acc;
+        (void)std::initializer_list<int>{(acc = combine(acc, Expr(args)), 0)...};
+        return acc;
     }
 };
 
@@ -329,6 +526,16 @@ class Func
         contents->at_func = f.contents;
         contents->at_var = var.name();
         return *this;
+    }
+    // A reduction variable / 1-D RDom names a loop too, so it can be a
+    // compute_at site (loopdoc.md section 10). Both expose .name().
+    Func &compute_at(const Func &f, const RVar &r)
+    {
+        return compute_at(f, Var(r.name()));
+    }
+    Func &compute_at(const Func &f, const RDom &r)
+    {
+        return compute_at(f, Var(r.name()));
     }
 
     // store_at / store_root: record the store level. See the note on
@@ -504,8 +711,62 @@ class Func
         return *this;
     }
 
+    // Handle to an update stage for per-stage scheduling: f.update(i) schedules
+    // update stage s(i+1) (loopdoc.md section 10). Returns a Stage (below).
+    class Stage update(int i = 0) const;
+
     void print_loop_nest();
 };
+
+// ---------------------------------------------------------------------------
+// Stage: a handle to one update stage's schedule, returned by Func::update(i).
+// The loop transforms below are STUBS (no-ops) provided by the main agent only
+// so the examples COMPILE. Implementing their per-stage effect -- rewriting
+// THAT stage's dimension list (which may contain RVars) -- is the micro-agent's
+// task, from loopdoc.md sections 6 and 10.
+// ---------------------------------------------------------------------------
+class Stage
+{
+  public:
+    std::shared_ptr<FuncContents> func;
+    int index; // update index: updates[index]
+
+    Stage(std::shared_ptr<FuncContents> f, int i) : func(std::move(f)), index(i)
+    {
+    }
+
+    Stage &split(const Var &old_var, const Var &outer, const Var &inner, int factor)
+    {
+        (void)old_var; (void)outer; (void)inner; (void)factor;
+        return *this; // TODO(micro-agent): per-stage split (loopdoc section 10)
+    }
+    Stage &fuse(const Var &inner, const Var &outer, const Var &fused)
+    {
+        (void)inner; (void)outer; (void)fused;
+        return *this; // TODO(micro-agent): per-stage fuse
+    }
+    Stage &tile(const Var &x, const Var &y,
+                const Var &xo, const Var &yo,
+                const Var &xi, const Var &yi,
+                int xfactor, int yfactor)
+    {
+        (void)x; (void)y; (void)xo; (void)yo; (void)xi; (void)yi;
+        (void)xfactor; (void)yfactor;
+        return *this; // TODO(micro-agent): per-stage tile
+    }
+    // reorder accepts Vars, RVars, or a 1-D RDom (anything with .name()).
+    template <typename... Vars>
+    Stage &reorder(const Vars &...vars)
+    {
+        (void)std::initializer_list<int>{(static_cast<void>(vars.name()), 0)...};
+        return *this; // TODO(micro-agent): per-stage reorder (incl. RVars)
+    }
+};
+
+inline Stage Func::update(int i) const
+{
+    return Stage(contents, i);
+}
 
 // ---------------------------------------------------------------------------
 // micro_halide_collapses(f, {vars...}): declare that f's loops over the named

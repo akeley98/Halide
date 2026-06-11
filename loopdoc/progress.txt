@@ -164,8 +164,54 @@ Marking convention:
         (Var x_outer, x_inner; f.split(x, x_outer, x_inner, factor)) so that
         compute_at/store_at can later name them.
 
-[ ] Update definitions (see e.g. `../apps/hist`)
+[WIP] Update definitions (see e.g. `../apps/hist`)
     NOTES:
+      * MODEL (explored, verified against Halide):
+        - A Func has an ordered list of STAGES: stage 0 = pure/initial def, then
+          one stage per update definition (definition order). All stages are
+          emitted inside ONE `produce f` block as consecutive SIBLING loop nests
+          (NOT separate produce/consume per stage). A consumer's `consume f`
+          wraps the whole produce (it reads the final, post-update value).
+        - Stage 0's loops = the Func's pure dimension list (as before, §5/§6).
+        - An update stage's loops = its OWN dimension list = the free Vars on its
+          LHS + the RVars of any RDom it uses. Default order (innermost-first):
+          RVars innermost (first-declared RVar is the OUTER one), pure free vars
+          outside them (first LHS arg innermost among the pures, per §5). A pure
+          dimension whose LHS slot holds an RVar/expr (e.g. f(x,r)=... or the
+          scatter hist(in(r))) does NOT loop in that stage.
+        - RVars print as `for r in [min,max]` -> canonicalize drops the bound, so
+          just another `for`. A k-dimensional RDom adds k nested reduction loops.
+        - Each stage is scheduled INDEPENDENTLY: `f` schedules stage 0; `f.update(i)`
+          returns a Stage handle for update i. split/fuse/reorder/tile (and later
+          loop types) apply PER STAGE, on that stage's dim list (which can include
+          RVars). E.g. f.update(0).split(x,..) leaves the init stage untouched.
+        - compute_at/store_at are per-FUNC: the whole `produce f` (all stages)
+          moves to the site. An RVar loop of ANY stage is a valid compute_at site
+          for a producer; the producer is injected into that stage's loop.
+        - LEGALITY: the §8 legal-site rule now intersects uses across ALL stages.
+          A producer computed at an RVar loop (which exists only in its own stage)
+          is illegal if the producer is also used in another stage; legal sites
+          are the loops common to every stage's use (+ root). Verified:
+          neg compute_at(f, r) when p is used in both s0 and s1.
+      * OUT OF SCOPE (like bounds inference): reordering RVars in a
+        non-associative/non-commutative reduction is illegal, but detecting this
+        needs SEMANTIC analysis of the update arithmetic, which micro_halide's
+        Expr deliberately discards (it tracks only deps). Document the rule
+        qualitatively; do NOT make it a micro_halide-checked test.
+      * SCAFFOLDING SPLIT: main agent imitates the API (RDom/RVar/Stage,
+        operator+=/*=, second operator= => update stage, Func::update(i)) and
+        captures each stage's raw data; micro-agent implements the loop-nest
+        EMISSION for stages from the docs. apps/hist uses .update().reorder(...)
+        and .rfactor(...) in the wild -- good citation.
+
+[ ] `rfactor` (factor a reduction for parallelism)
+    NOTES:
+      * Added as its own milestone (was missing from the original list). It
+        builds directly on Update definitions + RDom/RVar, so it must come AFTER
+        that milestone. rfactor splits an associative reduction into an
+        intermediate Func plus a final combine stage -- it CREATES a new Func and
+        new stages, so it has a real print_loop_nest effect (unlike pure reorder).
+        Do not attempt before update defs are documented and passing.
 
 [ ] `in` (wrapper functions) and `clone_in`
     NOTES:
