@@ -175,8 +175,11 @@ Marking convention:
         - Stage 0's loops = the Func's pure dimension list (as before, §5/§6).
         - An update stage's loops = its OWN dimension list = the free Vars on its
           LHS + the RVars of any RDom it uses. Default order (innermost-first):
-          RVars innermost (first-declared RVar is the OUTER one), pure free vars
-          outside them (first LHS arg innermost among the pures, per §5). A pure
+          RVars innermost, and WITHIN the RVars the first-declared (r.x) is the
+          INNERMOST (Var convention: first dim fastest -- CORRECTED; an earlier
+          note said r.x outer, which was wrong and hidden by name-dropping until
+          producer_at_2d_rvar pinned it down). Pure free vars sit outside the
+          RVars (first LHS arg innermost among the pures, per §5). A pure
           dimension whose LHS slot holds an RVar/expr (e.g. f(x,r)=... or the
           scatter hist(in(r))) does NOT loop in that stage.
         - RVars print as `for r in [min,max]` -> canonicalize drops the bound, so
@@ -203,6 +206,57 @@ Marking convention:
         captures each stage's raw data; micro-agent implements the loop-nest
         EMISSION for stages from the docs. apps/hist uses .update().reorder(...)
         and .rfactor(...) in the wild -- good citation.
+
+      * ===== STATE AT PAUSE (resume here) =====
+        DOC REORG (done, committed): loopdoc.md was reorganized "algorithm-first"
+        per user request. New section order: 1 model, 2 reading, 3 a single
+        Func's loops AND its stages (update defs live here, as ALGORITHM), 4
+        inlining, 5 compute_root, 6 compute_at, 7 store/hoist, 8 split/fuse/
+        reorder/tile, 9 names, 10 assembly. src_doc cross-refs remapped to match;
+        src_doc §11 extended with the LoopLevel-wildcard + use-gating +
+        inline_to_provide findings.
+        DATA-MODEL REFACTOR (done, committed): micro_halide now uses a uniform
+        StageData per stage (stages[0]=pure); whole-Func state (levels, union
+        producers) on FuncContents. micro_halide_collapses is per-stage:
+        (Func)->stage0, (Stage f.update(N))->stage N+1. halide_compat has the
+        Stage no-op overload.
+        TWO API CLARIFICATIONS (investigated in source, now documented):
+        (a) compute_at(g,v) builds LoopLevel(g,v,stage_index=-1) -- a WILDCARD
+            matching v in EVERY stage of g; the producer is realized only in the
+            stage(s) that actually READ it (use-gated by build_pipeline_group),
+            and each injection computes its OWN region (so loop counts can differ
+            per stage). loopdoc §6 "what (g,var) points to"; src/Schedule.cpp
+            LoopLevel::match, src/ScheduleFunctions.cpp ~1299/~1682.
+        (b) DEFAULT for a Func with updates: it is NOT inlined (can't be) -- it is
+            materialized at the innermost use (inline_to_provide,
+            src/ScheduleFunctions.cpp ~1358), i.e. a produce/consume wrapped
+            around the consumer's leaf, recomputed each iteration. loopdoc §4
+            "Funcs that cannot be inlined".
+
+        NOT-YET-DONE -- the next micro-agent delegation must implement (from the
+        rewritten loopdoc.md ALONE) and these 4 examples must go green:
+          - producer_at_2d_rvar.cpp      : RVar nesting order (r.x INNERMOST) so
+                                           compute_at at the OUTER rvar lands
+                                           between the two reduction loops. The
+                                           current micro_halide built RVar dims in
+                                           the WRONG (reversed) order in
+                                           FuncRef::record_update -- fix per §3.
+          - cross_stage_compute_at_shared.cpp : multi-stage USE-GATED injection
+                                           (inject producer into each stage that
+                                           READS it; current micro_halide wrongly
+                                           rejects the schedule).
+          - update_default_inline.cpp    : default realization of an un-inlinable
+                                           (has-updates) Func at the innermost use
+                                           (uses per-stage collapses on both
+                                           stages).
+          - weird_histogram_sampling.cpp : (user-added) same default-realization
+                                           behavior, histogram feeding weird(x);
+                                           hist's own loops all survive (no
+                                           elision -- scatter needs whole array).
+        Also: the per-stage collapse API and StageData are already scaffolded by
+        the main agent; the micro-agent only implements emission/legality.
+        DO NOT have the main agent fix these 4 -- they are the comprehension test.
+        After delegation: run review_micro.py --last, then adversarial pass.
 
 [ ] `rfactor` (factor a reduction for parallelism)
     NOTES:

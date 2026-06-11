@@ -1,6 +1,6 @@
 # Source evidence: loop-nest construction (bootstrap subset)
 
-This file backs the claims in [../loopdoc.md](../loopdoc.md) §§3–11 with
+This file backs the claims in [../loopdoc.md](../loopdoc.md) §§2–10 with
 citations into the Halide compiler. Paths are relative to the Halide source
 root (`../src` from the loopdoc directory). Line numbers are approximate and
 may drift; the surrounding function names are the stable anchors.
@@ -21,7 +21,7 @@ lowering:
     }
 
 This is why the output never inlines and always appears as the outermost
-`produce` (loopdoc §3, §4, §10 step 1). In the real `realize`/`compile` path the
+`produce` (loopdoc §4, §5, §10 step 1). In the real `realize`/`compile` path the
 same effect comes from the output simply being the realized buffer.
 
 ## 2. The default schedule is "inlined"
@@ -38,7 +38,7 @@ substituting its definition into its callers rather than giving it a loop nest;
 `is_inlined()` / `is_root()` are checked throughout (e.g. the
 `InjectRealization`/inlining logic gated on
 `level.is_inlined() || level.is_root()` near line 1003, and the inlined branch
-at ~1977 / 2298). This backs loopdoc §3: unscheduled Funcs vanish from the nest.
+at ~1977 / 2298). This backs loopdoc §4: unscheduled Funcs vanish from the nest.
 
 ## 3. Realization order
 
@@ -51,7 +51,7 @@ The topological producers-before-consumers order is computed by
 
 `print_loop_nest` calls it (`auto [order, fused_groups] =
 realization_order(outputs, env);`) and `schedule_functions` injects each
-function's realization in that order. This backs loopdoc §4 ("realization
+function's realization in that order. This backs loopdoc §5 ("realization
 order") and §10 step 2. Inlined Funcs remain in `env` and so still contribute
 edges to the ordering even though they get no realization.
 
@@ -80,7 +80,7 @@ The comment there explains the intent: make the order resistant to
 
 and `called_funcs_in_order_found` (`src/FindCalls.cpp`) is a pre-order DFS from
 the outputs (`populate_environment_helper` inserts a Func, then recurses into
-its calls in IR order). This is the source basis for loopdoc §4's tie-break
+its calls in IR order). This is the source basis for loopdoc §5's tie-break
 rule (prefix, then visitation order, then full name) — and explains why the
 left-to-right order of a defining expression does *not* decide which sibling
 producer is realized first (see
@@ -109,12 +109,12 @@ The `produce` and `consume` IR nodes are created in `build_realization` /
         return Block::make(producer, consumer);
     }
 
-Two facts in loopdoc §4 come directly from here:
+Two facts in loopdoc §5 come directly from here:
 
 * The **output gets no `consume`**: `is_output_list[i]` suppresses it (and for
   the very first realization the consumer is a no-op and is dropped).
 * Each realization is `Block(produce, consume)` with the consume wrapping the
-  *rest* of the program — which is how the chain in loopdoc §4 nests.
+  *rest* of the program — which is how the chain in loopdoc §5 nests.
 
 The visitor that prints these nodes:
 
@@ -128,7 +128,7 @@ The visitor that prints these nodes:
 for a definition over its dimensions. The dimension list is ordered with the
 pure args such that the *first* argument ends up the innermost loop and the
 last the outermost — matching the `for c: for y: for x:` ordering for
-`f(x, y, c)` (loopdoc §5). The `For` printer:
+`f(x, y, c)` (loopdoc §3). The `For` printer:
 
     // src/PrintLoopNest.cpp, visit(const For *)
     out << get_indent() << op->for_type << " " << simplify_var_name(op->name);
@@ -156,7 +156,7 @@ producer's realization at that point. The matching is done by the
 
 The realization (`produce`/loops/`consume`) is spliced in as a prefix of that
 loop's body, with the remainder of the body becoming the `consume` content.
-This backs loopdoc §8's nesting picture and §10 steps 3–4.
+This backs loopdoc §6's nesting picture and §10 steps 3–4.
 
 ### Legality of a compute_at site
 
@@ -187,7 +187,7 @@ Func (their common ancestors), always including `root`. The requested
         user_error << err.str();   // aborts (no exceptions build) / throws CompileError
     }
 
-This is the source basis for loopdoc §8 "When a compute_at is illegal":
+This is the source basis for loopdoc §6 "When a compute_at is illegal":
 
 * loop does not exist  → requested level matches no `Site` → not found.
 * host is not a consumer → the host's loops never appear in any use's stack, so
@@ -219,7 +219,7 @@ value:
 are gone before printing. A root Func is required over its full output region,
 so none of its loops collapse; a `compute_at` Func is required only over the
 sub-region read per host iteration, so any pointwise dimension collapses. This
-is the source-level basis for the caveat in loopdoc §8: the loop *count* of a
+is the source-level basis for the caveat in loopdoc §6: the loop *count* of a
 `compute_at` Func is a function of bounds inference, not just its
 dimensionality.
 
@@ -240,7 +240,7 @@ real compiler (it is a no-op shim, `halide_compat/halide_compat.h`).
 
 ## 8. store_at / store_root: the `store` node
 
-Backs loopdoc §9.
+Backs loopdoc §7.
 
 ### Where the storage (Realize) node is injected
 
@@ -261,7 +261,7 @@ So the `Realize` wraps everything from the store-level loop down (including the
 host loops between the store and compute levels, and the `produce`/`consume`
 spliced in deeper at the compute level). `store_root()` is `LoopLevel::root()`,
 the outermost level, so its `Realize` ends up wrapping the whole pipeline body —
-this is why loopdoc §9's `store_root` node prints outside the output's
+this is why loopdoc §7's `store_root` node prints outside the output's
 `produce`.
 
 ### Why the `store` line appears only when store != compute
@@ -281,7 +281,7 @@ from the compute level:
     }
 
 This is the source basis for "the `store` node is shown only when store !=
-compute" (loopdoc §9), and for `store_root().compute_root()` printing no store
+compute" (loopdoc §7), and for `store_root().compute_root()` printing no store
 node (both at root, so equal).
 
 ### Legality
@@ -298,7 +298,7 @@ the list of legal `Site`s (the enclosing-loop stack intersection from
     if (!all_ok()) user_error << "... is computed at the following invalid location ...";
 
 Because `compute_idx` is only set once `store_idx >= 0`, a store level inside
-the compute level can never satisfy both — hence loopdoc §9's "store must
+the compute level can never satisfy both — hence loopdoc §7's "store must
 enclose compute" and `neg_store_inside_compute.cpp`. Separately, a store level
 on an inlined Func is rejected up front:
 
@@ -310,7 +310,7 @@ which backs `neg_store_at_inlined.cpp`.
 
 ## 9. hoist_storage / hoist_storage_root: invisible to print_loop_nest
 
-Backs loopdoc §9's hoist-storage subsection.
+Backs loopdoc §7's hoist-storage subsection.
 
 ### No print effect
 
@@ -322,7 +322,7 @@ for `For`, `Realize` (the `store` line, gated on store != compute),
 hoist-storage level, so changing it does not change the printed nest. (In the
 full lowering pipeline the hoist level affects where the allocation is
 physically placed, but that is past what `print_loop_nest` shows.) This backs
-loopdoc §9: a legal `hoist_storage` schedule prints identically to the same
+loopdoc §7: a legal `hoist_storage` schedule prints identically to the same
 schedule without it.
 
 ### Legality
@@ -352,7 +352,7 @@ store level, so an unset hoist level adds no constraint.
 
 ## 10. split / fuse / reorder / tile: rewriting the dimension list
 
-Backs loopdoc §6. These directives never touch the producer/consumer graph or
+Backs loopdoc §8. These directives never touch the producer/consumer graph or
 the scheduling *levels*; they only mutate one stage's representation of its own
 loops.
 
@@ -419,7 +419,7 @@ The `For` printer (§5) emits `op->for_type` and `simplify_var_name(op->name)`,
 and prints `" in [min, max]"` only for constant bounds. The test harness's
 `canonicalize.py` then drops the var name entirely and drops constant bounds.
 A serial-loop `reorder` changes only names and the order of otherwise-identical
-`for` lines, both erased — hence loopdoc §6's "invisible except through a
+`for` lines, both erased — hence loopdoc §8's "invisible except through a
 topological consequence". The consequence is real because `compute_at`
 injection (§6 above) matches the *level name* in the post-reorder `dims`: moving
 a dim inward/outward moves the loop a producer is filed under, changing how many
@@ -445,7 +445,7 @@ remains — only `xy` (and `outermost`/`root`). Backs
 
 ## 11. Update (reduction) definitions: stages
 
-Backs loopdoc §10.
+Backs loopdoc §4 (stage structure); the cross-stage compute_at parts are §6.
 
 ### A Func is a list of stages
 
@@ -510,3 +510,62 @@ also used by another stage cannot be computed there. Backs `producer_at_rvar`
 (legal: `p` used only in the update's reduction) and
 `neg_compute_at_update_rvar` (illegal: `p` used in both the pure and update
 stages, so the update's `r` loop does not enclose the pure-stage use).
+
+### What `(g, var)` denotes across stages: the LoopLevel wildcard + use-gating
+
+`f.compute_at(g, var)` builds a `LoopLevel` whose stage index is **left
+unspecified** (the public ctor defaults it to `-1`):
+
+    // src/Schedule.h
+    LoopLevel(const Func &f, const VarOrRVar &v, int stage_index = -1);
+
+`LoopLevel::match` treats `stage_index == -1` as a **wildcard over all stages**
+— it matches the named loop in *every* stage of `g`, because it only checks the
+func-name prefix and the var-name suffix (not the `.sN.` stage tag):
+
+    // src/Schedule.cpp, LoopLevel::match(const std::string &loop)
+    if (contents->stage_index == -1) {
+        return starts_with(loop, func_name + ".") &&   // matches g.s0.var,
+               ends_with(loop, "." + var_name);          //   g.s1.var, ...
+    } else { /* require the "g.sN." prefix */ }
+
+So `(g, var)` does not point at a single site; it points at the `var` loop in
+*all* of `g`'s stages. What keeps that from injecting `f` into stages that don't
+use it is a separate **use gate**: when the injector finds a matching loop it
+calls `build_pipeline_group(body)` (`InjectFunctionRealization::visit(const For
+*)`, `src/ScheduleFunctions.cpp` ~1299), and `build_pipeline_group` skips any
+func not referenced in that body:
+
+    // src/ScheduleFunctions.cpp ~1682 (build_pipeline_group)
+    bool should_skip = function_is_already_realized_in_stmt(funcs[i], consumer) ||
+                       !(function_is_used_in_stmt(funcs[i], consumer) || is_output_list[i]);
+
+Net rule: `f` is realized just inside the `var` loop of **each stage of `g`
+that reads `f`**, and each such realization computes its own required region
+(bounds inference runs per injection), so `f`'s surviving loop count can differ
+between stages. This is the source basis for loopdoc §6's "what `(g, var)`
+points to" subsection, and for the per-stage `micro_halide_collapses`. Backs
+`producer_at_rvar` (only the update stage reads `p`),
+`cross_stage_compute_at_shared` (both stages read `p` → injected into both).
+
+### The default for a Func with updates: `inline_to_provide`
+
+A Func defaults to `LoopLevel::inlined()` (§2 above), but only a *pure* Func can
+be substituted as an expression. A Func with update definitions
+(`!is_pure()`) that is still at the default `inlined()` level is instead
+realized around the innermost consumer statement that uses it:
+
+    // src/ScheduleFunctions.cpp ~1358, InjectFunctionRealization::inline_to_provide
+    if (provide_name != funcs[0].name() &&
+        !funcs[0].is_pure() &&
+        funcs[0].schedule().compute_level().is_inlined() &&
+        function_is_used_in_stmt(funcs[0], provide_op)) {
+        Stmt stmt = build_realize(build_pipeline_group(provide_op), funcs[0], ...);
+        ...
+    }
+
+So an unscheduled reduction Func gets a `produce`/`consume` wrapped around the
+consumer's leaf (`Provide`) node — the deepest legal site, recomputed every
+iteration, exactly like inlining a pure Func but materialized. This backs
+loopdoc §4's "Funcs that cannot be inlined" subsection and
+`update_default_inline.cpp`.
