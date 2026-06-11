@@ -106,9 +106,8 @@ When writing the spawn prompt:
 After the micro-agent returns, BEFORE trusting its results:
 
 * Run `python3 review_micro.py --last` (or `--agent <id>`).
-* If it reports `INTEGRITY FLAGGED` (the micro-agent read Halide source/expected
-  output, or committed), flag for human review -- a contaminated run
-  tells you nothing about doc quality.
+* If it reports `INTEGRITY FLAGGED` (the micro-agent read Halide source, or committed),
+  flag for human review -- a contaminated run tells you nothing about doc quality.
 * If it warns the micro-agent never read `loopdoc.md`, treat any pass with
   suspicion and consider re-running.
 
