@@ -45,7 +45,7 @@ cxx = c++
 cflags = -std=c++17 -O2
 
 rule compile_halide
-  command = $cxx $cflags $in -MD -MF $out.d -I$halide_dir/include -L$halide_dir/src -lHalide -Wl,-rpath,$halide_dir/src -o $out
+  command = $cxx $cflags $in -MD -MF $out.d -I$halide_dir/include -Ihalide_compat -L$halide_dir/src -lHalide -Wl,-rpath,$halide_dir/src -o $out
   depfile = $out.d
 
 rule compile_micro_halide

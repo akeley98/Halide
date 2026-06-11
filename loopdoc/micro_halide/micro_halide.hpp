@@ -14,6 +14,7 @@
 // micro_halide does not need to reproduce them. It only needs to match the
 // produce/consume/store nesting, loop ordering, and loop type.
 
+#include <initializer_list>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -153,6 +154,13 @@ struct FuncContents
 
     std::shared_ptr<FuncContents> at_func; // host, for Level::At
     std::string at_var;                    // host loop var name, for Level::At
+
+    // Names of this Func's loop variables that Halide elides because their
+    // required extent is provably 1 (a "point loop"). See `collapses` below
+    // and loopdoc.md: this is *declared* per example (it depends on bounds
+    // inference, which is out of scope), not derived. An elided loop drops its
+    // `for` line but is still a valid injection site for compute_at children.
+    std::set<std::string> collapsed;
 };
 
 // ---------------------------------------------------------------------------
@@ -300,6 +308,23 @@ class Func
 };
 
 // ---------------------------------------------------------------------------
+// collapses(f, {vars...}): declare that f's loops over the named Vars are
+// elided by Halide (their required extent is 1). This is an annotation of
+// ground truth supplied by the example author, NOT something micro_halide
+// derives -- predicting it requires bounds inference, which loopdoc.md keeps
+// out of scope. Under real Halide this is a no-op stub (see the
+// halide_compat header); only the loop *structure* is what the docs teach and
+// what micro_halide validates.
+// ---------------------------------------------------------------------------
+inline void collapses(const Func &f, std::initializer_list<Var> vars)
+{
+    for (const Var &v : vars)
+    {
+        f.contents->collapsed.insert(v.name());
+    }
+}
+
+// ---------------------------------------------------------------------------
 // BoundaryConditions: helpers that wrap an input in a Func. Typing/bounds are
 // irrelevant here, so the wrapper is just a fresh Func of the same
 // dimensionality that depends on nothing realizable.
@@ -398,14 +423,25 @@ struct LoopNestPrinter
             return;
         }
         const std::string &var = f->args[dim].name();
-        out << pad(indent) << "for " << var << ":\n";
+
+        // An elided ("collapsed") loop prints no `for` line and does not
+        // indent its body, but is still a valid injection site for any
+        // compute_at children filed at this level (see the "compute_at at an
+        // elided loop level" example).
+        bool elided = f->collapsed.count(var) != 0;
+        int body_indent = indent;
+        if (!elided)
+        {
+            out << pad(indent) << "for " << var << ":\n";
+            body_indent = indent + 2;
+        }
 
         auto it = children_at.find({f, var});
         std::vector<FuncContents *> empty;
         const std::vector<FuncContents *> &kids = (it == children_at.end()) ? empty : it->second;
 
         auto deeper = [this, f, dim](int ind) { emit_dim(f, dim - 1, ind); };
-        emit_realizations(kids, 0, indent + 2, deeper, /*has_cont=*/true);
+        emit_realizations(kids, 0, body_indent, deeper, /*has_cont=*/true);
     }
 
     void print(FuncContents *output)

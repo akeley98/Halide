@@ -3,6 +3,7 @@
 using namespace micro_halide;
 #else
 #include "Halide.h"
+#include "halide_compat.h"
 using namespace Halide;
 #endif
 

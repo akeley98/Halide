@@ -35,6 +35,7 @@ This repository contains:
     using namespace micro_halide;
     #else
     #include "Halide.h"
+    #include "halide_compat.h"
     using namespace Halide;
     #endif
 
@@ -47,6 +48,33 @@ This repository contains:
 
         f.print_loop_nest();
     }
+
+The only `#ifdef USE_MICRO_HALIDE` permitted in an example is this header block.
+The non-micro branch also includes `halide_compat.h` (from `halide_compat/`),
+a small shim that provides do-nothing stubs for micro_halide-only annotations
+so the example compiles unchanged against real Halide.
+
+## The `collapses` annotation
+
+`print_loop_nest()` reflects *bounds inference*: a loop whose required extent is
+provably 1 (a "point loop") is simplified away, so a `compute_at` Func may emit
+fewer `for` loops than it has dimensions. Predicting which loops vanish requires
+bounds inference, which is undecidable in general and out of scope for
+`loopdoc.md` (and therefore for what a micro-agent may rely on).
+
+We factor this out: the loop *structure* (produce/consume nesting, realization
+order, loop order/type, surviving loops) is what the docs teach and what
+micro_halide validates; point-loop elision is treated as *declared input*, not a
+derived result. An example annotates it with
+
+    f.compute_at(g, x);
+    collapses(f, {y});   // declare: f's y loop has extent 1 here and is elided
+
+`collapses` is a no-op under real Halide (the shim above) and tells micro_halide
+to drop those loops. The example author (who may consult Halide) supplies the
+ground truth; the micro-agent only implements "honor the annotation," which
+needs no bounds knowledge. An elided loop still serves as a valid `compute_at`
+injection site (see `examples/compute_at_elided_level.cpp`).
 
 
 # Build and Test System
