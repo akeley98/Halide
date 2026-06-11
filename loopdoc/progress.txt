@@ -13,7 +13,6 @@ Marking convention:
   [ ]    not started
   [WIP]  in progress (only one at a time, normally)
   [✅]   the doc explains this well enough that micro-tests covering it pass
-         (or fail only for reasons captured in DISCOVERED DOC GAPS below)
 
 "Done" is a judgment call, especially for early milestones -- revisit freely.
 
@@ -34,15 +33,12 @@ Marking convention:
         example to isolate the core mechanics; keep box_blur for later.
 
 [ ] `store_at`, `store_root`
-    NOTES:
+    NOTES: These won't visibly change the loop nest output, but reasoning about illegal store_at requires comprehension of the loop nest structure.
 
 [ ] `hoist_storage`, `hoist_storage_root`
     NOTES:
 
 [ ] `split`, `fuse`, `tile`, `reorder`
-    NOTES:
-
-[ ] `reorder_storage`
     NOTES:
 
 [ ] Update definitions (see e.g. `../apps/hist`)
@@ -66,16 +62,12 @@ Marking convention:
 
 # DISCOVERED DOC GAPS
 
-The real product of this campaign. This list PERSISTS across milestones -- do not
-clear it when a milestone closes.
-
-When a micro-agent (or you) hits a point where `loopdoc.md` does not answer a
-concrete question needed to build the loop nest, record it here as one line:
+When a micro-agent hits a point where `loopdoc.md` does not answer a
+concrete question needed to build the loop nest, record it here:
 
   - [open|fixed] <milestone> | <the specific question the doc couldn't answer> | <example file, if any>
 
-A milestone may be marked [✅] while gaps remain open here, as long as the open
-gaps are understood and tracked. Prefer logging a precise unanswered question over
-a vague "this section is unclear."
+The micro-agent creates [open] issues.
+The main-agent may mark issues as [fixed] if changes to the docs seem to have caused later micro-agents to not run into the same confusion.
 
 (none yet)
