@@ -646,6 +646,83 @@ struct LoopNestPrinter
                 }
             }
 
+            // -- Hoist-storage-level legality (loopdoc.md section 8) -----------
+            if (f->has_hoist_level)
+            {
+                // hoist_storage/hoist_storage_root requires a non-inline compute
+                // level, just like store_at.
+                if (f->level == FuncContents::Level::Inline)
+                {
+                    fail(f, "has a hoist-storage level (hoist_storage/hoist_storage_root) "
+                            "but is inlined; Funcs that use hoist_storage must also call "
+                            "compute_at/compute_root");
+                }
+                if (!f->hoist_is_root)
+                {
+                    FuncContents *hg = f->hoist_func.get();
+                    const std::string &hv = f->hoist_var;
+                    if (!hg || !is_realized(hg))
+                    {
+                        fail(f, "hoist_storage host is inlined/undefined, so it has no loop");
+                    }
+                    if (dim_index(hg, hv) < 0)
+                    {
+                        fail(f, "hoist_storage loop variable does not exist in the host Func");
+                    }
+                    // The hoist-storage level must ENCLOSE the store level, which
+                    // in turn encloses the compute level. The effective store
+                    // level is the explicit store_at if present, else the compute
+                    // level. We require the hoist loop to be the same loop or an
+                    // outer one relative to that effective store level.
+                    bool store_is_root = f->has_store_level && f->store_is_root;
+                    FuncContents *eff_host;
+                    std::string eff_var;
+                    if (f->has_store_level && !f->store_is_root)
+                    {
+                        eff_host = f->store_func.get();
+                        eff_var = f->store_var;
+                    }
+                    else if (f->level == FuncContents::Level::At)
+                    {
+                        eff_host = f->at_func.get();
+                        eff_var = f->at_var;
+                    }
+                    else
+                    {
+                        // compute_root with no explicit store_at: effective store
+                        // level is root, which only a root hoist level encloses.
+                        eff_host = nullptr;
+                        eff_var.clear();
+                        store_is_root = true;
+                    }
+
+                    bool ok;
+                    if (store_is_root)
+                    {
+                        // A root store level can only be enclosed by a root hoist
+                        // level (handled above); a named hoist loop is inside it.
+                        ok = false;
+                    }
+                    else if (eff_host == hg)
+                    {
+                        // Same host: hoist var must be the same loop or an outer
+                        // one (outer = higher dim index; arg0 = inner).
+                        ok = dim_index(hg, hv) >= dim_index(eff_host, eff_var);
+                    }
+                    else
+                    {
+                        // Different host: the store host's loop (eff_host, eff_var)
+                        // must itself sit inside the hoist loop (hg, hv).
+                        ok = enclosed_by(eff_host, hg, hv);
+                    }
+                    if (!ok)
+                    {
+                        fail(f, "hoist-storage level does not enclose the store level "
+                                "(hoist_storage must be at the same or an outer loop)");
+                    }
+                }
+            }
+
             if (f->level != FuncContents::Level::At)
             {
                 continue;
