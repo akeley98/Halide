@@ -374,38 +374,134 @@ class Func
     }
 
     // ---- Loop transforms (loopdoc.md section 6) --------------------------
-    // STUBS provided by the main agent only so the examples COMPILE. They are
-    // no-ops; implementing the real effect on the loop nest -- rewriting this
-    // Func's ordered dimension list (and the legality of naming transformed /
-    // consumed vars as compute_at/store_at sites) -- is for the micro-agent,
-    // working from loopdoc.md section 6 ALONE.
+    // These rewrite this Func's ordered dimension list (contents->args, with
+    // args[0] the INNERMOST loop). They change only this Func's own loops and
+    // the dimension names usable as compute_at/store_at sites; they never move
+    // the Func relative to others and never change which values are computed.
+
+    // Find a Var's index in the dimension list, or -1.
+    int dim_pos(const std::string &name) const
+    {
+        for (int i = 0; i < (int)contents->args.size(); i++)
+        {
+            if (contents->args[i].name() == name)
+            {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    // split(old, outer, inner, factor): replace `old` with two dimensions --
+    // `inner` (innermost, at old's former slot) and `outer` just outside it.
+    // [x, y] under split(x, xo, xi, 8) -> [xi, xo, y]. One extra `for`.
     Func &split(const Var &old_var, const Var &outer, const Var &inner, int factor)
     {
-        (void)old_var; (void)outer; (void)inner; (void)factor;
-        return *this; // TODO(micro-agent): implement split (loopdoc section 6)
+        (void)factor; // bound is normalized away by the harness
+        int pos = dim_pos(old_var.name());
+        if (pos < 0)
+        {
+            throw std::runtime_error("micro_halide: split: Func \"" + contents->name +
+                                     "\" has no dimension \"" + old_var.name() + "\"");
+        }
+        // Replace args[pos] (== old) with [inner, outer]: inner takes old's slot
+        // (innermost of the pair), outer sits just outside it.
+        std::vector<Var> &a = contents->args;
+        a.erase(a.begin() + pos);
+        a.insert(a.begin() + pos, outer);   // outer goes to old's slot first ...
+        a.insert(a.begin() + pos, inner);   // ... then inner pushed inside it
+        return *this;
     }
 
+    // fuse(inner, outer, fused): remove `inner` and `outer`, place a single
+    // `fused` dimension at inner's former position. [x, y] under fuse(x, y, xy)
+    // -> [xy]. One fewer `for`.
     Func &fuse(const Var &inner, const Var &outer, const Var &fused)
     {
-        (void)inner; (void)outer; (void)fused;
-        return *this; // TODO(micro-agent): implement fuse (loopdoc section 6)
+        int ipos = dim_pos(inner.name());
+        int opos = dim_pos(outer.name());
+        if (ipos < 0)
+        {
+            throw std::runtime_error("micro_halide: fuse: Func \"" + contents->name +
+                                     "\" has no dimension \"" + inner.name() + "\"");
+        }
+        if (opos < 0)
+        {
+            throw std::runtime_error("micro_halide: fuse: Func \"" + contents->name +
+                                     "\" has no dimension \"" + outer.name() + "\"");
+        }
+        std::vector<Var> &a = contents->args;
+        // Remove both, then insert `fused` at inner's (former) position. Erase
+        // the higher index first so the lower index stays valid.
+        int hi = std::max(ipos, opos);
+        int lo = std::min(ipos, opos);
+        a.erase(a.begin() + hi);
+        a.erase(a.begin() + lo);
+        // inner's former position, after removing the elements: if outer was
+        // before inner (opos < ipos), inner shifts down by one.
+        int insert_pos = (opos < ipos) ? ipos - 1 : ipos;
+        a.insert(a.begin() + insert_pos, fused);
+        return *this;
     }
 
+    // tile(x, y, xo, yo, xi, yi, xf, yf): split(x,xo,xi,xf); split(y,yo,yi,yf);
+    // reorder(xi, yi, xo, yo). [x, y] -> [xi, yi, xo, yo]. Two extra `for`s.
     Func &tile(const Var &x, const Var &y,
                const Var &xo, const Var &yo,
                const Var &xi, const Var &yi,
                int xfactor, int yfactor)
     {
-        (void)x; (void)y; (void)xo; (void)yo; (void)xi; (void)yi;
-        (void)xfactor; (void)yfactor;
-        return *this; // TODO(micro-agent): implement tile (loopdoc section 6)
+        split(x, xo, xi, xfactor);
+        split(y, yo, yi, yfactor);
+        reorder(xi, yi, xo, yo);
+        return *this;
     }
 
+    // reorder(v_inner, ..., v_outer): lists dimensions innermost first and
+    // permutes ONLY the listed dimensions among the slots they currently
+    // occupy; unnamed dimensions keep their position. Each listed dimension
+    // must exist and be named at most once.
     template <typename... Vars>
     Func &reorder(const Vars &...vars)
     {
-        (void)std::initializer_list<int>{(static_cast<void>(vars.name()), 0)...};
-        return *this; // TODO(micro-agent): implement reorder (loopdoc section 6)
+        std::vector<std::string> names{vars.name()...};
+
+        // Collect the slots occupied by the listed dimensions, in ascending
+        // index order (innermost first). Validate existence and uniqueness.
+        std::vector<int> slots;
+        for (const std::string &n : names)
+        {
+            int pos = dim_pos(n);
+            if (pos < 0)
+            {
+                throw std::runtime_error("micro_halide: reorder: Func \"" + contents->name +
+                                         "\" has no dimension \"" + n + "\"");
+            }
+            for (int s : slots)
+            {
+                if (contents->args[s].name() == n)
+                {
+                    throw std::runtime_error("micro_halide: reorder: dimension \"" + n +
+                                             "\" named more than once");
+                }
+            }
+            slots.push_back(pos);
+        }
+        std::sort(slots.begin(), slots.end());
+
+        // The listed dimensions, in the requested order (innermost first).
+        std::vector<Var> requested;
+        for (const std::string &n : names)
+        {
+            requested.push_back(contents->args[dim_pos(n)]);
+        }
+
+        // Drop the requested dimensions into the (sorted) slots they occupied.
+        for (size_t i = 0; i < slots.size(); i++)
+        {
+            contents->args[slots[i]] = requested[i];
+        }
+        return *this;
     }
 
     void print_loop_nest();

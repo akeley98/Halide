@@ -109,8 +109,36 @@ Marking convention:
         (hoist encloses compute but NOT the store_root level -> correctly
         rejected). All 31 examples pass.
 
-[ ] `split`, `fuse`, `tile`, `reorder`
+[✅] `split`, `fuse`, `tile`, `reorder`
     NOTES:
+      * DONE (delegated). Main agent wrote loopdoc §6 (new) + a §5 rewrite that
+        introduces the mutable, innermost-first **dimension list**; src_doc §10;
+        and examples. A logged micro-agent implemented all four transforms in
+        micro_halide from the docs ALONE -- all examples passed on the first run,
+        integrity clean (no Halide-source/src_doc reads, read loopdoc.md, no
+        commits), and it reported NO doc gaps. Strong signal §5/§6 are clear.
+      * MODEL: each transform rewrites the dim list (which drives both loop
+        emission and the set of legal compute_at/store_at site names):
+          - split(old,outer,inner,f): replace old with [inner,outer], inner
+            innermost -> +1 loop; inner gets a constant bound (normalized away).
+          - fuse(inner,outer,fused): remove both, put fused at inner's slot -> -1.
+          - reorder(v_in..v_out): permute ONLY the named dims among the slots
+            they currently occupy; unnamed dims stay put. PARTIAL reorder (fewer
+            vars than dims) is a real, separately-tested code path.
+          - tile(x,y,xo,yo,xi,yi,xf,yf) = split(x..)+split(y..)+
+            reorder(xi,yi,xo,yo) -> +2 loops, list [xi,yi,xo,yo] innermost-first.
+      * VISIBILITY (confirmed): a pure-serial reorder, and the inner/outer order
+        of a split, are INVISIBLE to print_loop_nest -- tested only via a
+        TOPOLOGICAL CONSEQUENCE (reorder relocates a compute_at producer to a
+        different host loop: reorder_topological vs reorder_baseline). Will become
+        directly visible once loops carry distinct types (vectorize/parallel/
+        unroll), which the canonicalizer DOES keep -- a later milestone.
+      * Examples: split_basic, fuse_basic, tile_basic, reorder_baseline,
+        reorder_topological, split_compute_at; negatives neg_reorder_bad_var and
+        neg_compute_at_fused_away (compute_at at a fuse-consumed var -> only the
+        fused var is a legal site). Adversarial follow-ups (main agent, all pass,
+        confirm no overfit): reorder_partial, fuse_compute_at (positive: fused
+        var IS a legal site), split_twice (split a split-produced var). 42 total.
       * Loop elision is handled by the `micro_halide_collapses` annotation (see bootstrap),
         so this milestone does NOT need to make bounds inference predictable.
         Keep declaring elision via `micro_halide_collapses`; do not try to derive it.
