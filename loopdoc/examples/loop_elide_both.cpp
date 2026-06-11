@@ -29,7 +29,7 @@ int main()
     output(x, y) = f(x, y) + f(x + dx, y) + f(x, y + dy) + f(x + dx, y + dy);
 
     f.compute_at(output, x);
-    collapses(f, {x, y}); // both loops have extent 1 here and are elided
+    micro_halide_collapses(f, {x, y}); // both loops have extent 1 here and are elided
 
     output.print_loop_nest();
 }

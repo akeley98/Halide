@@ -263,9 +263,9 @@ which is undecidable in general and out of scope for this document. We therefore
 *declare* elision rather than derive it: an example annotates it with
 
     f.compute_at(output, x);
-    collapses(f, {x});   // f's x loop has extent 1 here and is elided
+    micro_halide_collapses(f, {x});   // f's x loop has extent 1 here and is elided
 
-`collapses(f, {vars...})` is a no-op under real Halide; it tells micro_halide
+`micro_halide_collapses(f, {vars...})` is a no-op under real Halide; it tells micro_halide
 which loops to drop. The split between *structure* (taught here, derived from
 the schedule) and *elision* (declared) is described in the README. The loop
 *structure* — produce/consume placement, ordering, and the surviving loops — is

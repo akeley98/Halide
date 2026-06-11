@@ -46,6 +46,9 @@ As such, the implementation must be based only on the information provided by th
   bounds. The comparison (`../canonicalize.py`) normalizes those away; only the
   produce/consume/store nesting, loop ordering, and loop type are compared.
 
+  Note further: the main agent was supposed to insert `micro_halide_collapses`, but mistakes are possible. You may need to add or edit `micro_halide_collapses` in the examples yourself. Symptom of this is if the overall loop and
+  producer/consumer structure matches, but some producers mysteriously have more or fewer loops than expeted.
+
 * If all example tests pass, remove any comments in `loopdoc.md` that highlighted recent changes to said document.
 
 * Do not make any git commits.

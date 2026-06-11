@@ -156,8 +156,8 @@ struct FuncContents
     std::string at_var;                    // host loop var name, for Level::At
 
     // Names of this Func's loop variables that Halide elides because their
-    // required extent is provably 1 (a "point loop"). See `collapses` below
-    // and loopdoc.md: this is *declared* per example (it depends on bounds
+    // required extent is provably 1 (a "point loop"). See `micro_halide_collapses`
+    // below and loopdoc.md: this is *declared* per example (it depends on bounds
     // inference, which is out of scope), not derived. An elided loop drops its
     // `for` line but is still a valid injection site for compute_at children.
     std::set<std::string> collapsed;
@@ -308,15 +308,15 @@ class Func
 };
 
 // ---------------------------------------------------------------------------
-// collapses(f, {vars...}): declare that f's loops over the named Vars are
-// elided by Halide (their required extent is 1). This is an annotation of
-// ground truth supplied by the example author, NOT something micro_halide
+// micro_halide_collapses(f, {vars...}): declare that f's loops over the named
+// Vars are elided by Halide (their required extent is 1). This is an annotation
+// of ground truth supplied by the example author, NOT something micro_halide
 // derives -- predicting it requires bounds inference, which loopdoc.md keeps
 // out of scope. Under real Halide this is a no-op stub (see the
 // halide_compat header); only the loop *structure* is what the docs teach and
 // what micro_halide validates.
 // ---------------------------------------------------------------------------
-inline void collapses(const Func &f, std::initializer_list<Var> vars)
+inline void micro_halide_collapses(const Func &f, std::initializer_list<Var> vars)
 {
     for (const Var &v : vars)
     {
