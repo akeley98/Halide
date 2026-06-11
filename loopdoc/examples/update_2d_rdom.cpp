@@ -11,8 +11,9 @@ using namespace Halide;
 //
 //   s0  f(x, y) = 0                       -> for y: for x
 //   s1  f(x, y) += in(x+r.x, y+r.y)       -> free Vars x,y plus RVars r.x,r.y;
-//                                           the RVars are innermost (first-
-//                                           declared r.x is the outer of them):
+//                                           the RVars are innermost, and within
+//                                           them first-declared r.x is INNERMOST
+//                                           (Var convention: first dim fastest):
 //
 //   produce f:
 //     for y:
@@ -20,8 +21,8 @@ using namespace Halide;
 //         f(...) = ...
 //     for y:
 //       for x:
-//         for r.x:
-//           for r.y:
+//         for r.y:
+//           for r.x:
 //             f(...) = ...
 
 int main()

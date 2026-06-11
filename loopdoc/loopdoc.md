@@ -673,18 +673,19 @@ left-hand side:
 
 > An update stage loops over the **free `Var`s** appearing on its left-hand
 > side **plus the `RVar`s** of any `RDom` it uses. Default order, innermost
-> first: the `RVar`s are innermost (in declaration order, the first-declared
-> being the *outermost* of them), and the free pure `Var`s sit outside them (in
-> the usual order, first LHS argument innermost among the pures). A pure
-> dimension whose left-hand-side slot is occupied by an `RVar` or a general
-> expression (e.g. the `in(r)` index in the histogram, or `f(x, r)`) does **not**
-> produce a loop in that stage.
+> first: the `RVar`s are innermost — and *within* the `RVar`s the first-declared
+> dimension (`r.x`) is the **innermost** loop, matching the `Var` convention
+> that the first dimension varies fastest (§5) — and the free pure `Var`s sit
+> outside them (in the usual order, first LHS argument innermost among the
+> pures). A pure dimension whose left-hand-side slot is occupied by an `RVar` or
+> a general expression (e.g. the `in(r)` index in the histogram, or `f(x, r)`)
+> does **not** produce a loop in that stage.
 
 `RVar` loops print like any other (`for r in [min, max]`); the harness drops the
 constant bound, so they read as plain `for`. A `k`-dimensional `RDom` contributes
 `k` nested reduction loops. So `f(x, y) += in(x + r.x, y + r.y)` with a 2-D
-`RDom` gives the update stage loops `for y: for x: for r.x: for r.y:`
-([examples/update_2d_rdom.cpp](examples/update_2d_rdom.cpp)), while the pure
+`RDom` gives the update stage loops `for y: for x: for r.y: for r.x:` (`r.x`
+innermost; [examples/update_2d_rdom.cpp](examples/update_2d_rdom.cpp)), while the pure
 stage `f(x, y) = 0` just gives `for y: for x:`. A reduction with no free
 variable on the left, like the histogram scatter, gives a stage with only the
 reduction loop(s).
@@ -743,11 +744,20 @@ produce f:
         f(...) = ...
 ```
 
+When the compute site is a loop that appears in **several** stages of the host
+(typically a pure `Var` that survives in more than one stage), the producer is
+injected **once into each such stage**, serving that stage's reads. The stages
+are sibling loop nests (§10), so each gets its own copy of the producer's
+`produce`/`consume`. In [examples/cross_stage_compute_at_shared.cpp](examples/cross_stage_compute_at_shared.cpp),
+`p` is read by both of `f`'s stages and computed at the shared `x` loop, so a
+`produce p`/`consume p` appears inside *both* stages' `x` loops.
+
 The legality rule of §8 carries over, now spanning **all** stages: a producer's
-compute site must enclose *every* use of it, across every stage that reads it.
-An `RVar` loop exists only within its own stage, so a producer that is also read
-by another stage cannot be computed there — its only common enclosing sites are
-the loops shared by all the using stages (and `root`). In
+compute site must be a loop present in **every** stage that reads the producer
+(so each reading stage can host an injection). An `RVar` loop exists only within
+its own stage, so a producer that is also read by another stage cannot be
+computed there — its only common sites are loops shared by all the using stages
+(and `root`). In
 [examples/neg_compute_at_update_rvar.cpp](examples/neg_compute_at_update_rvar.cpp),
 `p` is read by both the pure stage and the update stage, so computing it at the
 update's reduction loop is illegal.
