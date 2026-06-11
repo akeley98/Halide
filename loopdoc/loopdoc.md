@@ -6,12 +6,12 @@ nest*, at the level of detail needed to predict the output of
 adds to a single mental model rather than describing an isolated feature.
 
 > Scope of this revision: the programming model, pure (non-update) Funcs, the
-> default (inline) schedule, `compute_root`, `compute_at`, and the
-> `print_loop_nest()` output format. Splitting, fusing, reordering, update
-> definitions, wrappers (`in`/`clone_in`), storage directives (`store_at`,
-> `store_root`, `hoist_storage`), and GPU scheduling are deferred to later
-> revisions. Where one of those interacts with the model below in a way you can
-> already observe, it is flagged explicitly.
+> default (inline) schedule, `compute_root`, `compute_at`, `store_at` /
+> `store_root`, and the `print_loop_nest()` output format. Splitting, fusing,
+> reordering, update definitions, wrappers (`in`/`clone_in`), `hoist_storage` /
+> `hoist_storage_root`, and GPU scheduling are deferred to later revisions.
+> Where one of those interacts with the model below in a way you can already
+> observe, it is flagged explicitly.
 
 ---
 
@@ -476,11 +476,6 @@ node still lands at the named store loop and wraps that Func's whole realization
   ([examples/neg_store_at_inlined.cpp](examples/neg_store_at_inlined.cpp)).
 * Like the compute level, the store level must enclose every use of `f` (§7's
   legal-site rule applies to it too).
-
-<!-- store_at/store_root added in this revision. The store node placement and
-"shown only when store != compute" rule are the new structure to implement;
-sliding-window/folding are value/bounds effects with no print_loop_nest
-structure change. -->
 
 ---
 

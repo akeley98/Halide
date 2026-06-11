@@ -392,6 +392,17 @@ struct LoopNestPrinter
     // funcs computed_at a given (host, var-name) loop level, in realization order.
     std::map<std::pair<FuncContents *, std::string>, std::vector<FuncContents *>> children_at;
 
+    // funcs whose `store` node opens at a given (host, var-name) loop level
+    // (store_at with a store level outer to the compute level), in realization
+    // order. A `store f:` node here wraps everything emitted deeper at that
+    // level -- the host loops between the store and compute levels, and f's own
+    // produce/consume at its compute level.
+    std::map<std::pair<FuncContents *, std::string>, std::vector<FuncContents *>> store_at_level;
+
+    // funcs with store_root() (and a non-root compute level): their `store` node
+    // is the outermost node, wrapping the whole top-level chain.
+    std::vector<FuncContents *> store_root_funcs;
+
     // First-visitation index of each Func (pre-order DFS from the output through
     // producers in definition order). Used as a tie-breaker in realization
     // order (see sort_key).
@@ -546,6 +557,62 @@ struct LoopNestPrinter
     {
         for (FuncContents *f : funcs)
         {
+            // -- Store-level legality (loopdoc.md section 8) -------------------
+            if (f->has_store_level)
+            {
+                // store_at/store_root requires a non-inline compute level.
+                if (f->level == FuncContents::Level::Inline)
+                {
+                    fail(f, "has a store level (store_at/store_root) but is inlined; "
+                            "Funcs that use store_at must also call compute_at/compute_root");
+                }
+                if (!f->store_is_root)
+                {
+                    FuncContents *sg = f->store_func.get();
+                    const std::string &sv = f->store_var;
+                    if (!sg || !is_realized(sg))
+                    {
+                        fail(f, "store_at host is inlined/undefined, so it has no loop");
+                    }
+                    if (dim_index(sg, sv) < 0)
+                    {
+                        fail(f, "store_at loop variable does not exist in the host Func");
+                    }
+                    // The store level must ENCLOSE the compute level: same loop
+                    // or an outer one.
+                    if (f->level == FuncContents::Level::At)
+                    {
+                        FuncContents *cg = f->at_func.get();
+                        bool ok;
+                        if (cg == sg)
+                        {
+                            // Same host: store var must be the same loop or an
+                            // outer one (outer = higher dim index; arg0 = inner).
+                            ok = dim_index(sg, sv) >= dim_index(cg, f->at_var);
+                        }
+                        else
+                        {
+                            // Different host: the compute host's loop (cg, at_var)
+                            // must itself sit inside the store loop (sg, sv).
+                            ok = enclosed_by(cg, sg, sv);
+                        }
+                        if (!ok)
+                        {
+                            fail(f, "store level does not enclose the compute level "
+                                    "(store_at must be at the same or an outer loop)");
+                        }
+                    }
+                    // root compute level cannot be enclosed by a non-root store
+                    // level: store_root().compute_root() is the only equal case
+                    // and is handled (no store node) elsewhere.
+                    if (f->level == FuncContents::Level::Root)
+                    {
+                        fail(f, "store level is inside the compute level (compute_root) "
+                                "(store_at must be at the same or an outer loop)");
+                    }
+                }
+            }
+
             if (f->level != FuncContents::Level::At)
             {
                 continue;
@@ -580,6 +647,29 @@ struct LoopNestPrinter
                 }
             }
         }
+    }
+
+    // Does this Func have a store level that must be drawn as a `store` node?
+    // True only when a store level was explicitly set AND it differs from the
+    // compute level (store_root().compute_root() => equal => no node).
+    static bool has_store_node(FuncContents *f)
+    {
+        if (!f->has_store_level)
+        {
+            return false;
+        }
+        if (f->store_is_root)
+        {
+            // Differs from compute level unless compute is also root.
+            return f->level != FuncContents::Level::Root;
+        }
+        // store_at(g, v): equal to compute level iff same host and same var.
+        if (f->level == FuncContents::Level::At && f->at_func.get() == f->store_func.get() &&
+            f->at_var == f->store_var)
+        {
+            return false;
+        }
+        return true;
     }
 
     // Emit the realizations in `funcs` as a chain of produce/consume blocks.
@@ -643,7 +733,39 @@ struct LoopNestPrinter
         const std::vector<FuncContents *> &kids = (it == children_at.end()) ? empty : it->second;
 
         auto deeper = [this, f, dim](int ind) { emit_dim(f, dim - 1, ind); };
-        emit_realizations(kids, 0, body_indent, deeper, /*has_cont=*/true);
+        auto inject = [this, &kids, &deeper](int ind) {
+            emit_realizations(kids, 0, ind, deeper, /*has_cont=*/true);
+        };
+
+        // Open any `store h:` nodes filed at this loop level, wrapping the
+        // child injection and the deeper loops. (loopdoc.md section 8.)
+        auto sit = store_at_level.find({f, var});
+        if (sit != store_at_level.end())
+        {
+            emit_store_nodes(sit->second, body_indent, inject);
+        }
+        else
+        {
+            inject(body_indent);
+        }
+    }
+
+    // Emit a nested stack of `store h:` lines at `indent`, then run `body` at
+    // the innermost (deepest) indent inside all of them.
+    template <typename Body>
+    void emit_store_nodes(const std::vector<FuncContents *> &nodes, int indent, const Body &body)
+    {
+        if (nodes.empty())
+        {
+            body(indent);
+            return;
+        }
+        for (FuncContents *h : nodes)
+        {
+            out << pad(indent) << "store " << h->name << ":\n";
+            indent += 2;
+        }
+        body(indent);
     }
 
     void print(FuncContents *output)
@@ -676,10 +798,27 @@ struct LoopNestPrinter
                 children_at[{f->at_func.get(), f->at_var}].push_back(f);
             }
             // Inline funcs are not realized and never appear.
+
+            // File this Func's `store` node, if any, at its store level.
+            if (has_store_node(f))
+            {
+                if (f->store_is_root)
+                {
+                    store_root_funcs.push_back(f);
+                }
+                else
+                {
+                    store_at_level[{f->store_func.get(), f->store_var}].push_back(f);
+                }
+            }
         }
 
         auto no_cont = [](int) {};
-        emit_realizations(root_list, 0, 0, no_cont, /*has_cont=*/false);
+        auto chain = [this, &root_list, &no_cont](int ind) {
+            emit_realizations(root_list, 0, ind, no_cont, /*has_cont=*/false);
+        };
+        // store_root() nodes wrap the entire top-level chain.
+        emit_store_nodes(store_root_funcs, 0, chain);
     }
 };
 
