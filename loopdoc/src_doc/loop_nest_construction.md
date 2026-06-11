@@ -307,3 +307,45 @@ on an inlined Func is rejected up front:
                << "inlined. Funcs that use store_at must also call compute_at.\n";
 
 which backs `neg_store_at_inlined.cpp`.
+
+## 9. hoist_storage / hoist_storage_root: invisible to print_loop_nest
+
+Backs loopdoc §8's hoist-storage subsection.
+
+### No print effect
+
+`hoist_storage` introduces a third level (the hoist-storage level) that only
+controls where the physical allocation is emitted; it does not trigger sliding
+window. `print_loop_nest`'s visitor (`src/PrintLoopNest.cpp`) has handlers only
+for `For`, `Realize` (the `store` line, gated on store != compute), 
+`ProducerConsumer`, `Provide`, and `LetStmt`. There is no handler keyed on the
+hoist-storage level, so changing it does not change the printed nest. (In the
+full lowering pipeline the hoist level affects where the allocation is
+physically placed, but that is past what `print_loop_nest` shows.) This backs
+loopdoc §8: a legal `hoist_storage` schedule prints identically to the same
+schedule without it.
+
+### Legality
+
+`validate_schedule` (`src/ScheduleFunctions.cpp` ~2298) rejects `hoist_storage`
+on an inlined Func:
+
+    // ~2305
+    if (hoist_storage_at.is_root()) {
+        user_error << "... scheduled hoist_storage_root(), but is inlined. ...";
+    } else if (!hoist_storage_at.is_inlined()) {
+        user_error << "... scheduled hoist_storage(), but is inlined. "
+                   << "Funcs that use hoist_storage_root must also call compute_at.";
+    }
+
+and requires the hoist level to enclose the store level (which encloses
+compute), via the same `Site` scan used for store/compute (~2333): the indices
+are resolved outermost-first as
+
+    hoist_storage_idx found  ->  then store_idx (requires hoist found)
+                             ->  then compute_idx (requires store found)
+
+so a hoist level inside the store/compute level can never satisfy all three and
+yields the "invalid location" error. This backs `neg_hoist_at_inlined.cpp` and
+`neg_hoist_inside_compute.cpp`. By default the hoist level coincides with the
+store level, so an unset hoist level adds no constraint.

@@ -7,11 +7,11 @@ adds to a single mental model rather than describing an isolated feature.
 
 > Scope of this revision: the programming model, pure (non-update) Funcs, the
 > default (inline) schedule, `compute_root`, `compute_at`, `store_at` /
-> `store_root`, and the `print_loop_nest()` output format. Splitting, fusing,
-> reordering, update definitions, wrappers (`in`/`clone_in`), `hoist_storage` /
-> `hoist_storage_root`, and GPU scheduling are deferred to later revisions.
-> Where one of those interacts with the model below in a way you can already
-> observe, it is flagged explicitly.
+> `store_root`, `hoist_storage` / `hoist_storage_root`, and the
+> `print_loop_nest()` output format. Splitting, fusing, reordering, update
+> definitions, wrappers (`in`/`clone_in`), and GPU scheduling are deferred to
+> later revisions. Where one of those interacts with the model below in a way
+> you can already observe, it is flagged explicitly.
 
 ---
 
@@ -480,6 +480,35 @@ node still lands at the named store loop and wraps that Func's whole realization
   ([examples/neg_store_at_inlined.cpp](examples/neg_store_at_inlined.cpp)).
 * Like the compute level, the store level must enclose every use of `f` (§7's
   legal-site rule applies to it too).
+
+### `hoist_storage` / `hoist_storage_root`: no effect on the printed nest
+
+There is a third, even more physical level: the **hoist-storage level**, set by
+`f.hoist_storage(g, v)` or `f.hoist_storage_root()`. It moves the actual memory
+*allocation* further out (to avoid re-allocating inside a loop) **without**
+triggering the sliding-window reuse that `store_at` enables. By default it
+coincides with the store level.
+
+For `print_loop_nest` this directive is **invisible**: it changes neither the
+`produce`/`consume`/`store`/`for` structure nor the loop order. A schedule with
+`hoist_storage` prints exactly the same nest as the same schedule without it
+([examples/hoist_storage_noop.cpp](examples/hoist_storage_noop.cpp) prints
+identically to plain `compute_at`). It only affects allocation placement and
+buffer sizing, which the loop nest does not display.
+
+The one way `hoist_storage` shows up is by making an otherwise-fine schedule
+**illegal**:
+
+* Like `store_at`, it requires a non-inline compute level — `hoist_storage` /
+  `hoist_storage_root` on an inlined Func is illegal
+  ([examples/neg_hoist_at_inlined.cpp](examples/neg_hoist_at_inlined.cpp)).
+* The hoist-storage level must **enclose the store level** (which encloses the
+  compute level): allocation cannot live inside the loop whose iterations reuse
+  it. Hoisting to a loop inside the compute level is illegal
+  ([examples/neg_hoist_inside_compute.cpp](examples/neg_hoist_inside_compute.cpp)).
+
+So: `hoist_storage` is a no-op for the structure this document teaches, except
+that it adds these two legality constraints.
 
 ---
 
