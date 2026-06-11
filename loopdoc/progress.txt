@@ -84,6 +84,22 @@ Marking convention:
 
 [ ] `in` (wrapper functions) and `clone_in`
     NOTES:
+      * Realization-order tie-break (see bootstrap): sibling producers are
+        ordered by (name prefix, first-visitation order, full name). Wrappers
+        and clones are auto-named from the wrapped Func (e.g. `f`, `f_in_g`,
+        clones sharing a prefix), so several siblings can share a name PREFIX.
+        That is exactly the case where the secondary key -- first-visitation
+        order (pre-order DFS from the output through producers, see
+        compute_visit_order) -- actually decides the order. The bootstrap
+        examples all use distinct prefixes, so that secondary key is so far
+        UNTESTED. Write an example with two same-prefix wrapper/clone siblings
+        of one consumer where visitation order != alphabetical-of-full-name, to
+        confirm micro_halide's tie-break matches Halide. If it doesn't, the bug
+        is most likely in how the visitation pre-order walks producers vs. how
+        Halide's populate_environment_helper walks IR calls.
+      * Also confirm the prefix computation (strip `$n` suffix, then trailing
+        digits) against real wrapper/clone names, which is where `$`-suffixes
+        and trailing digits actually show up.
 
 [ ] `compute_with` (this is where things get very confusing)
     NOTES:
