@@ -39,7 +39,8 @@ storage used. This document is only about how the schedule maps to a loop nest.
   `Func` produces another handle to the *same* underlying function; scheduling
   through either handle affects the one function. The conceptual state of a
   Func is:
-    * its **name** (used only for printing; see §6),
+    * its **name** (used for printing; see §6,
+      and computation order tie-breaking, see §7),
     * its ordered list of **pure dimensions** (the `Var`s on the left-hand
       side of its definition; the first listed is the *innermost* loop — see
       §5),
@@ -58,6 +59,8 @@ storage used. This document is only about how the schedule maps to a loop nest.
   is *which Funcs it reads*: that is what wires up the producer/consumer graph.
   Pointwise arithmetic, constants, `cast<T>(...)`, and the like are invisible
   in the loop nest — they live *inside* the `f(...) = ...` leaf line.
+  Exception: 1-iteration loops are removed; this relies on bounds inference,
+  which depends more deeply on the contents of an Expr. See §7.
 
 The set of Funcs, connected by producer edges, forms a directed acyclic graph
 (the *pipeline*). One Func is the **output**: the one whose
@@ -75,8 +78,8 @@ two-stage pipeline.
 indentation:
 
 ```
-produce <f>:        # begin computing (storing into) Func f
-consume <f>:        # begin a region that reads f's stored values
+produce <f>:        # contains a region computing (storing into) Func f
+consume <f>:        # contains a region that reads f's stored values
 for <var>:          # a loop over one dimension
 <f>(...) = ...      # the leaf: store one point of f (arguments and RHS elided)
 store <f>:          # (later revision) storage scope, when distinct from compute
@@ -132,7 +135,7 @@ When several Funcs are `compute_root` (plus the output, which is always at
 root), they are emitted in **realization order**: a topological order of the
 pipeline graph in which every producer precedes its consumers. Each non-final
 realization wraps the rest of the program in its `consume` block. Concretely,
-for root-level Funcs `F1, F2, …, Fk` in realization order:
+for root-level Funcs `F1, F2, …, Fn` in realization order:
 
 ```
 produce F1:
@@ -142,8 +145,8 @@ consume F1:
     <loops of F2>
   consume F2:
     ...
-        produce Fk:
-          <loops of Fk>
+        produce Fn:
+          <loops of Fn>
 ```
 
 The final Func (always the output) has **no `consume`** block, because nothing
@@ -396,20 +399,43 @@ site — before emitting.
 
 ## 8. Putting the algorithm together (how the nest is built)
 
-Combining the rules, the loop nest for a pipeline is produced by:
+The whole loop nest follows from the rules above, assembled into one procedure:
 
-1. Force the output to `root`.
-2. Compute realization order (topological, producers first; §4).
-3. Partition realized Funcs: root-level Funcs form the top-level chain; each
-   `compute_at(g, var)` Func is filed under `g`'s loop over `var`.
-4. Emit the root chain (§4). Within each Func's `produce`, emit its loops
-   (§5) — omitting the `for` line of any dimension declared elided (§7), but
-   keeping that level as an injection site — and at each loop level inject the
-   realizations of the Funcs filed there (§7), whose `consume` wraps the
-   remainder of that Func's body.
+1. **Force the output to `root`** — the Func you call `print_loop_nest()` on is
+   always computed at the outermost level (§3, §4).
 
-Inlined Funcs are never emitted; they only contribute producer edges that shape
-realization order.
+2. **Compute the realization order** — topologically sort the pipeline so every
+   producer precedes its consumers, breaking ties by name (§4). Inlined Funcs
+   remain in this order so they can pass dependencies along, but they are never
+   realized and so drop out of the steps below (§3).
+
+3. **Give every realized Func a site.** A *realized* Func is one that is not
+   inlined: the output, plus anything scheduled `compute_root` or `compute_at`.
+   Each goes to exactly one place:
+     * `compute_root` Funcs and the output form the **top-level chain**, kept in
+       realization order;
+     * a `compute_at(g, v)` Func is **filed under** host `g`'s loop over `v`. If
+       several Funcs are filed at the same `(g, v)`, they keep realization order.
+
+4. **Emit from the outside in.** Walk the top-level chain (§4): for each Func
+   print `produce f`, then `f`'s loop nest, then — for every Func but the last —
+   `consume f` wrapping everything that follows. Printing a Func's loop nest
+   (§5) means working from its outermost dimension inward, and at each dimension:
+     * if that dimension was declared elided (§7), skip its `for` line but still
+       treat the level as a valid injection site;
+     * inject the Funcs filed at this `(f, dim)` level (from step 3) — each as a
+       `produce`/`consume` pair whose `consume` wraps the rest of `f`'s body;
+     * descend to the next-inner dimension, bottoming out at the leaf
+       `f(...) = ...`.
+   Injection is recursive: an injected Func's own loop nest is emitted the same
+   way, so a Func filed inside a Func that is itself filed inside a third nests
+   accordingly (§7).
+
+[examples/many_compute_root.cpp](examples/many_compute_root.cpp) puts all of
+this together: `f1`, `f2`, `f3` are `compute_root` and so form the top-level
+chain in that order; `f4` is `compute_at(output, y)` and is injected under the
+output's `y` loop; and `clamped` is inlined, so it never appears — it is folded
+into `f1`'s leaf.
 
 ---
 
