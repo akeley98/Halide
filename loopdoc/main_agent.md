@@ -95,6 +95,7 @@ Instead, the main agent delegates this to sub-agents that are reading the main a
   Exception: bootstrap milestone is entirely exempt from this rule.
 
 * Insert `micro_halide_collapses` as appropriate; however, since `micro_halide` is not fully implemented, and the real Halide ignores this, you will have to reason (by reading the Halide loop nest) where to inject `micro_halide_collapses` without being able to test it.
+  Note update stages have to be programmed separately (`micro_halide_collapses(f.update(n), ...)`); without the `update(n)`, only the pure stage is modified.
 
 * The human is not experienced in agentic coding and indeed has not a very clear picture of what he's doing.
   You may stop to give suggestions if the harness or milestone list or overall way of doing things seem counterproductive.

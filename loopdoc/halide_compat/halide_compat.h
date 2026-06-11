@@ -18,8 +18,13 @@ namespace Halide
 {
 
 // No-op: real Halide ignores the annotation; only the loop structure it
-// actually emits is compared.
+// actually emits is compared. Two overloads mirror the micro_halide API:
+// micro_halide_collapses(f, ...) targets the pure stage, and
+// micro_halide_collapses(f.update(N), ...) targets an update stage.
 inline void micro_halide_collapses(const Func &, std::initializer_list<Var>)
+{
+}
+inline void micro_halide_collapses(const Stage &, std::initializer_list<Var>)
 {
 }
 

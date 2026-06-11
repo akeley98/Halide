@@ -48,6 +48,7 @@ As such, the implementation must be based only on the information provided by th
 
   Note further: the main agent was supposed to insert `micro_halide_collapses`, but mistakes are possible. You may need to add or edit `micro_halide_collapses` in the examples yourself. Symptom of this is if the overall loop and
   producer/consumer structure matches, but some producers mysteriously have more or fewer loops than expeted.
+  Note update stages have to be programmed separately (`micro_halide_collapses(f.update(n), ...)`); without the `update(n)`, only the pure stage is modified.
 
 * If all example tests pass, remove any comments in `loopdoc.md` that highlighted recent changes to said document.
 

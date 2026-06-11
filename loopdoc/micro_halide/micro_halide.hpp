@@ -223,18 +223,60 @@ class RDom
 // FuncContents: the shared, mutable state behind a Func handle (mirrors
 // Halide::Internal::Function). Copying a Func shares this state.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// StageData: the per-STAGE state (mirrors Halide's Definition + StageSchedule).
+// Stage 0 is the pure / initial definition; stages 1.. are update definitions
+// (loopdoc.md section 10). Every stage -- pure or update -- has the SAME shape,
+// so the printer treats them uniformly.
+// ---------------------------------------------------------------------------
+struct StageData
+{
+    // This stage's ordered loop dimensions, innermost first (dims[0] is the
+    // innermost loop). split/fuse/reorder/tile rewrite this list; for an update
+    // stage it also contains the RVar loops.
+    std::vector<Var> dims;
+
+    // Loop variables of THIS stage that Halide elides (point loops, extent 1).
+    // *Declared* per example via micro_halide_collapses (it needs bounds
+    // inference, which is out of scope); an elided loop drops its `for` line but
+    // is still a valid injection site. Each stage has its own set, matching the
+    // real-Halide API where micro_halide_collapses(f) targets the pure stage and
+    // micro_halide_collapses(f.update(N)) targets update stage N.
+    std::set<std::string> collapsed;
+
+    // Funcs read by THIS stage (deduped). Per-stage so the section-10 legal-site
+    // rule can tell which specific stage of a reader uses a producer.
+    std::vector<std::shared_ptr<FuncContents>> producers;
+
+    // Raw capture from the definition's left-hand side, recorded by the main
+    // agent because only the C++ types can distinguish these: the bare-Var LHS
+    // args (free dims, in order) and the distinct RVar names the stage uses. The
+    // default `dims` above is built from these per loopdoc.md section 10.
+    std::vector<Var> pure_args;
+    std::vector<std::string> rvars;
+};
+
+// ---------------------------------------------------------------------------
+// FuncContents: the WHOLE-FUNC state behind a Func handle (mirrors
+// Halide::Internal::Function + FuncSchedule). Copying a Func shares this state.
+// Per-stage state lives in `stages` (StageData); the fields here apply to the
+// Func as a whole -- in particular the compute / store / hoist levels move ALL
+// stages together.
+// ---------------------------------------------------------------------------
 struct FuncContents
 {
     std::string name;
-
-    // Pure dimensions, in definition order. args[0] is the innermost loop.
-    std::vector<Var> args;
     bool defined = false;
 
-    // Funcs directly read by this Func's definition (deduplicated).
+    // The stages: stages[0] is the pure/initial definition, stages[k>0] the
+    // k-th update definition (so Func::update(i) refers to stages[i+1]).
+    std::vector<StageData> stages;
+
+    // Funcs read by this Func across ALL stages, deduplicated (used for
+    // realization order). Per-stage reads live in each StageData::producers.
     std::vector<std::shared_ptr<FuncContents>> producers;
 
-    // Where this Func is computed in the loop nest.
+    // Where this Func is computed in the loop nest (whole-Func: all stages).
     enum class Level
     {
         Inline, // default: substituted into its consumers, no loops of its own
@@ -246,63 +288,113 @@ struct FuncContents
     std::shared_ptr<FuncContents> at_func; // host, for Level::At
     std::string at_var;                    // host loop var name, for Level::At
 
-    // Store level (where this Func's buffer is allocated), set by store_at /
-    // store_root. Defaults to "same as the compute level" (has_store_level ==
-    // false), which prints no `store` node.
-    //
-    // NOTE TO MICRO-AGENT: the emission of the `store` node and the legality of
-    // a store level are NOT yet implemented -- they are your task, per
-    // loopdoc.md section 8. The fields below just record what was requested.
+    // Store level (where this Func's buffer is allocated; whole-Func), set by
+    // store_at / store_root. Defaults to "same as the compute level"
+    // (has_store_level == false), which prints no `store` node.
     bool has_store_level = false;          // a store level was explicitly set
     bool store_is_root = false;            // store_root() (else store_at)
     std::shared_ptr<FuncContents> store_func; // host, for store_at
     std::string store_var;                 // host loop var name, for store_at
 
-    // Hoist-storage level (where the physical allocation is placed), set by
-    // hoist_storage / hoist_storage_root. Has NO effect on print_loop_nest
-    // output (see loopdoc.md section 8); it only adds legality constraints.
-    //
-    // NOTE TO MICRO-AGENT: the legality of a hoist-storage level is NOT yet
-    // implemented -- it is your task, per loopdoc.md section 8. The fields below
-    // just record what was requested; the printer ignores them.
+    // Hoist-storage level (where the physical allocation is placed; whole-Func),
+    // set by hoist_storage / hoist_storage_root. Has NO effect on
+    // print_loop_nest output (loopdoc.md section 8); only legality.
     bool has_hoist_level = false;          // a hoist-storage level was set
     bool hoist_is_root = false;            // hoist_storage_root() (else hoist_storage)
     std::shared_ptr<FuncContents> hoist_func; // host, for hoist_storage
     std::string hoist_var;                 // host loop var name, for hoist_storage
-
-    // Names of this Func's loop variables that Halide elides because their
-    // required extent is provably 1 (a "point loop"). See `micro_halide_collapses`
-    // below and loopdoc.md: this is *declared* per example (it depends on bounds
-    // inference, which is out of scope), not derived. An elided loop drops its
-    // `for` line but is still a valid injection site for compute_at children.
-    // (For a Func with updates this collapse-set is shared by all stages; the
-    // current examples only need per-Func collapsing.)
-    std::set<std::string> collapsed;
-
-    // ---- Update (reduction) definitions (loopdoc.md section 10) ----------
-    //
-    // The fields above describe stage 0 (the pure/initial definition): `args`
-    // is its dimension list and `producers` its reads. A Func may also have
-    // UPDATE stages, captured here in definition order (updates[0] == s1, ...).
-    //
-    // The main agent has CAPTURED the raw per-stage data that only the C++
-    // types can distinguish -- which LHS args are plain (free) Vars vs. general
-    // expressions, and which RVars the stage references. Turning that into each
-    // stage's DIMENSION LIST (free Vars + RVars, in the documented order) and
-    // EMITTING the multiple stages inside one `produce` (plus per-stage
-    // scheduling, RVar sites, and the cross-stage legal-site rule) is the
-    // micro-agent's task, from loopdoc.md section 10. `dims` is intentionally
-    // left for you to populate.
-    struct Update
-    {
-        std::vector<Var> pure_args;  // bare-Var LHS args (free dims), in order
-        std::vector<std::string> rvars; // distinct RVar names used, in order
-        std::vector<std::shared_ptr<FuncContents>> producers; // funcs this stage reads
-        std::vector<Var> dims;       // this stage's loop list (micro-agent fills)
-        std::set<std::string> collapsed; // per-stage point-loop elision
-    };
-    std::vector<Update> updates;
 };
+
+// ---------------------------------------------------------------------------
+// Loop-transform primitives (loopdoc.md section 6), operating directly on an
+// ordered dimension list (args[0] = INNERMOST). Both a Func's pure stage
+// (a Func's pure stage and an update Stage, both StageData::dims) share this.
+// ---------------------------------------------------------------------------
+namespace dimlist
+{
+inline int dim_pos(const std::vector<Var> &a, const std::string &name)
+{
+    for (int i = 0; i < (int)a.size(); i++)
+    {
+        if (a[i].name() == name)
+        {
+            return i;
+        }
+    }
+    return -1;
+}
+
+inline void split(std::vector<Var> &a, const std::string &owner,
+                  const Var &old_var, const Var &outer, const Var &inner)
+{
+    int pos = dim_pos(a, old_var.name());
+    if (pos < 0)
+    {
+        throw std::runtime_error("micro_halide: split: \"" + owner +
+                                 "\" has no dimension \"" + old_var.name() + "\"");
+    }
+    a.erase(a.begin() + pos);
+    a.insert(a.begin() + pos, outer); // outer goes to old's slot first ...
+    a.insert(a.begin() + pos, inner); // ... then inner pushed inside it
+}
+
+inline void fuse(std::vector<Var> &a, const std::string &owner,
+                 const Var &inner, const Var &outer, const Var &fused)
+{
+    int ipos = dim_pos(a, inner.name());
+    int opos = dim_pos(a, outer.name());
+    if (ipos < 0)
+    {
+        throw std::runtime_error("micro_halide: fuse: \"" + owner +
+                                 "\" has no dimension \"" + inner.name() + "\"");
+    }
+    if (opos < 0)
+    {
+        throw std::runtime_error("micro_halide: fuse: \"" + owner +
+                                 "\" has no dimension \"" + outer.name() + "\"");
+    }
+    int hi = std::max(ipos, opos);
+    int lo = std::min(ipos, opos);
+    a.erase(a.begin() + hi);
+    a.erase(a.begin() + lo);
+    int insert_pos = (opos < ipos) ? ipos - 1 : ipos;
+    a.insert(a.begin() + insert_pos, fused);
+}
+
+inline void reorder(std::vector<Var> &a, const std::string &owner,
+                    const std::vector<std::string> &names)
+{
+    std::vector<int> slots;
+    for (const std::string &n : names)
+    {
+        int pos = dim_pos(a, n);
+        if (pos < 0)
+        {
+            throw std::runtime_error("micro_halide: reorder: \"" + owner +
+                                     "\" has no dimension \"" + n + "\"");
+        }
+        for (int s : slots)
+        {
+            if (a[s].name() == n)
+            {
+                throw std::runtime_error("micro_halide: reorder: dimension \"" + n +
+                                         "\" named more than once");
+            }
+        }
+        slots.push_back(pos);
+    }
+    std::vector<Var> requested;
+    for (const std::string &n : names)
+    {
+        requested.push_back(a[dim_pos(a, n)]);
+    }
+    std::sort(slots.begin(), slots.end());
+    for (size_t i = 0; i < slots.size(); i++)
+    {
+        a[slots[i]] = requested[i];
+    }
+}
+} // namespace dimlist
 
 // ---------------------------------------------------------------------------
 // FuncRef: the result of Func::operator(). Acts as an lvalue to define a Func
@@ -376,7 +468,7 @@ class FuncRef
     // type-distinguished data; the micro-agent turns it into a dimension list.
     void record_update(const Expr &rhs)
     {
-        FuncContents::Update u;
+        StageData u;
         for (size_t i = 0; i < vars.size(); i++)
         {
             if (is_var[i])
@@ -386,6 +478,19 @@ class FuncRef
         }
         u.rvars = collect_rvars(rhs);
         u.producers = collect_producers(rhs);
+        // Build this stage's DEFAULT dimension list (loopdoc.md section 10),
+        // innermost-first: the RVars are innermost (first-declared is the
+        // OUTERMOST of them, so reverse declaration order), with the free pure
+        // Vars outside them (first LHS arg innermost among the pures, i.e. the
+        // pure_args order is already innermost-first like FuncContents::args).
+        for (auto it = u.rvars.rbegin(); it != u.rvars.rend(); ++it)
+        {
+            u.dims.push_back(Var(*it));
+        }
+        for (const Var &v : u.pure_args)
+        {
+            u.dims.push_back(v);
+        }
         // Union this stage's producers into the Func's overall producer set
         // (used for realization order and cross-stage legality).
         std::set<FuncContents *> have;
@@ -400,7 +505,7 @@ class FuncRef
                 func->producers.push_back(p);
             }
         }
-        func->updates.push_back(std::move(u));
+        func->stages.push_back(std::move(u));
     }
 
     // Define or update the Func: f(x, y, ...) = rhs;
@@ -413,8 +518,15 @@ class FuncRef
             record_update(rhs);
             return;
         }
-        func->args = vars;
-        func->producers = collect_producers(rhs);
+        // Stage 0 (pure/initial definition): its dimension list is the pure
+        // args, and its reads are the producers. pure_args mirrors dims for
+        // uniformity with update stages (no RVars in a pure definition).
+        StageData s0;
+        s0.dims = vars;
+        s0.pure_args = vars;
+        s0.producers = collect_producers(rhs);
+        func->stages.push_back(std::move(s0));
+        func->producers = func->stages[0].producers;
         func->defined = true;
     }
     void operator=(const FuncRef &rhs)
@@ -581,17 +693,26 @@ class Func
     }
 
     // ---- Loop transforms (loopdoc.md section 6) --------------------------
-    // These rewrite this Func's ordered dimension list (contents->args, with
-    // args[0] the INNERMOST loop). They change only this Func's own loops and
-    // the dimension names usable as compute_at/store_at sites; they never move
-    // the Func relative to others and never change which values are computed.
+    // These rewrite the PURE stage's ordered dimension list (stages[0].dims,
+    // with dims[0] the INNERMOST loop). They change only this Func's own loops
+    // and the dimension names usable as compute_at/store_at sites; they never
+    // move the Func relative to others and never change which values are
+    // computed. (Update stages are transformed through Func::update(i); see
+    // the Stage class.)
 
-    // Find a Var's index in the dimension list, or -1.
+    // The pure stage's dimension list.
+    std::vector<Var> &pure_dims() const
+    {
+        return contents->stages[0].dims;
+    }
+
+    // Find a Var's index in the pure stage's dimension list, or -1.
     int dim_pos(const std::string &name) const
     {
-        for (int i = 0; i < (int)contents->args.size(); i++)
+        const std::vector<Var> &a = pure_dims();
+        for (int i = 0; i < (int)a.size(); i++)
         {
-            if (contents->args[i].name() == name)
+            if (a[i].name() == name)
             {
                 return i;
             }
@@ -605,18 +726,7 @@ class Func
     Func &split(const Var &old_var, const Var &outer, const Var &inner, int factor)
     {
         (void)factor; // bound is normalized away by the harness
-        int pos = dim_pos(old_var.name());
-        if (pos < 0)
-        {
-            throw std::runtime_error("micro_halide: split: Func \"" + contents->name +
-                                     "\" has no dimension \"" + old_var.name() + "\"");
-        }
-        // Replace args[pos] (== old) with [inner, outer]: inner takes old's slot
-        // (innermost of the pair), outer sits just outside it.
-        std::vector<Var> &a = contents->args;
-        a.erase(a.begin() + pos);
-        a.insert(a.begin() + pos, outer);   // outer goes to old's slot first ...
-        a.insert(a.begin() + pos, inner);   // ... then inner pushed inside it
+        dimlist::split(pure_dims(), contents->name, old_var, outer, inner);
         return *this;
     }
 
@@ -625,29 +735,7 @@ class Func
     // -> [xy]. One fewer `for`.
     Func &fuse(const Var &inner, const Var &outer, const Var &fused)
     {
-        int ipos = dim_pos(inner.name());
-        int opos = dim_pos(outer.name());
-        if (ipos < 0)
-        {
-            throw std::runtime_error("micro_halide: fuse: Func \"" + contents->name +
-                                     "\" has no dimension \"" + inner.name() + "\"");
-        }
-        if (opos < 0)
-        {
-            throw std::runtime_error("micro_halide: fuse: Func \"" + contents->name +
-                                     "\" has no dimension \"" + outer.name() + "\"");
-        }
-        std::vector<Var> &a = contents->args;
-        // Remove both, then insert `fused` at inner's (former) position. Erase
-        // the higher index first so the lower index stays valid.
-        int hi = std::max(ipos, opos);
-        int lo = std::min(ipos, opos);
-        a.erase(a.begin() + hi);
-        a.erase(a.begin() + lo);
-        // inner's former position, after removing the elements: if outer was
-        // before inner (opos < ipos), inner shifts down by one.
-        int insert_pos = (opos < ipos) ? ipos - 1 : ipos;
-        a.insert(a.begin() + insert_pos, fused);
+        dimlist::fuse(pure_dims(), contents->name, inner, outer, fused);
         return *this;
     }
 
@@ -672,42 +760,7 @@ class Func
     Func &reorder(const Vars &...vars)
     {
         std::vector<std::string> names{vars.name()...};
-
-        // Collect the slots occupied by the listed dimensions, in ascending
-        // index order (innermost first). Validate existence and uniqueness.
-        std::vector<int> slots;
-        for (const std::string &n : names)
-        {
-            int pos = dim_pos(n);
-            if (pos < 0)
-            {
-                throw std::runtime_error("micro_halide: reorder: Func \"" + contents->name +
-                                         "\" has no dimension \"" + n + "\"");
-            }
-            for (int s : slots)
-            {
-                if (contents->args[s].name() == n)
-                {
-                    throw std::runtime_error("micro_halide: reorder: dimension \"" + n +
-                                             "\" named more than once");
-                }
-            }
-            slots.push_back(pos);
-        }
-        std::sort(slots.begin(), slots.end());
-
-        // The listed dimensions, in the requested order (innermost first).
-        std::vector<Var> requested;
-        for (const std::string &n : names)
-        {
-            requested.push_back(contents->args[dim_pos(n)]);
-        }
-
-        // Drop the requested dimensions into the (sorted) slots they occupied.
-        for (size_t i = 0; i < slots.size(); i++)
-        {
-            contents->args[slots[i]] = requested[i];
-        }
+        dimlist::reorder(pure_dims(), contents->name, names);
         return *this;
     }
 
@@ -735,31 +788,47 @@ class Stage
     {
     }
 
+    // This update stage's dimension list (loopdoc.md section 10): the same
+    // ordered list the printer walks, so transforming it here rewrites only
+    // THIS stage's loops. RVars sit in the list just like Vars.
+    std::vector<Var> &dims()
+    {
+        return func->stages[index + 1].dims; // stages[0] is pure; update i -> stage i+1
+    }
+    const std::string &owner() const
+    {
+        return func->name;
+    }
+
     Stage &split(const Var &old_var, const Var &outer, const Var &inner, int factor)
     {
-        (void)old_var; (void)outer; (void)inner; (void)factor;
-        return *this; // TODO(micro-agent): per-stage split (loopdoc section 10)
+        (void)factor;
+        dimlist::split(dims(), owner(), old_var, outer, inner);
+        return *this;
     }
     Stage &fuse(const Var &inner, const Var &outer, const Var &fused)
     {
-        (void)inner; (void)outer; (void)fused;
-        return *this; // TODO(micro-agent): per-stage fuse
+        dimlist::fuse(dims(), owner(), inner, outer, fused);
+        return *this;
     }
     Stage &tile(const Var &x, const Var &y,
                 const Var &xo, const Var &yo,
                 const Var &xi, const Var &yi,
                 int xfactor, int yfactor)
     {
-        (void)x; (void)y; (void)xo; (void)yo; (void)xi; (void)yi;
         (void)xfactor; (void)yfactor;
-        return *this; // TODO(micro-agent): per-stage tile
+        dimlist::split(dims(), owner(), x, xo, xi);
+        dimlist::split(dims(), owner(), y, yo, yi);
+        dimlist::reorder(dims(), owner(), {xi.name(), yi.name(), xo.name(), yo.name()});
+        return *this;
     }
     // reorder accepts Vars, RVars, or a 1-D RDom (anything with .name()).
     template <typename... Vars>
     Stage &reorder(const Vars &...vars)
     {
-        (void)std::initializer_list<int>{(static_cast<void>(vars.name()), 0)...};
-        return *this; // TODO(micro-agent): per-stage reorder (incl. RVars)
+        std::vector<std::string> names{vars.name()...};
+        dimlist::reorder(dims(), owner(), names);
+        return *this;
     }
 };
 
@@ -769,19 +838,29 @@ inline Stage Func::update(int i) const
 }
 
 // ---------------------------------------------------------------------------
-// micro_halide_collapses(f, {vars...}): declare that f's loops over the named
-// Vars are elided by Halide (their required extent is 1). This is an annotation
-// of ground truth supplied by the example author, NOT something micro_halide
+// micro_halide_collapses(...): declare that the named loops of a STAGE are
+// elided by Halide (their required extent is 1). This is an annotation of
+// ground truth supplied by the example author, NOT something micro_halide
 // derives -- predicting it requires bounds inference, which loopdoc.md keeps
-// out of scope. Under real Halide this is a no-op stub (see the
-// halide_compat header); only the loop *structure* is what the docs teach and
-// what micro_halide validates.
+// out of scope. Under real Halide these are no-op stubs (see the halide_compat
+// header); only the loop *structure* is what the docs teach and validate.
+//
+// Mirroring the Halide scheduling API, collapse is declared PER STAGE:
+//   micro_halide_collapses(f, {vars})            -> the pure stage (stage 0)
+//   micro_halide_collapses(f.update(N), {vars})  -> update stage N (= stage N+1)
 // ---------------------------------------------------------------------------
 inline void micro_halide_collapses(const Func &f, std::initializer_list<Var> vars)
 {
     for (const Var &v : vars)
     {
-        f.contents->collapsed.insert(v.name());
+        f.contents->stages[0].collapsed.insert(v.name());
+    }
+}
+inline void micro_halide_collapses(const Stage &s, std::initializer_list<Var> vars)
+{
+    for (const Var &v : vars)
+    {
+        s.func->stages[s.index + 1].collapsed.insert(v.name());
     }
 }
 
@@ -795,10 +874,13 @@ namespace BoundaryConditions
 inline Func repeat_edge(const ImageParam &im)
 {
     Func f("repeat_edge");
+    StageData s0; // stage 0: pure definition, no producers
     for (int i = 0; i < im.dimensions(); i++)
     {
-        f.contents->args.push_back(Var("_" + std::to_string(i)));
+        s0.dims.push_back(Var("_" + std::to_string(i)));
     }
+    s0.pure_args = s0.dims;
+    f.contents->stages.push_back(std::move(s0));
     f.contents->defined = true;
     return f;
 }
@@ -814,15 +896,22 @@ struct LoopNestPrinter
 {
     std::ostream &out;
 
-    // funcs computed_at a given (host, var-name) loop level, in realization order.
-    std::map<std::pair<FuncContents *, std::string>, std::vector<FuncContents *>> children_at;
+    // A loop level inside a particular STAGE of a host: (host, stage, var-name).
+    // With update definitions (loopdoc.md section 10) a host emits one loop nest
+    // per stage inside a single `produce`, so an injection/store site is pinned
+    // to a specific stage (an RVar loop, for instance, exists only in its own
+    // stage).
+    using SiteKey = std::tuple<FuncContents *, int, std::string>;
 
-    // funcs whose `store` node opens at a given (host, var-name) loop level
-    // (store_at with a store level outer to the compute level), in realization
-    // order. A `store f:` node here wraps everything emitted deeper at that
-    // level -- the host loops between the store and compute levels, and f's own
+    // funcs computed_at a given stage-loop level, in realization order.
+    std::map<SiteKey, std::vector<FuncContents *>> children_at;
+
+    // funcs whose `store` node opens at a given stage-loop level (store_at with
+    // a store level outer to the compute level), in realization order. A
+    // `store f:` node here wraps everything emitted deeper at that level -- the
+    // host loops between the store and compute levels, and f's own
     // produce/consume at its compute level.
-    std::map<std::pair<FuncContents *, std::string>, std::vector<FuncContents *>> store_at_level;
+    std::map<SiteKey, std::vector<FuncContents *>> store_at_level;
 
     // funcs with store_root() (and a non-root compute level): their `store` node
     // is the outermost node, wrapping the whole top-level chain.
@@ -911,12 +1000,38 @@ struct LoopNestPrinter
         return f->level != FuncContents::Level::Inline;
     }
 
-    // Index of a Var name among a Func's pure dims (arg0 = innermost), or -1.
-    static int dim_index(FuncContents *g, const std::string &var)
+    // ---- Per-stage views (loopdoc.md section 10) -------------------------
+    // A Func has stage 0 (the pure definition) plus one stage per update; each
+    // stage has its own dimension list, collapse-set, and producer set.
+
+    static int num_stages(FuncContents *f)
     {
-        for (int i = 0; i < (int)g->args.size(); i++)
+        return (int)f->stages.size();
+    }
+
+    static const std::vector<Var> &stage_dims(FuncContents *f, int s)
+    {
+        return f->stages[s].dims;
+    }
+
+    static const std::set<std::string> &stage_collapsed(FuncContents *f, int s)
+    {
+        return f->stages[s].collapsed;
+    }
+
+    static const std::vector<std::shared_ptr<FuncContents>> &stage_producers(FuncContents *f, int s)
+    {
+        return f->stages[s].producers;
+    }
+
+    // Index of a Var name within stage s's dimension list (dim0 = innermost), -1
+    // if absent.
+    static int stage_dim_index(FuncContents *g, int s, const std::string &var)
+    {
+        const std::vector<Var> &d = stage_dims(g, s);
+        for (int i = 0; i < (int)d.size(); i++)
         {
-            if (g->args[i].name() == var)
+            if (d[i].name() == var)
             {
                 return i;
             }
@@ -924,23 +1039,87 @@ struct LoopNestPrinter
         return -1;
     }
 
-    // Does realized Func h's loop body reference f? f is referenced if it is a
-    // direct producer of h, or reachable from h through a chain of *inlined*
-    // producers (which are substituted into h). A realized intermediate stops
-    // the search: h then reads that intermediate, not f.
-    bool body_reads(FuncContents *h, FuncContents *f, std::set<FuncContents *> &seen)
+    // The stage of host g whose dimension list contains `var`. compute_at/store_at
+    // name a single loop var; with updates a name may appear in several stages
+    // (e.g. a pure Var carried into an update). We pick the lowest-index stage
+    // that has it; an RVar name is unique to one stage. Returns -1 if no stage
+    // has it.
+    static int resolve_stage(FuncContents *g, const std::string &var)
     {
-        if (!seen.insert(h).second)
+        for (int s = 0; s < num_stages(g); s++)
         {
-            return false;
+            if (stage_dim_index(g, s, var) >= 0)
+            {
+                return s;
+            }
         }
-        for (auto &p : h->producers)
+        return -1;
+    }
+
+    // Index of a Var name among a Func's pure (stage 0) dims (dim0 = innermost),
+    // or -1. (Used by store/hoist legality, whose hosts are pure Funcs.)
+    static int dim_index(FuncContents *g, const std::string &var)
+    {
+        const std::vector<Var> &a = g->stages[0].dims;
+        for (int i = 0; i < (int)a.size(); i++)
+        {
+            if (a[i].name() == var)
+            {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    // Does any stage of realized Func h reference f? (Used as a cheap "is h a
+    // reader of f at all" test; the precise per-stage version is below.)
+    bool any_stage_reads(FuncContents *h, FuncContents *f)
+    {
+        for (int s = 0; s < num_stages(h); s++)
+        {
+            if (stage_reads(h, s, f))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Does STAGE s of realized Func h reference f? f is referenced if it is a
+    // direct producer of that stage, or reachable from it through a chain of
+    // *inlined* producers (which are substituted in). A realized intermediate
+    // stops the search: that stage then reads the intermediate, not f.
+    bool stage_reads(FuncContents *h, int s, FuncContents *f)
+    {
+        for (auto &p : stage_producers(h, s))
         {
             if (p.get() == f)
             {
                 return true;
             }
-            if (p->level == FuncContents::Level::Inline && body_reads(p.get(), f, seen))
+            std::set<FuncContents *> seen;
+            if (p->level == FuncContents::Level::Inline && inlined_reads(p.get(), f, seen))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Does an inlined Func b (any of its stages) reach f through inlined chains?
+    bool inlined_reads(FuncContents *b, FuncContents *f, std::set<FuncContents *> &seen)
+    {
+        if (!seen.insert(b).second)
+        {
+            return false;
+        }
+        for (auto &p : b->producers)
+        {
+            if (p.get() == f)
+            {
+                return true;
+            }
+            if (p->level == FuncContents::Level::Inline && inlined_reads(p.get(), f, seen))
             {
                 return true;
             }
@@ -969,6 +1148,71 @@ struct LoopNestPrinter
             return enclosed_by(h->at_func.get(), g, v);
         }
         return false; // h is at root (and not g): not inside g's loop
+    }
+
+    // ---- Stage-aware enclosure (loopdoc.md sections 8 + 10) --------------
+    //
+    // A "site" is a loop level (g, gs, gv): host g's stage gs, loop named gv. A
+    // producer computed there can only feed uses that this loop encloses.
+
+    // Does loop (g, gs, gv) enclose (== is the same as, or outer to) loop
+    // (h, hs, hv)?
+    bool site_encloses_loop(FuncContents *g, int gs, const std::string &gv,
+                            FuncContents *h, int hs, const std::string &hv)
+    {
+        if (g == h)
+        {
+            if (gs != hs)
+            {
+                // Different stages of one Func are SIBLING loop nests under one
+                // produce, not nested: neither encloses the other.
+                return false;
+            }
+            int ig = stage_dim_index(g, gs, gv);
+            int ih = stage_dim_index(h, hs, hv);
+            // Outer = higher dim index (dim0 innermost). gv encloses hv iff it is
+            // the same or an outer loop.
+            return ig >= 0 && ih >= 0 && ig >= ih;
+        }
+        // h is realized at its own compute level; follow it outward.
+        if (h->level == FuncContents::Level::At)
+        {
+            FuncContents *host = h->at_func.get();
+            int host_s = resolve_stage(host, h->at_var);
+            if (host_s < 0)
+            {
+                return false;
+            }
+            return site_encloses_loop(g, gs, gv, host, host_s, h->at_var);
+        }
+        return false; // h at root and not g: not inside g's loop
+    }
+
+    // Does site (g, gs, gv) enclose the body of stage hs of reader h (i.e. the
+    // point where h reads f)?
+    bool site_encloses_use(FuncContents *g, int gs, const std::string &gv,
+                           FuncContents *h, int hs)
+    {
+        if (g == h)
+        {
+            // The use is in g's own stage; it is enclosed iff it is the SAME
+            // stage (gv is then one of this stage's loops, and the leaf sits
+            // inside it). A different stage is a sibling nest.
+            return gs == hs;
+        }
+        if (h->level == FuncContents::Level::At)
+        {
+            FuncContents *host = h->at_func.get();
+            int host_s = resolve_stage(host, h->at_var);
+            if (host_s < 0)
+            {
+                return false;
+            }
+            // h's stage hs runs just inside h's compute loop (host, host_s,
+            // at_var); enclosed iff the site is that loop or outer to it.
+            return site_encloses_loop(g, gs, gv, host, host_s, h->at_var);
+        }
+        return false; // h at root and not g
     }
 
     [[noreturn]] static void fail(FuncContents *f, const std::string &why)
@@ -1127,25 +1371,33 @@ struct LoopNestPrinter
             {
                 fail(f, "compute_at host is inlined/undefined, so it has no loop to compute at");
             }
-            // The named loop must exist as a dimension of the host.
-            if (dim_index(g, v) < 0)
+            // The named loop must exist as a dimension of SOME stage of the host
+            // (loopdoc.md section 10: an RVar loop lives only in its own stage,
+            // but is still a valid compute_at site).
+            int gs = resolve_stage(g, v);
+            if (gs < 0)
             {
                 fail(f, "compute_at loop variable does not exist in the host Func");
             }
-            // Every consumer of f must be computed inside (g, v); otherwise some
-            // reader cannot see f's values. (A consumer outside g is the classic
-            // producer/consumer break that requires a wrapper Func to fix.)
+            // Every use of f -- across EVERY stage of every realized reader
+            // (loopdoc.md section 10) -- must be enclosed by the site (g, gs, v);
+            // otherwise some reader cannot see f's values. (A use outside the
+            // site is the classic producer/consumer break that requires a
+            // wrapper Func to fix.)
             for (FuncContents *h : funcs)
             {
                 if (h == f || !is_realized(h))
                 {
                     continue;
                 }
-                std::set<FuncContents *> seen;
-                if (body_reads(h, f, seen) && !enclosed_by(h, g, v))
+                for (int hs = 0; hs < num_stages(h); hs++)
                 {
-                    fail(f, "it is read by a Func that is not computed inside the "
-                            "compute_at loop (the producer/consumer relationship is broken)");
+                    if (stage_reads(h, hs, f) && !site_encloses_use(g, gs, v, h, hs))
+                    {
+                        fail(f, "it is read by a Func (or update stage) that is not "
+                                "computed inside the compute_at loop (the "
+                                "producer/consumer relationship is broken)");
+                    }
                 }
             }
         }
@@ -1201,28 +1453,33 @@ struct LoopNestPrinter
         }
     }
 
-    // Emit f's own loops (over its pure dims, args[0] innermost), injecting
-    // any compute_at children at the appropriate loop level, with f's
-    // definition at the center.
+    // Emit f's loop nests. A Func with update definitions (loopdoc.md section
+    // 10) emits ONE loop nest per stage, in stage order, all inside the single
+    // `produce f` -- no `consume` between stages. Each stage walks its own
+    // dimension list (dim0 innermost), injecting any compute_at children filed
+    // at that (f, stage, var) level, with that stage's leaf at the center.
     void emit_func_loops(FuncContents *f, int indent)
     {
-        emit_dim(f, (int)f->args.size() - 1, indent);
+        for (int s = 0; s < num_stages(f); s++)
+        {
+            emit_dim(f, s, (int)stage_dims(f, s).size() - 1, indent);
+        }
     }
 
-    void emit_dim(FuncContents *f, int dim, int indent)
+    void emit_dim(FuncContents *f, int stage, int dim, int indent)
     {
         if (dim < 0)
         {
             out << pad(indent) << f->name << "(...) = ...\n";
             return;
         }
-        const std::string &var = f->args[dim].name();
+        const std::string &var = stage_dims(f, stage)[dim].name();
 
         // An elided ("collapsed") loop prints no `for` line and does not
         // indent its body, but is still a valid injection site for any
         // compute_at children filed at this level (see the "compute_at at an
         // elided loop level" example).
-        bool elided = f->collapsed.count(var) != 0;
+        bool elided = stage_collapsed(f, stage).count(var) != 0;
         int body_indent = indent;
         if (!elided)
         {
@@ -1230,18 +1487,19 @@ struct LoopNestPrinter
             body_indent = indent + 2;
         }
 
-        auto it = children_at.find({f, var});
+        SiteKey key{f, stage, var};
+        auto it = children_at.find(key);
         std::vector<FuncContents *> empty;
         const std::vector<FuncContents *> &kids = (it == children_at.end()) ? empty : it->second;
 
-        auto deeper = [this, f, dim](int ind) { emit_dim(f, dim - 1, ind); };
+        auto deeper = [this, f, stage, dim](int ind) { emit_dim(f, stage, dim - 1, ind); };
         auto inject = [this, &kids, &deeper](int ind) {
             emit_realizations(kids, 0, ind, deeper, /*has_cont=*/true);
         };
 
         // Open any `store h:` nodes filed at this loop level, wrapping the
         // child injection and the deeper loops. (loopdoc.md section 8.)
-        auto sit = store_at_level.find({f, var});
+        auto sit = store_at_level.find(key);
         if (sit != store_at_level.end())
         {
             emit_store_nodes(sit->second, body_indent, inject);
@@ -1297,7 +1555,12 @@ struct LoopNestPrinter
             }
             else if (f->level == FuncContents::Level::At)
             {
-                children_at[{f->at_func.get(), f->at_var}].push_back(f);
+                // File under the host stage whose dimension list contains the
+                // named loop (loopdoc.md section 10: an RVar site belongs to one
+                // stage).
+                FuncContents *host = f->at_func.get();
+                int hs = resolve_stage(host, f->at_var);
+                children_at[{host, hs, f->at_var}].push_back(f);
             }
             // Inline funcs are not realized and never appear.
 
@@ -1310,7 +1573,9 @@ struct LoopNestPrinter
                 }
                 else
                 {
-                    store_at_level[{f->store_func.get(), f->store_var}].push_back(f);
+                    FuncContents *sh = f->store_func.get();
+                    int ss = resolve_stage(sh, f->store_var);
+                    store_at_level[{sh, ss, f->store_var}].push_back(f);
                 }
             }
         }
