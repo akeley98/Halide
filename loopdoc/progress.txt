@@ -41,10 +41,10 @@ Marking convention:
       * compute_at loop ELISION resolved via the design decision below: the loop
         *structure* is derived from the schedule (validated), and point-loop
         elision (extent-1 dims simplified away) is *declared* per example with
-        the `collapses(f, {vars})` annotation -- a no-op shim under real Halide
-        (halide_compat/halide_compat.h), honored by micro_halide. loopdoc §7
-        documents the qualitative rule, the four loop_elide_* cases, and that an
-        elided loop is still a valid compute_at injection site
+        the `micro_halide_collapses(f, {vars})` annotation -- a no-op shim under
+        real Halide (halide_compat/halide_compat.h), honored by micro_halide.
+        loopdoc §7 documents the qualitative rule, the four loop_elide_* cases,
+        and that an elided loop is still a valid compute_at injection site
         (compute_at_elided_level.cpp). README documents the structure-vs-declared
         factoring. This is the standing policy for all future bounds-driven
         elision (incl. RDom/update reduction loops).
@@ -57,14 +57,14 @@ Marking convention:
 
 [ ] `split`, `fuse`, `tile`, `reorder`
     NOTES:
-      * Loop elision is handled by the `collapses` annotation (see bootstrap),
+      * Loop elision is handled by the `micro_halide_collapses` annotation (see bootstrap),
         so this milestone does NOT need to make bounds inference predictable.
-        Keep declaring elision via `collapses`; do not try to derive it.
+        Keep declaring elision via `micro_halide_collapses`; do not try to derive it.
       * split/fuse/reorder DO add/rename/merge loops the schedule controls
         directly -- those are structural and must be derived (not declared).
         Watch the interaction: a split introduces new Vars that can themselves
-        be compute_at sites and can be elided; `collapses` keys on Var name, so
-        annotate the post-split Var names.
+        be compute_at sites and can be elided; `micro_halide_collapses` keys on Var name,
+        so annotate the post-split Var names.
 
 [ ] Update definitions (see e.g. `../apps/hist`)
     NOTES:
@@ -95,4 +95,4 @@ concrete question needed to build the loop nest, record it here:
 The micro-agent creates [open] issues.
 The main-agent may mark issues as [fixed] if changes to the docs seem to have caused later micro-agents to not run into the same confusion.
 
-  - [fixed] bootstrap | how many `for` loops does a `compute_at` Func emit? Dims whose required extent at the compute site is 1 are simplified away. RESOLUTION: not derived (needs bounds inference, out of scope); declared per example via `collapses(f,{vars})` + no-op Halide shim. loopdoc §7 + README document it; examples loop_elide_x/_y/_both and compute_at_elided_level cover it. | loop_elide_*.cpp, compute_at_elided_level.cpp
+  - [fixed] bootstrap | how many `for` loops does a `compute_at` Func emit? Dims whose required extent at the compute site is 1 are simplified away. RESOLUTION: not derived (needs bounds inference, out of scope); declared per example via `micro_halide_collapses(f,{vars})` + no-op Halide shim. loopdoc §7 + README document it; examples loop_elide_x/_y/_both and compute_at_elided_level cover it. | loop_elide_*.cpp, compute_at_elided_level.cpp

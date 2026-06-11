@@ -46,7 +46,7 @@ int main()
     output(x, y) = h(x, y) + h(x + 1, y); // x-stencil on h, pointwise in y
 
     h.compute_at(output, x);
-    collapses(h, {y}); // h's y loop is elided (pointwise read in y)
+    micro_halide_collapses(h, {y}); // h's y loop is elided (pointwise read in y)
 
     p.compute_at(h, y); // computed at h's elided y loop
 

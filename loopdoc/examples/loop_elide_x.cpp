@@ -14,7 +14,7 @@ using namespace Halide;
 // output pixel f is needed over a single column but two rows: f's x loop has
 // extent 1 and Halide elides it, while its y loop (extent 2) survives.
 //
-// The `collapses` annotation declares this elision to micro_halide; under real
+// The `micro_halide_collapses` annotation declares this elision to micro_halide; under real
 // Halide it is a no-op. See loopdoc.md for why elision is declared, not derived.
 
 int main()
@@ -31,7 +31,7 @@ int main()
     output(x, y) = f(x, y) + f(x + dx, y) + f(x, y + dy) + f(x + dx, y + dy);
 
     f.compute_at(output, x);
-    collapses(f, {x}); // f's x loop has extent 1 here and is elided
+    micro_halide_collapses(f, {x}); // f's x loop has extent 1 here and is elided
 
     output.print_loop_nest();
 }

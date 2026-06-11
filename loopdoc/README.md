@@ -54,7 +54,7 @@ The non-micro branch also includes `halide_compat.h` (from `halide_compat/`),
 a small shim that provides do-nothing stubs for micro_halide-only annotations
 so the example compiles unchanged against real Halide.
 
-## The `collapses` annotation
+## The `micro_halide_collapses` annotation
 
 `print_loop_nest()` reflects *bounds inference*: a loop whose required extent is
 provably 1 (a "point loop") is simplified away, so a `compute_at` Func may emit
@@ -68,10 +68,10 @@ micro_halide validates; point-loop elision is treated as *declared input*, not a
 derived result. An example annotates it with
 
     f.compute_at(g, x);
-    collapses(f, {y});   // declare: f's y loop has extent 1 here and is elided
+    micro_halide_collapses(f, {y});   // declare: f's y loop has extent 1 here and is elided
 
-`collapses` is a no-op under real Halide (the shim above) and tells micro_halide
-to drop those loops. The example author (who may consult Halide) supplies the
+`micro_halide_collapses` is a no-op under real Halide (the shim above) and tells
+`micro_halide` to drop those loops. The example author (who may consult Halide) supplies the
 ground truth; the micro-agent only implements "honor the annotation," which
 needs no bounds knowledge. An elided loop still serves as a valid `compute_at`
 injection site (see `examples/compute_at_elided_level.cpp`).
