@@ -6,31 +6,8 @@ using namespace micro_halide;
 using namespace Halide;
 #endif
 
-#include <stdio.h>
-
-#define CHEATING  /* TODO undefine this after getting basic micro_halide working */
-
 int main()
 {
-#if defined(USE_MICRO_HALIDE) && defined(CHEATING)
-    fprintf(stderr, "produce repeat_edge:\n");
-    fprintf(stderr, "  for _2:\n");
-    fprintf(stderr, "    for _1:\n");
-    fprintf(stderr, "      for _0:\n");
-    fprintf(stderr, "        repeat_edge(...) = ...\n");
-    fprintf(stderr, "consume repeat_edge:\n");
-    fprintf(stderr, "  produce input_16:\n");
-    fprintf(stderr, "    for c:\n");
-    fprintf(stderr, "      for y:\n");
-    fprintf(stderr, "        for x:\n");
-    fprintf(stderr, "          input_16(...) = ...\n");
-    fprintf(stderr, "  consume input_16:\n");
-    fprintf(stderr, "    produce output:\n");
-    fprintf(stderr, "      for c:\n");
-    fprintf(stderr, "        for y:\n");
-    fprintf(stderr, "          for x:\n");
-    fprintf(stderr, "            output(...) = ...\n");
-#else
     Var x("x"), y("y"), c("c");
 
     ImageParam input(type_of<uint8_t>(), 3, "input");
@@ -68,5 +45,4 @@ int main()
     output(x, y, c) = cast<uint8_t>(blur_y(x, y, c));
 
     output.print_loop_nest();
-#endif
 }

@@ -3,17 +3,21 @@
 // Top-level micro_halide header.
 //
 // "Drop-in" tiny replacement for a subset of Halide, sufficient only
-// to define simple functions, schedule them, and print their loop nest.
+// to define simple pure functions, schedule them with compute_root /
+// compute_at (or leave them inlined), and print their loop nest.
 //
 // micro_halide may skip implementing things only needed for convenience,
-// like auto-uniquely-named variables.
+// like auto-uniquely-named variables. It does NOT generate executable code.
 //
 // The loop nests are compared *structurally* (see ../canonicalize.py):
 // loop variable names and constant bounds are normalized away, so
 // micro_halide does not need to reproduce them. It only needs to match the
 // produce/consume/store nesting, loop ordering, and loop type.
 
-#include <atomic>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -22,7 +26,9 @@
 namespace micro_halide
 {
 
-// Edit this if needed.
+// ---------------------------------------------------------------------------
+// Var: a pure loop variable / dimension name.
+// ---------------------------------------------------------------------------
 class Var
 {
     std::string _name;
@@ -39,21 +45,10 @@ class Var
     }
 };
 
-class Rvar
-{
-    // TODO implement this when update functions enter the picture.
-};
-
-class Expr
-{
-    // TODO implement expr with Halide operator overloading.
-    // The print_loop_nest output does not actually show function internals.
-    // So the Expr does not have to encode as much info as the real Halide::Expr.
-    //
-    // We only need to track enough information to deduce
-    // producer/consumer relationships between Funcs.
-};
-
+// ---------------------------------------------------------------------------
+// Type: meaningless placeholder kept only for API compatibility. micro_halide
+// does no type checking or bounds inference.
+// ---------------------------------------------------------------------------
 struct Type
 {
 };
@@ -64,56 +59,390 @@ Type type_of()
     return Type{};
 }
 
-// NOTE: there are many scheduling functions in-common to ImageParam, Stage, Func,
-// so we may want to consider common helper code for the three classes.
+// Forward declarations.
+struct FuncContents;
+class FuncRef;
 
-class Stage
+// ---------------------------------------------------------------------------
+// Expr: a value expression. For loop-nest purposes we do NOT track the actual
+// arithmetic; we only track which Funcs the expression reads from (its
+// "producers"). That dependency set is all that is needed to deduce the
+// producer/consumer graph and therefore the loop nest.
+// ---------------------------------------------------------------------------
+class Expr
 {
-    // TODO implement this when update functions enter the picture.
+  public:
+    // Funcs this expression reads from (may contain duplicates; deduped later).
+    std::vector<std::shared_ptr<FuncContents>> deps;
+
+    Expr()
+    {
+    }
+    Expr(int)
+    {
+    }
+    Expr(float)
+    {
+    }
+    Expr(double)
+    {
+    }
+    Expr(const Var &)
+    {
+    }
+    // Reading a Func (a FuncRef) inside an expression adds it as a producer.
+    Expr(const FuncRef &);
 };
 
+inline Expr combine(const Expr &a, const Expr &b)
+{
+    Expr r;
+    r.deps = a.deps;
+    r.deps.insert(r.deps.end(), b.deps.begin(), b.deps.end());
+    return r;
+}
+
+inline Expr operator+(const Expr &a, const Expr &b)
+{
+    return combine(a, b);
+}
+inline Expr operator-(const Expr &a, const Expr &b)
+{
+    return combine(a, b);
+}
+inline Expr operator*(const Expr &a, const Expr &b)
+{
+    return combine(a, b);
+}
+inline Expr operator/(const Expr &a, const Expr &b)
+{
+    return combine(a, b);
+}
+
+// cast<T>(e): typing is irrelevant to the loop nest, so this is a pass-through
+// that preserves e's producer dependencies.
+template <typename T>
+Expr cast(const Expr &e)
+{
+    return e;
+}
+
+// ---------------------------------------------------------------------------
+// FuncContents: the shared, mutable state behind a Func handle (mirrors
+// Halide::Internal::Function). Copying a Func shares this state.
+// ---------------------------------------------------------------------------
+struct FuncContents
+{
+    std::string name;
+
+    // Pure dimensions, in definition order. args[0] is the innermost loop.
+    std::vector<Var> args;
+    bool defined = false;
+
+    // Funcs directly read by this Func's definition (deduplicated).
+    std::vector<std::shared_ptr<FuncContents>> producers;
+
+    // Where this Func is computed in the loop nest.
+    enum class Level
+    {
+        Inline, // default: substituted into its consumers, no loops of its own
+        Root,   // computed once at the outermost level
+        At      // computed inside at_func's loop over at_var
+    };
+    Level level = Level::Inline;
+
+    std::shared_ptr<FuncContents> at_func; // host, for Level::At
+    std::string at_var;                    // host loop var name, for Level::At
+};
+
+// ---------------------------------------------------------------------------
+// FuncRef: the result of Func::operator(). Acts as an lvalue to define a Func
+// (operator=) and as an rvalue Expr to read it.
+// ---------------------------------------------------------------------------
+class FuncRef
+{
+  public:
+    std::shared_ptr<FuncContents> func;
+    std::vector<Var> vars;     // the pure Vars used as arguments (LHS use)
+    std::vector<bool> is_var;  // whether each arg was a plain Var
+    std::vector<Expr> arg_exprs;
+
+    void add_arg(const Var &v)
+    {
+        vars.push_back(v);
+        is_var.push_back(true);
+        arg_exprs.push_back(Expr(v));
+    }
+    void add_arg(const Expr &e)
+    {
+        vars.push_back(Var(""));
+        is_var.push_back(false);
+        arg_exprs.push_back(e);
+    }
+
+    // Define the Func: f(x, y, ...) = rhs;
+    void operator=(const Expr &rhs)
+    {
+        func->args = vars;
+        // Dependencies are the funcs read by the RHS plus any read in the
+        // index expressions, deduplicated by identity.
+        std::vector<std::shared_ptr<FuncContents>> deps = rhs.deps;
+        for (const Expr &a : arg_exprs)
+        {
+            deps.insert(deps.end(), a.deps.begin(), a.deps.end());
+        }
+        std::set<FuncContents *> seen;
+        func->producers.clear();
+        for (auto &d : deps)
+        {
+            if (d && seen.insert(d.get()).second)
+            {
+                func->producers.push_back(d);
+            }
+        }
+        func->defined = true;
+    }
+    void operator=(const FuncRef &rhs)
+    {
+        *this = Expr(rhs);
+    }
+};
+
+inline Expr::Expr(const FuncRef &ref)
+{
+    deps.push_back(ref.func);
+    for (const Expr &a : ref.arg_exprs)
+    {
+        deps.insert(deps.end(), a.deps.begin(), a.deps.end());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ImageParam: an input buffer. It is a leaf: it is never realized and never
+// appears in the loop nest. Funcs may read from it, which terminates a
+// dependency chain (the buffer is simply already there).
+// ---------------------------------------------------------------------------
 class ImageParam
 {
     std::string _name;
     int _dims;
 
   public:
-    // With micro_halide, always name ImageParam explicitly.
-    // Type is meaningless and just for compatibility with Halide.
-    ImageParam(Type t, int d, std::string n) : _name(std::move(n)), _dims(d)
+    ImageParam(Type, int d, std::string n) : _name(std::move(n)), _dims(d)
     {
+    }
+
+    int dimensions() const
+    {
+        return _dims;
+    }
+
+    const std::string &name() const
+    {
+        return _name;
+    }
+
+    // Reading an ImageParam is not a Func dependency (it is already stored).
+    template <typename... Args>
+    Expr operator()(Args...) const
+    {
+        return Expr();
     }
 };
 
+// ---------------------------------------------------------------------------
+// Func: a handle to a (shared) FuncContents.
+// ---------------------------------------------------------------------------
 class Func
 {
-    std::string _name;
+  public:
+    std::shared_ptr<FuncContents> contents;
 
-    explicit Func(std::string name): _name(std::move(name))
+    Func() : contents(std::make_shared<FuncContents>())
     {
-
     }
 
-    void print_loop_nest()
+    explicit Func(std::string name) : contents(std::make_shared<FuncContents>())
     {
-        throw std::runtime_error("TODO implement Func::print_loop_nest");
+        contents->name = std::move(name);
     }
 
-    Stage update(int idx = 0)
+    const std::string &name() const
     {
-        throw std::runtime_error("TODO implement Func::update(int)");
+        return contents->name;
+    }
+
+    template <typename... Args>
+    FuncRef operator()(Args... args) const
+    {
+        FuncRef ref;
+        ref.func = contents;
+        (ref.add_arg(args), ...);
+        return ref;
+    }
+
+    Func &compute_root()
+    {
+        contents->level = FuncContents::Level::Root;
+        contents->at_func.reset();
+        return *this;
     }
 
     Func &compute_at(const Func &f, const Var &var)
     {
-        throw std::runtime_error("TODO implement Func::compute_at(Func, Var)");
+        contents->level = FuncContents::Level::At;
+        contents->at_func = f.contents;
+        contents->at_var = var.name();
+        return *this;
     }
 
-    Func &compute_at(const Func &f, const Rvar &var)
+    void print_loop_nest();
+};
+
+// ---------------------------------------------------------------------------
+// BoundaryConditions: helpers that wrap an input in a Func. Typing/bounds are
+// irrelevant here, so the wrapper is just a fresh Func of the same
+// dimensionality that depends on nothing realizable.
+// ---------------------------------------------------------------------------
+namespace BoundaryConditions
+{
+inline Func repeat_edge(const ImageParam &im)
+{
+    Func f("repeat_edge");
+    for (int i = 0; i < im.dimensions(); i++)
     {
-        throw std::runtime_error("TODO implement Func::compute_at(Func, Rvar)");
+        f.contents->args.push_back(Var("_" + std::to_string(i)));
+    }
+    f.contents->defined = true;
+    return f;
+}
+} // namespace BoundaryConditions
+
+// ===========================================================================
+// Loop-nest generation.
+// ===========================================================================
+namespace internal
+{
+
+struct LoopNestPrinter
+{
+    std::ostream &out;
+
+    // funcs computed_at a given (host, var-name) loop level, in realization order.
+    std::map<std::pair<FuncContents *, std::string>, std::vector<FuncContents *>> children_at;
+
+    explicit LoopNestPrinter(std::ostream &o) : out(o)
+    {
+    }
+
+    static std::string pad(int indent)
+    {
+        return std::string(indent, ' ');
+    }
+
+    // Post-order DFS over producers: yields producers before consumers.
+    void realization_order(FuncContents *f, std::set<FuncContents *> &visited,
+                           std::vector<FuncContents *> &order)
+    {
+        if (!visited.insert(f).second)
+        {
+            return;
+        }
+        for (auto &p : f->producers)
+        {
+            realization_order(p.get(), visited, order);
+        }
+        order.push_back(f);
+    }
+
+    // Emit the realizations in `funcs` as a chain of produce/consume blocks.
+    // `cont` (if non-null) is the continuation that follows the last func and
+    // is wrapped by its consume block.
+    template <typename Cont>
+    void emit_realizations(const std::vector<FuncContents *> &funcs, size_t i,
+                           int indent, const Cont &cont, bool has_cont)
+    {
+        if (i >= funcs.size())
+        {
+            if (has_cont)
+            {
+                cont(indent);
+            }
+            return;
+        }
+        FuncContents *f = funcs[i];
+        out << pad(indent) << "produce " << f->name << ":\n";
+        emit_func_loops(f, indent + 2);
+
+        bool more = (i + 1 < funcs.size()) || has_cont;
+        if (more)
+        {
+            out << pad(indent) << "consume " << f->name << ":\n";
+            emit_realizations(funcs, i + 1, indent + 2, cont, has_cont);
+        }
+    }
+
+    // Emit f's own loops (over its pure dims, args[0] innermost), injecting
+    // any compute_at children at the appropriate loop level, with f's
+    // definition at the center.
+    void emit_func_loops(FuncContents *f, int indent)
+    {
+        emit_dim(f, (int)f->args.size() - 1, indent);
+    }
+
+    void emit_dim(FuncContents *f, int dim, int indent)
+    {
+        if (dim < 0)
+        {
+            out << pad(indent) << f->name << "(...) = ...\n";
+            return;
+        }
+        const std::string &var = f->args[dim].name();
+        out << pad(indent) << "for " << var << ":\n";
+
+        auto it = children_at.find({f, var});
+        std::vector<FuncContents *> empty;
+        const std::vector<FuncContents *> &kids = (it == children_at.end()) ? empty : it->second;
+
+        auto deeper = [this, f, dim](int ind) { emit_dim(f, dim - 1, ind); };
+        emit_realizations(kids, 0, indent + 2, deeper, /*has_cont=*/true);
+    }
+
+    void print(FuncContents *output)
+    {
+        // The output Func is always computed at the outermost (root) level.
+        output->level = FuncContents::Level::Root;
+        output->at_func.reset();
+
+        std::set<FuncContents *> visited;
+        std::vector<FuncContents *> order;
+        realization_order(output, visited, order);
+
+        std::vector<FuncContents *> root_list;
+        for (FuncContents *f : order)
+        {
+            if (f->level == FuncContents::Level::Root)
+            {
+                root_list.push_back(f);
+            }
+            else if (f->level == FuncContents::Level::At)
+            {
+                children_at[{f->at_func.get(), f->at_var}].push_back(f);
+            }
+            // Inline funcs are not realized and never appear.
+        }
+
+        auto no_cont = [](int) {};
+        emit_realizations(root_list, 0, 0, no_cont, /*has_cont=*/false);
     }
 };
 
+} // namespace internal
 
+inline void Func::print_loop_nest()
+{
+    internal::LoopNestPrinter printer(std::cerr);
+    printer.print(contents.get());
 }
+
+} // namespace micro_halide
