@@ -14,6 +14,8 @@
 // micro_halide does not need to reproduce them. It only needs to match the
 // produce/consume/store nesting, loop ordering, and loop type.
 
+#include <algorithm>
+#include <cctype>
 #include <initializer_list>
 #include <iostream>
 #include <map>
@@ -21,6 +23,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -356,6 +359,11 @@ struct LoopNestPrinter
     // funcs computed_at a given (host, var-name) loop level, in realization order.
     std::map<std::pair<FuncContents *, std::string>, std::vector<FuncContents *>> children_at;
 
+    // First-visitation index of each Func (pre-order DFS from the output through
+    // producers in definition order). Used as a tie-breaker in realization
+    // order (see sort_key).
+    std::map<FuncContents *, std::uint64_t> visit_order;
+
     explicit LoopNestPrinter(std::ostream &o) : out(o)
     {
     }
@@ -365,7 +373,47 @@ struct LoopNestPrinter
         return std::string(indent, ' ');
     }
 
-    // Post-order DFS over producers: yields producers before consumers.
+    // Name prefix used for the realization-order tie-break: drop any "$..."
+    // uniqueness suffix, then any trailing digits. (Matches Halide's
+    // sort_funcs_by_name_and_counter in RealizationOrder.cpp.)
+    static std::string name_prefix(const std::string &s)
+    {
+        std::string p = s.substr(0, s.find('$'));
+        while (!p.empty() && std::isdigit(static_cast<unsigned char>(p.back())))
+        {
+            p.pop_back();
+        }
+        return p;
+    }
+
+    // Pre-order DFS from the output recording first-visitation order. Producers
+    // are walked in definition (first-appearance) order, mirroring Halide's
+    // populate_environment_helper.
+    void compute_visit_order(FuncContents *f, std::set<FuncContents *> &seen,
+                             std::uint64_t &counter)
+    {
+        if (!seen.insert(f).second)
+        {
+            return;
+        }
+        visit_order[f] = counter++;
+        for (auto &p : f->producers)
+        {
+            compute_visit_order(p.get(), seen, counter);
+        }
+    }
+
+    // The order two sibling producers of the same consumer are realized in:
+    // primarily alphabetical by name prefix, then by first-visitation order,
+    // then by full name. This is NOT the left-to-right order in the defining
+    // expression.
+    std::tuple<std::string, std::uint64_t, std::string> sort_key(FuncContents *f)
+    {
+        return {name_prefix(f->name), visit_order[f], f->name};
+    }
+
+    // Post-order DFS over producers (producers before consumers), visiting a
+    // Func's producers in realization-order tie-break order.
     void realization_order(FuncContents *f, std::set<FuncContents *> &visited,
                            std::vector<FuncContents *> &order)
     {
@@ -373,9 +421,16 @@ struct LoopNestPrinter
         {
             return;
         }
+        std::vector<FuncContents *> prods;
         for (auto &p : f->producers)
         {
-            realization_order(p.get(), visited, order);
+            prods.push_back(p.get());
+        }
+        std::sort(prods.begin(), prods.end(),
+                  [this](FuncContents *a, FuncContents *b) { return sort_key(a) < sort_key(b); });
+        for (FuncContents *p : prods)
+        {
+            realization_order(p, visited, order);
         }
         order.push_back(f);
     }
@@ -449,6 +504,11 @@ struct LoopNestPrinter
         // The output Func is always computed at the outermost (root) level.
         output->level = FuncContents::Level::Root;
         output->at_func.reset();
+
+        // Establish first-visitation order (tie-breaker), then realization order.
+        std::set<FuncContents *> visit_seen;
+        std::uint64_t counter = 0;
+        compute_visit_order(output, visit_seen, counter);
 
         std::set<FuncContents *> visited;
         std::vector<FuncContents *> order;
