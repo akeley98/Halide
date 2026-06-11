@@ -91,7 +91,7 @@ Marking convention:
         store node and constant bounds, the latter normalized away, are visible).
         If a later milestone needs to show them, it will be via different output.
 
-[WIP] `hoist_storage`, `hoist_storage_root`
+[✅] `hoist_storage`, `hoist_storage_root`
     NOTES:
       * FINDING: hoist_storage / hoist_storage_root do NOT change print_loop_nest
         output at all (verified: legal cases print identically to the same
@@ -100,6 +100,14 @@ Marking convention:
         illegal: (a) hoist on an inlined Func; (b) hoist level inside the store
         level (which must enclose compute). So this milestone is purely about
         legality + a no-op regression guard.
+      * DONE (delegated). loopdoc §8 hoist subsection + src_doc §9; micro-agent
+        implemented the legality from the docs alone (integrity clean). Examples:
+        hoist_storage_noop (positive no-op), neg_hoist_at_inlined,
+        neg_hoist_inside_compute. Adversarial follow-ups (main agent) confirmed
+        the impl generalizes: store_compute_hoist_all3 (store/compute/hoist all
+        distinct, legal, store node + invisible hoist) and neg_hoist_inside_store
+        (hoist encloses compute but NOT the store_root level -> correctly
+        rejected). All 31 examples pass.
 
 [ ] `split`, `fuse`, `tile`, `reorder`
     NOTES:
