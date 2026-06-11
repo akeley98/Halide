@@ -8,10 +8,16 @@ Instead, the main agent delegates this to sub-agents that are reading the main a
 ## Flow
 
 * Look inside `progress.txt`.
-  If there is a WIP task, keep working on it.
-  Otherwise, work on the first incomplete task.
-  The task is a *rough guide* of which Halide features to document next.
-  Since every feature interacts with every other, use your judgment as-needed to skip documenting some functionality if it relies too much on not-yet-documented topics, or
+  If there is a WIP milestone, keep working on it.
+  Otherwise, work on the first incomplete milestone.
+  The milestone is a *rough guide* of which Halide features to document next.
+  Also read the `DISCOVERED DOC GAPS` section at the bottom of `progress.txt`:
+  these are concrete questions that `loopdoc.md` previously failed to answer.
+  Open gaps relevant to the current milestone are first-class work -- prefer closing
+  them over adding new coverage. When you fix one, mark it `[fixed]` rather than
+  deleting it, so the record of what was once unclear survives.
+  Since every feature interacts with every other, use your judgment as-needed to skip documenting some functionality if it relies too much on not-yet-documented topics, or partially document features ahead of their listed order when it makes the explanation more coherent.
+  Update NOTES in `progress.txt` as appropriate to coordinate reordering work with other milestones.
 
 * Start analyzing the features by
     * Reading `../src/Func.h` comments documenting the scheduling operation
@@ -19,7 +25,7 @@ Instead, the main agent delegates this to sub-agents that are reading the main a
     * Writing example Halide programs in `./examples` to test for yourself how Halide works
     * Reading the Halide compiler's source code itself.
 
-  Please write a large number of examples comprehensively analyzing the interaction between the current task's features and previously documented features.
+  Please write a large number of examples comprehensively analyzing the interaction between the current milestone's features and previously documented features.
   Consider:
     * Multiple functions `b1`, `b2`, `b3`... relying on a common producer `a`, and possibly another function `c` consuming `b1`, `b2`, `b3`, ...; and consider `in()`, `clone_in()`, and the "transitivity" documented for these scheduling operators
     * Complicated patterns involving update functions
@@ -34,23 +40,29 @@ Instead, the main agent delegates this to sub-agents that are reading the main a
         * The conceptual "state" of Halide API objects
         * How the state is modified by scheduling operations
         * A description of the logic involved in translating this scheduled state into a loop nest; here, the documented logic is at the level of detail needed for a user to understand how the compiler works conceptually.
-      IMPORTANT: the "tasks" are not an outline of how to structure the `loopdoc.md`!!!
-      Each task involves *holistically* editing the entire documentation into a coherent whole, not just appending more text at the end.
+      IMPORTANT: the milestones are not an outline of how to structure the `loopdoc.md`!!!
+      Each milestone involves *holistically* editing the entire documentation into a coherent whole, not just appending more text at the end.
     * Write/update C++ examples in `examples/`, and cite those examples in the `loopdoc.md` at appropriate points to help illustrate the documentation.
     * The Hard Part: Back-up your claims in the `loopdoc.md` by explaining, with a new or modified file in `src_doc`, how the Halide compiler is *implementing* the documented behavior.
       Unlike the main `loopdoc.md` file, this is at a level of detail suitable to help humans maintain the Halide compiler.
       Insert citations to the `src_doc` files in `loopdoc.md` to back up the claimed behavior.
       As needed, insert `debug(1) << "text";` logging into the Halide compiler itself, and include transcripts of the debug log to illustrate the compiler's internal logic.
     * Make a git commit
-    * If this is not the bootstrap task, spawn micro-agents to edit `micro_halide` based on the documentation you've written.
+    * If this is not the bootstrap milestone, spawn micro-agents to edit `micro_halide` based on the documentation you've written.
       You may wish to leave comments using `<!-- -->` syntax in `loopdoc.md` highlighting what changed to guide the micro-agent.
-    * If this is the bootstrap task, edit `micro_halide` yourself to make the tests (`sh test.sh`) pass.
+    * If this is the bootstrap milestone, edit `micro_halide` yourself to make the tests (`sh test.sh`) pass.
     * Make a git commit, with commentary on whether the tests are passing or failing.
     * If the tests passed:
         * Check that the micro-agent didn't do something stupid like delete test cases; flag for human review if so.
-        * Exit the loop: task complete.
+        * Exit the loop: milestone complete.
     * If the tests don't pass:
-        * Try to understand what difficulties the micro-agent ran into. They should have left comments in `loopdoc.md`.
+        * Try to understand what difficulties the micro-agent ran into. They should have
+          left comments in `loopdoc.md` and appended one-line entries to the
+          `DISCOVERED DOC GAPS` section of `progress.txt`.
+        * Treat each open gap as a precise statement of what the documentation failed to
+          convey. Improve `loopdoc.md` (and `src_doc`/examples) to answer it, then mark
+          the gap `[fixed]`. A failing test is a *useful result*: the deliverable of this
+          campaign is documentation that closes these gaps, not merely a green test run.
 
 
 ## Rules
@@ -64,12 +76,12 @@ Instead, the main agent delegates this to sub-agents that are reading the main a
 * Avoid implementing non-trivial logic in `micro_halide`.
   It's a judgment call what "non-trivial" is: decide by considering the purpose of `micro_halide` is to test the micro-agent's comprehension of the documentation you are writing.
   Since only you (and not the micro-agent) are allowed to reference the Halide source code, you should probably implement drop-in replacements for classes and functions that are patterned after the real Halide, but have placeholder implementations (`throw std::runtime_error("TODO xyz")`).
-  Certain tasks will require implementing a lot of auxilliary types like `Rdom`, `Rvar`, `Stage` where most of the work is just imitating the Halide API; in this case it's appropriate to do more work.
+  Certain milestones will require implementing a lot of auxilliary types like `Rdom`, `Rvar`, `Stage` where most of the work is just imitating the Halide API; in this case it's appropriate to do more work.
 
-  Exception: bootstrap task is entirely exempt from this rule.
+  Exception: bootstrap milestone is entirely exempt from this rule.
 
 * The human is not experienced in agentic coding and indeed has not a very clear picture of what he's doing.
-  You may give stop to give suggestions if the harness or task list or overall way of doing things seem counterproductive.
+  You may stop to give suggestions if the harness or milestone list or overall way of doing things seem counterproductive.
 
 
 ## Halide Source Code References

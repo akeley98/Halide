@@ -22,8 +22,17 @@ As such, the implementation must be based only on the information provided by th
 
 * `micro_halide` is a header-only C++ library.
 
-* If anything in `loopdoc.md` is unclear, leave comments on what was unclear for the main agent to later read.
-  If possible, include suggestions on how to improve clarity.
+* If anything in `loopdoc.md` is unclear, do BOTH of the following:
+    * Leave a `<!-- -->` comment at the relevant point in `loopdoc.md` describing what
+      was unclear, with a suggestion on how to improve clarity if you have one.
+    * Append a one-line entry to the `DISCOVERED DOC GAPS` section at the bottom of
+      `progress.txt`, in the format documented there:
+        - [open] <feature/milestone> | <the specific question the doc couldn't answer> | <example file, if any>
+      State a concrete unanswered question ("does compute_at on an update stage move
+      the pure stage too?"), not a vague "this section is confusing". Do not clear or
+      edit existing entries; only append.
+  This gap list is the primary product the main agent uses to improve the docs, so a
+  precise entry is more valuable than getting a test to pass.
 
 * Make a reasonable effort to get all example tests passing by updating the `micro_halide/` implementation.
   If the `loopdoc.md` is unclear or does not seem to accurately describe Halide's behavior, avoid "guessing" or trying to implement multiple possible interpretations; instead, ignore the failing test and leave comments on `loopdoc.md` giving feedback and highlighting which test failed.

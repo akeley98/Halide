@@ -1,0 +1,64 @@
+produce hist_rows_in:
+  gpu_block y<Default_GPU>:
+    produce hist_rows:
+      unrolled x.x in [0, 3]:
+        gpu_lane x.xi.xi in [0, 31]<Default_GPU>:
+          vectorized x.xi.v5 in [0, 1]:
+            hist_rows(...) = ...
+      for r15.r37:
+        produce Y_clone_in_hist_rows:
+          gpu_lane x<Default_GPU>:
+            Y_clone_in_hist_rows(...) = ...
+        consume Y_clone_in_hist_rows:
+          gpu_lane r15.r38 in [0, 31]<Default_GPU>:
+            hist_rows(...) = ...
+    consume hist_rows:
+      unrolled x.x in [0, 3]:
+        gpu_lane x.xi.xi in [0, 31]<Default_GPU>:
+          vectorized x.xi.v4 in [0, 1]:
+            hist_rows_in(...) = ...
+consume hist_rows_in:
+  produce hist:
+    gpu_block x.x in [0, 15]<Default_GPU>:
+      gpu_thread x.xi in [0, 15]<Default_GPU>:
+        hist(...) = ...
+    gpu_block x.x in [0, 15]<Default_GPU>:
+      gpu_thread x.xi in [0, 15]<Default_GPU>:
+        for r22:
+          hist(...) = ...
+  consume hist:
+    produce cdf:
+      gpu_block x.x in [0, 15]<Default_GPU>:
+        gpu_thread x.xi in [0, 15]<Default_GPU>:
+          cdf(...) = ...
+      gpu_block __outermost.__outermost.v13 in [0, 0]<Default_GPU>:
+        gpu_thread __outermost.v14 in [0, 0]<Default_GPU>:
+          for r29 in [1, 255]:
+            cdf(...) = ...
+    consume cdf:
+      produce output:
+        gpu_block y.y<Default_GPU>:
+          gpu_block x.x<Default_GPU>:
+            produce cdf_in:
+              gpu_thread x.x in [0, 3]<Default_GPU>:
+                gpu_thread x.xi.xi in [0, 31]<Default_GPU>:
+                  vectorized x.xi.v16 in [0, 1]:
+                    cdf_in(...) = ...
+            consume cdf_in:
+              gpu_thread y.yi in [0, 3]<Default_GPU>:
+                gpu_thread x.xi.xi in [0, 31]<Default_GPU>:
+                  produce Cb:
+                    vectorized x:
+                      Cb(...) = ...
+                  consume Cb:
+                    produce Cr:
+                      vectorized x:
+                        Cr(...) = ...
+                    consume Cr:
+                      produce equalize:
+                        vectorized x:
+                          equalize(...) = ...
+                      consume equalize:
+                        vectorized x.xi.v15 in [0, 3]<Default_GPU>:
+                          unrolled c in [0, 2]:
+                            output(...) = ...

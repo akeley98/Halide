@@ -1,11 +1,37 @@
-Put a WIP into the [ ] when you start working on a task.
-Put a ✅ into the [ ] when the task is more-or-less done.
-Since every feature interacts with everything else, "done" is a judgment call, especially for earlier tasks.
-You may add to the NOTES section of future tasks to help coordinate finishing the incomplete work, or for any other purpose really.
+# How to read this file
+
+These are COVERAGE MILESTONES, not a doc outline and not an ordered to-do list.
+Each milestone names a cluster of Halide features that `loopdoc.md` should explain
+*correctly and holistically* -- i.e. the doc reads as a coherent whole, and a
+micro-agent can reconstruct the loop nest for examples exercising those features
+without reading the source.
+
+Because every feature interacts with every other, ordering is a rough guide only.
+Skip ahead or double back as judgment dictates.
+
+Marking convention:
+  [ ]    not started
+  [WIP]  in progress (only one at a time, normally)
+  [✅]   the doc explains this well enough that micro-tests covering it pass
+         (or fail only for reasons captured in DISCOVERED DOC GAPS below)
+
+"Done" is a judgment call, especially for early milestones -- revisit freely.
 
 
-[WIP] Bootstrap: Brief overview of Halide programming model, document basic pure functions, `compute_at`, `compute_root`, loop generation from only these basic features, and the format of the print_loop_nest() output.
-    Explain the distinction between inlined and non-inlined functions.
+# Coverage milestones
+
+[WIP] Bootstrap: programming-model overview; basic pure functions; `compute_at`,
+      `compute_root`; loop generation from only these; the `print_loop_nest()`
+      output format; inlined vs. non-inlined functions.
+    EXIT CRITERIA (bootstrap is special -- main agent implements micro_halide directly):
+      * A minimal first example (e.g. two pure funcs, one `compute_root`) passes.
+      * `micro_halide` actually implements `print_loop_nest` (no hardcoded output).
+      * The `CHEATING` ifdef block is removed from every example (see README rule:
+        examples must not branch on USE_MICRO_HALIDE except around print_loop_nest).
+    NOTES:
+      * box_blur.cpp is currently too rich for a first example (ImageParam,
+        repeat_edge with auto-named _0/_1/_2 vars, cast, 4 stages). Add a simpler
+        example to isolate the core mechanics; keep box_blur for later.
 
 [ ] `store_at`, `store_root`
     NOTES:
@@ -36,3 +62,20 @@ You may add to the NOTES section of future tasks to help coordinate finishing th
 
 [ ] `gpu`, `gpu_lanes`, `gpu_threads`, `gpu_blocks`, `gpu_tile`
     NOTES:
+
+
+# DISCOVERED DOC GAPS
+
+The real product of this campaign. This list PERSISTS across milestones -- do not
+clear it when a milestone closes.
+
+When a micro-agent (or you) hits a point where `loopdoc.md` does not answer a
+concrete question needed to build the loop nest, record it here as one line:
+
+  - [open|fixed] <milestone> | <the specific question the doc couldn't answer> | <example file, if any>
+
+A milestone may be marked [✅] while gaps remain open here, as long as the open
+gaps are understood and tracked. Prefer logging a precise unanswered question over
+a vague "this section is unclear."
+
+(none yet)
