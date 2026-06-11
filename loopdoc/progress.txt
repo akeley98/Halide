@@ -74,8 +74,22 @@ Marking convention:
         factoring. This is the standing policy for all future bounds-driven
         elision (incl. RDom/update reduction loops).
 
-[WIP] `store_at`, `store_root`
-    NOTES: These won't visibly change the loop nest output, but reasoning about illegal store_at requires comprehension of the loop nest structure.
+[✅] `store_at`, `store_root`
+    NOTES: These add "store <func>:" to loop nest output, and require reasoning about illegal store_at.
+      * DONE (first delegated milestone). Main agent wrote loopdoc §8, src_doc §8,
+        and examples; a logged micro-agent implemented the store-node emission +
+        legality in micro_halide from the docs ALONE and all examples passed on
+        the first run (integrity review clean: no Halide-source access, read
+        loopdoc.md, no commits). Encouraging signal that §8 is clear.
+      * Loop-nest effect: a `store f:` node prints only when store level !=
+        compute level; it sits at the store level and wraps down to the
+        compute-level produce/consume. store_root wraps the whole pipeline body.
+        Examples: store_at_compute_at, store_root_compute_at, store_root_chain,
+        store_eq_compute (no node), neg_store_inside_compute, neg_store_at_inlined.
+      * Sliding-window / storage-folding are value/bounds optimizations with NO
+        print_loop_nest structure change, so they are out of scope here (only the
+        store node and constant bounds, the latter normalized away, are visible).
+        If a later milestone needs to show them, it will be via different output.
 
 [ ] `hoist_storage`, `hoist_storage_root`
     NOTES:
