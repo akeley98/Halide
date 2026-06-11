@@ -45,12 +45,7 @@ This repository contains:
         // Define and schedule f and any other functions.
         // Do not conditionally compile based on USE_MICRO_HALIDE
 
-        #ifdef USE_MICRO_HALIDE
-        std::vector<LoopVarMapping> mappings{...};
-        f.print_loop_nest(mappings);
-        #else
         f.print_loop_nest();
-        #endif
     }
 
 

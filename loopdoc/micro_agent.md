@@ -42,8 +42,9 @@ As such, the implementation must be based only on the information provided by th
   The purpose of implementing `micro_halide` is to test whether the loopdoc documentation is clear enough to provide a full mental picture of how scheduling guides loop nest generation.
   A negative result is a useful data point: the main agent should learn from the failure and improve the quality of the documentation accordingly.
 
-  Exception: It's expected to do a lot of trial-and-error edits to the `print_loop_nest` parameters to make the loop variable names and bounds match what Halide generated.
-  This doesn't change the underlying structure of the loop nest (which is the target of the documentation).
+  Note: you do not need to reproduce Halide's loop variable names or constant
+  bounds. The comparison (`../canonicalize.py`) normalizes those away; only the
+  produce/consume/store nesting, loop ordering, and loop type are compared.
 
 * If all example tests pass, remove any comments in `loopdoc.md` that highlighted recent changes to said document.
 

@@ -67,11 +67,6 @@ int main()
     Func output("output");
     output(x, y, c) = cast<uint8_t>(blur_y(x, y, c));
 
-#ifdef USE_MICRO_HALIDE
-    std::vector<LoopVarMapping> mappings;
-    output.print_loop_nest(mappings);
-#else
     output.print_loop_nest();
-#endif
 #endif
 }

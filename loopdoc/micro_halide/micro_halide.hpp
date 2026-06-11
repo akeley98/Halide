@@ -5,13 +5,13 @@
 // "Drop-in" tiny replacement for a subset of Halide, sufficient only
 // to define simple functions, schedule them, and print their loop nest.
 //
-// The print_loop_nest function is not source-compatible with the real
-// Halide (i.e. caller needs an ifdef).  It takes an additional
-// LoopVarMapping list to help it match the Halide-generated loop nest
-// exactly, for the purposes of testing.
-//
-// micro_halide may also skip implementing things only needed for convenience,
+// micro_halide may skip implementing things only needed for convenience,
 // like auto-uniquely-named variables.
+//
+// The loop nests are compared *structurally* (see ../canonicalize.py):
+// loop variable names and constant bounds are normalized away, so
+// micro_halide does not need to reproduce them. It only needs to match the
+// produce/consume/store nesting, loop ordering, and loop type.
 
 #include <atomic>
 #include <stdexcept>
@@ -21,26 +21,6 @@
 
 namespace micro_halide
 {
-
-// micro_halide is not expected to match Halide's auto-generated loop variable names exactly,
-// and it is not expected to do bounds inference.
-// So we provide a way for each test case to "just give the right answer" directly.
-//
-// This causes "for old_name:" to be reformatted to
-//
-// * if not has_bounds: "for new_name:"
-// * if has_bounds: "for new_name in [lower_bound, upper_bound]"
-//
-// sub-agent: feel free to add more to this if needed to make the tests pass,
-// as long as none of the passed information modifies the structure/topology of the loop nest.
-struct LoopVarMapping
-{
-    std::string old_name;
-    std::string new_name;
-    bool has_bounds;
-    std::string lower_bound;
-    std::string upper_bound;
-};
 
 // Edit this if needed.
 class Var
@@ -114,7 +94,7 @@ class Func
 
     }
 
-    void print_loop_nest(const std::vector<LoopVarMapping> &loop_var_mappings)
+    void print_loop_nest()
     {
         throw std::runtime_error("TODO implement Func::print_loop_nest");
     }
