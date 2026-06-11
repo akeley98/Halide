@@ -106,11 +106,13 @@ def test_all():
             if not halide_runtime_fail and micro_halide_runtime_fail:
                 any_diff_fail = True
                 print_log(f"Behavior difference: {e.halide_bin} exited successfully, but {e.micro_halide_bin} failed")
+            if halide_runtime_fail and micro_halide_runtime_fail:
+                print_log(f"Negative example PASS: {e.cpp}")
             if not halide_runtime_fail and not micro_halide_runtime_fail:
                 diff_cmd = f"python3 canonicalize.py --diff {e.halide_debug_0_log} {e.micro_halide_log}"
                 diff_code = os.system(diff_cmd) >> 8
                 if diff_code == 0:
-                    pass
+                    print_log(f"Positive example PASS: {e.cpp}")
                 elif diff_code == 1:
                     any_diff_fail = True
                     print_log(f"Non-trivial loop nest difference (failed command: {diff_cmd!r})")
