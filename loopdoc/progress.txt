@@ -35,9 +35,22 @@ Marking convention:
         The box_blur.cpp should work correctly (no cheating) at the end of the bootstrap milestone.
       * DONE. Passing examples: two_funcs_root, inline_default, compute_at,
         diamond_root, box_blur, loop_elide_test/_x/_y/_both,
-        compute_at_elided_level. micro_halide builds the nest from realization
-        order + produce/consume nesting + per-Func loops; loopdoc.md §§1-8 and
-        src_doc/loop_nest_construction.md document and justify it.
+        compute_at_elided_level, tiebreak_realization_order,
+        producers_diff_levels, producers_root_and_at. micro_halide builds the
+        nest from realization order + produce/consume nesting + per-Func loops;
+        loopdoc.md §§1-8 and src_doc/loop_nest_construction.md document/justify it.
+      * REALIZATION-ORDER TIE-BREAK: sibling producers of one consumer are
+        ordered by (name prefix, first-visitation order, full name) -- NOT by
+        left-to-right order in the defining expression. micro_halide now sorts
+        producers by this key (was RHS order, which only coincidentally matched).
+        loopdoc §4 + src_doc §3 document it; tiebreak_realization_order.cpp tests.
+      * MULTI-PRODUCER NESTING: produce/consume blocks of multiple producers of
+        one consumer NEST (each consume wraps later producers + the rest), and
+        the nesting depth follows each producer's compute level, not the
+        dependency graph. Same level -> nested chain in tie-break order; different
+        levels -> outer-level producer wraps inner-level producer; root+at mixes
+        the two mechanisms. loopdoc §2 (clarified) + §7 (new subsection);
+        examples producers_diff_levels.cpp, producers_root_and_at.cpp.
       * compute_at loop ELISION resolved via the design decision below: the loop
         *structure* is derived from the schedule (validated), and point-loop
         elision (extent-1 dims simplified away) is *declared* per example with

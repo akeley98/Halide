@@ -87,6 +87,13 @@ ends at the matching `consume`/dedent; everything that reads `f` is nested
 under `consume f`. A `for` contains its loop body. The leaf `f(...) = ...` is
 the body executed at the innermost point.
 
+A consequence worth stating up front: when several Funcs are produced in
+sequence, their `consume` blocks *nest* — the rest of the program, **including
+any later producers**, sits inside the current `consume` rather than appearing
+as a flat list of siblings. How deeply each producer's block nests is set by its
+realization order and its compute level (§4, §7), so two producers of the same
+Func need not appear at the same depth.
+
 Two cosmetic details are *not* part of the model and are normalized away by the
 test harness (`../canonicalize.py`): the exact loop-variable names, and constant
 loop bounds (`for x in [0, 7]`). What *is* significant: the produce/consume
@@ -163,6 +170,26 @@ own slot, but they still transmit dependencies: if inlined `b` reads rooted
 precedes it. In `box_blur`, `output` inlines `blur_y`→`blur_x`→`input_16`
 (rooted), so `input_16` is realized before `output`.
 
+#### Tie-break: which sibling producer goes first
+
+A topological sort leaves freedom whenever a consumer reads two producers that
+do not depend on each other — e.g. `output(...) = g(...) + h(...)` with both `g`
+and `h` at root. Halide breaks the tie **deterministically by name, not by the
+order they appear in the defining expression**:
+
+> Sibling producers are ordered by **name prefix** (alphabetically), then by
+> **first-visitation order** (the order they are first reached walking the
+> pipeline from the output), then by full name. The "prefix" is the name with
+> any `$n` uniqueness suffix and any trailing digits removed.
+
+So in [examples/tiebreak_realization_order.cpp](examples/tiebreak_realization_order.cpp),
+even though the expression is written `b1d(x) + a2d(x, y)`, `a2d` is realized
+first because `"a2d" < "b1d"`. The left-to-right order of `+` is irrelevant. The
+first-visitation tie-break only matters when two prefixes are equal (e.g.
+auto-named Funcs sharing a prefix); examples here use distinct prefixes so the
+order is purely alphabetical. This same ordering decides the order of sibling
+producers filed at any single `compute_at` level, not just root (§7).
+
 ---
 
 ## 5. A single Func's own loops
@@ -232,6 +259,46 @@ produce consumer:
 The injection is recursive: a Func computed inside a Func that is itself
 computed inside another nests accordingly, because each Func's loops are
 generated the same way and children are injected at each of *its* loop levels.
+
+### Multiple producers of one consumer
+
+When a consumer reads several producers, each producer is placed according to
+*its own* compute level; they do not share a single flat `consume` block.
+
+* **Both at the same level** (e.g. both `compute_at(output, y)`, or both at
+  root): they form a nested produce/consume chain at that level, ordered by the
+  realization-order tie-break (§4) — alphabetical by name, *not* expression
+  order. The first producer's `consume` wraps the second producer, whose
+  `consume` wraps the rest. (Root is just the special case where the "level" is
+  the outermost one; see [examples/diamond_root.cpp](examples/diamond_root.cpp).)
+
+* **At different levels.** Each producer is injected at its own loop level of the
+  consumer, so the producer at the *outer* level appears first and its `consume`
+  contains both the consumer's inner loops *and* the inner producer's block. In
+  [examples/producers_diff_levels.cpp](examples/producers_diff_levels.cpp),
+  `h.compute_at(output, y)` (outer) and `g.compute_at(output, x)` (inner) give:
+
+  ```
+  produce output:
+    for y:
+      produce h:
+        ...
+      consume h:
+        for x:
+          produce g:
+            ...
+          consume g:
+            output(...) = ...
+  ```
+
+  `g` is nested *inside* `consume h` not because `g` depends on `h` (it does
+  not), but because `g`'s loop level (`x`) is inside `h`'s (`y`). Compute level,
+  not the producer/consumer graph, determines this nesting.
+
+* **One at root, one `compute_at`.** The root producer joins the top-level chain
+  (§4) and never nests inside the consumer; the `compute_at` producer nests
+  inside the consumer's loops as usual. See
+  [examples/producers_root_and_at.cpp](examples/producers_root_and_at.cpp).
 
 ### Loop elision: a `compute_at` Func may emit fewer loops than its dimensions
 

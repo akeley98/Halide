@@ -55,6 +55,38 @@ function's realization in that order. This backs loopdoc §4 ("realization
 order") and §8 step 2. Inlined Funcs remain in `env` and so still contribute
 edges to the ordering even though they get no realization.
 
+### Sibling tie-break
+
+`realization_order` builds, for each Func, the list of its direct callees, then
+runs a post-order DFS (`realization_order_dfs`). The *order siblings come out
+in* is fixed by sorting each callee list before the DFS:
+
+    // src/RealizationOrder.cpp, sort_funcs_by_name_and_counter (~256)
+    // sort key per Func: (prefix, visitation_counter, full_name)
+    string prefix = split_string(full_name, "$")[0];
+    while (!prefix.empty() && std::isdigit(prefix.back())) prefix.pop_back();
+    ...
+    std::sort(items.begin(), items.end());   // tuple<prefix, counter, name>
+
+The comment there explains the intent: make the order resistant to
+`unique_name` churn so that machine-generated schedules stay valid. The
+`counter` is the Func's first-visitation index, from
+
+    // src/RealizationOrder.cpp
+    map<string, uint64_t> compute_visitation_order(const vector<Function> &outputs) {
+        vector<Function> funcs = called_funcs_in_order_found(outputs);
+        ...
+    }
+
+and `called_funcs_in_order_found` (`src/FindCalls.cpp`) is a pre-order DFS from
+the outputs (`populate_environment_helper` inserts a Func, then recurses into
+its calls in IR order). This is the source basis for loopdoc §4's tie-break
+rule (prefix, then visitation order, then full name) — and explains why the
+left-to-right order of a defining expression does *not* decide which sibling
+producer is realized first (see
+`examples/tiebreak_realization_order.cpp`). micro_halide mirrors this in
+`LoopNestPrinter::sort_key` / `compute_visit_order`.
+
 ## 4. produce / consume nesting
 
 The `produce` and `consume` IR nodes are created in `build_realization` /
