@@ -128,8 +128,12 @@ output Func itself is never inlined — it is always realized at the root (§4).
 
 `f.compute_root()` sets `f`'s compute level to `root`: `f` is computed in full,
 once, at the outermost level, *before* anything that uses it. It gets its own
-loop nest (§5) wrapped in `produce f`, and everything that consumes it is nested
-under `consume f`.
+loop nest (§5) wrapped in `produce f`, and the rest of the program is nested
+under `consume f`. Note that `consume f` is **not** selective: as in §2, it
+mechanically wraps everything emitted after `produce f` — typically the entire
+remainder of the pipeline — regardless of which parts actually read `f`. (The
+name reflects that `f`'s values are now available to be consumed there, not that
+the wrapped code is exactly `f`'s readers.)
 
 When several Funcs are `compute_root` (plus the output, which is always at
 root), they are emitted in **realization order**: a topological order of the
@@ -507,22 +511,29 @@ The whole loop nest follows from the rules above, assembled into one procedure:
    (§5) means working from its outermost dimension inward, and at each dimension:
      * if that dimension was declared elided (§7), skip its `for` line but still
        treat the level as a valid injection site;
+     * if this `(f, dim)` level is the **store level** of some Func `h` whose
+       compute level is deeper (§8), open an `h`'s `store h:` node here first;
+       everything emitted below at this level — the intervening loops and `h`'s
+       own `produce`/`consume` further in — falls inside that `store h:`;
      * inject the Funcs filed at this `(f, dim)` level (from step 3) — each as a
-       `produce`/`consume` pair whose `consume` wraps the rest of `f`'s body. If
-       an injected Func's store level differs from its compute level (§8), wrap
-       it in a `store` node at the matching outer level instead (a `store_root`
-       Func's node goes at the very outermost level, around the whole nest);
+       `produce`/`consume` pair whose `consume` wraps the rest of `f`'s body;
      * descend to the next-inner dimension, bottoming out at the leaf
        `f(...) = ...`.
    Injection is recursive: an injected Func's own loop nest is emitted the same
    way, so a Func filed inside a Func that is itself filed inside a third nests
-   accordingly (§7).
+   accordingly (§7). A Func scheduled `store_root()` is the special case where
+   its `store` node opens at the very outermost level, wrapping the whole nest
+   (it has no `for`-level host to attach to).
 
-[examples/many_compute_root.cpp](examples/many_compute_root.cpp) puts all of
-this together: `f1`, `f2`, `f3` are `compute_root` and so form the top-level
-chain in that order; `f4` is `compute_at(output, y)` and is injected under the
-output's `y` loop; and `clamped` is inlined, so it never appears — it is folded
-into `f1`'s leaf.
+[examples/many_compute_root.cpp](examples/many_compute_root.cpp) puts the
+core pieces together: `f1`, `f2`, `f3` are `compute_root` and so form the
+top-level chain in that order; `f4` is `compute_at(output, y)` and is injected
+under the output's `y` loop; and `clamped` is inlined, so it never appears — it
+is folded into `f1`'s leaf.
+[examples/many_store_at.cpp](examples/many_store_at.cpp) extends it to exercise
+the storage level: a `store_root` Func, a `store_at`-at-an-outer-loop Func
+(distinct `store`/compute levels), and a Func whose store level equals its
+compute level (no `store` node).
 
 ---
 
