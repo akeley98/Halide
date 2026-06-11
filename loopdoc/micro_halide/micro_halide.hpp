@@ -170,6 +170,18 @@ struct FuncContents
     std::shared_ptr<FuncContents> store_func; // host, for store_at
     std::string store_var;                 // host loop var name, for store_at
 
+    // Hoist-storage level (where the physical allocation is placed), set by
+    // hoist_storage / hoist_storage_root. Has NO effect on print_loop_nest
+    // output (see loopdoc.md section 8); it only adds legality constraints.
+    //
+    // NOTE TO MICRO-AGENT: the legality of a hoist-storage level is NOT yet
+    // implemented -- it is your task, per loopdoc.md section 8. The fields below
+    // just record what was requested; the printer ignores them.
+    bool has_hoist_level = false;          // a hoist-storage level was set
+    bool hoist_is_root = false;            // hoist_storage_root() (else hoist_storage)
+    std::shared_ptr<FuncContents> hoist_func; // host, for hoist_storage
+    std::string hoist_var;                 // host loop var name, for hoist_storage
+
     // Names of this Func's loop variables that Halide elides because their
     // required extent is provably 1 (a "point loop"). See `micro_halide_collapses`
     // below and loopdoc.md: this is *declared* per example (it depends on bounds
@@ -337,6 +349,27 @@ class Func
         contents->store_is_root = true;
         contents->store_func.reset();
         contents->store_var.clear();
+        return *this;
+    }
+
+    // hoist_storage / hoist_storage_root: record the hoist-storage level. This
+    // has NO effect on the printed nest; only legality (for the micro-agent to
+    // implement from loopdoc.md section 8) depends on it.
+    Func &hoist_storage(const Func &f, const Var &var)
+    {
+        contents->has_hoist_level = true;
+        contents->hoist_is_root = false;
+        contents->hoist_func = f.contents;
+        contents->hoist_var = var.name();
+        return *this;
+    }
+
+    Func &hoist_storage_root()
+    {
+        contents->has_hoist_level = true;
+        contents->hoist_is_root = true;
+        contents->hoist_func.reset();
+        contents->hoist_var.clear();
         return *this;
     }
 

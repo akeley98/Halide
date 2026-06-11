@@ -91,8 +91,15 @@ Marking convention:
         store node and constant bounds, the latter normalized away, are visible).
         If a later milestone needs to show them, it will be via different output.
 
-[ ] `hoist_storage`, `hoist_storage_root`
+[WIP] `hoist_storage`, `hoist_storage_root`
     NOTES:
+      * FINDING: hoist_storage / hoist_storage_root do NOT change print_loop_nest
+        output at all (verified: legal cases print identically to the same
+        schedule without hoist). They move the physical allocation without
+        triggering sliding window. The ONLY observable effect is errors when
+        illegal: (a) hoist on an inlined Func; (b) hoist level inside the store
+        level (which must enclose compute). So this milestone is purely about
+        legality + a no-op regression guard.
 
 [ ] `split`, `fuse`, `tile`, `reorder`
     NOTES:
