@@ -1,6 +1,6 @@
 # Source evidence: loop-nest construction (bootstrap subset)
 
-This file backs the claims in [../loopdoc.md](../loopdoc.md) §§3–10 with
+This file backs the claims in [../loopdoc.md](../loopdoc.md) §§3–11 with
 citations into the Halide compiler. Paths are relative to the Halide source
 root (`../src` from the loopdoc directory). Line numbers are approximate and
 may drift; the surrounding function names are the stable anchors.
@@ -442,3 +442,71 @@ and consumed vars are gone. `g.compute_at(out, x)` after `out.fuse(x, y, xy)`
 fails the `ComputeLegalSchedules` lookup (§6 above) since no loop named `x`
 remains — only `xy` (and `outermost`/`root`). Backs
 `neg_compute_at_fused_away.cpp` and `split_compute_at.cpp`.
+
+## 11. Update (reduction) definitions: stages
+
+Backs loopdoc §10.
+
+### A Func is a list of stages
+
+`Function` stores one initial `Definition` plus a vector of update
+`Definition`s (`src/Function.h`):
+
+    const Definition &definition() const;          // stage 0 (pure)
+    const std::vector<Definition> &updates() const; // stages 1..k
+    bool has_update_definition() const;
+
+Each `Definition` has its **own** `StageSchedule` (`def.schedule()`) — its own
+`dims` list and `splits` — which is why `split`/`reorder`/etc. apply per stage
+(`f` schedules `definition()`; `f.update(i)` schedules `updates()[i]`). The
+pure stage's `dims` are the pure args; an update stage's `dims` are built at
+definition time from the free `Var`s on its left-hand side plus the `RVar`s of
+its `ReductionDomain`, with the reduction vars placed innermost.
+
+### All stages share one `produce` (sibling nests, no inner consume)
+
+The injector builds each stage's loop nest separately and concatenates them
+into a single producer `Stmt` (`InjectFunctionRealization`, `build_pipeline_group`,
+`src/ScheduleFunctions.cpp` ~1808):
+
+    for (const auto &func_stage : stage_order) {
+        string def_prefix = f.name() + ".s" + to_string(func_stage.second) + ".";
+        const auto &def = (func_stage.second == 0) ? f.definition()
+                                                   : f.updates()[func_stage.second - 1];
+        Stmt produce_def = build_produce_definition(f, def_prefix, def,
+                                                    func_stage.second > 0, ...);
+        producer = inject_stmt(producer, produce_def, def.schedule().fuse_level().level);
+    }
+
+The combined `producer` is wrapped in exactly one `ProducerConsumer` node
+(`build_pipeline_group` -> `ProducerConsumer::make(... is_producer=true ...)`),
+which `PrintLoopNest` prints as the single `produce f:`; the stages appear as
+consecutive loop nests inside it. There is no `consume` between stages — the
+`consume f` (if any) wraps the whole producer, because consumers read the final
+post-update buffer. Stages are named `f.s0.`, `f.s1.`, … via `def_prefix`.
+Backs `hist_1d`, `sum_reduction`, `two_updates`, `update_2d_rdom`.
+
+### Per-stage scheduling
+
+Because each `def.schedule().dims()` is independent, a transform on
+`f.update(0)` rewrites only that update's `dims` (§10 above; `split`/`reorder`
+mechanics are §10 of this file applied to the update's list, which may contain
+`RVar`s). Backs `update_stage_split`, `update_stage_reorder`. The `RVar`-reorder
+legality check that this doc deliberately leaves unmodeled lives in
+`Stage::reorder` (`src/Func.cpp` ~1845): it calls `prove_associativity` and
+errors if a pair of impure RVars would be swapped in a non-commutative /
+non-associative reduction — a semantic test on the update arithmetic, which
+`micro_halide`'s dependency-only `Expr` cannot perform.
+
+### Compute level is per-Func; legal sites span all stages
+
+`compute_at`/`store_at` are properties of the `Function` (its `FuncSchedule`),
+so the whole multi-stage `producer` is injected at the chosen site
+(`func_update_compute_at`). `ComputeLegalSchedules` (§6 above) walks the entire
+loop nest, so its `register_use` fires at **every** use across **every** stage;
+the legal-site set is the intersection of the enclosing-loop stacks over all of
+them. An `RVar` loop appears only inside its own stage's body, so a producer
+also used by another stage cannot be computed there. Backs `producer_at_rvar`
+(legal: `p` used only in the update's reduction) and
+`neg_compute_at_update_rvar` (illegal: `p` used in both the pure and update
+stages, so the update's `r` loop does not enclose the pure-stage use).

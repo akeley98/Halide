@@ -5,14 +5,14 @@ nest*, at the level of detail needed to predict the output of
 `Func::print_loop_nest()` by hand. It is built up holistically: each section
 adds to a single mental model rather than describing an isolated feature.
 
-> Scope of this revision: the programming model, pure (non-update) Funcs, the
-> default (inline) schedule, `compute_root`, `compute_at`, `store_at` /
-> `store_root`, `hoist_storage` / `hoist_storage_root`, the loop transforms
-> `split` / `fuse` / `reorder` / `tile`, and the `print_loop_nest()` output
-> format. Update definitions, wrappers (`in`/`clone_in`), loop-type directives
-> (`parallel`/`vectorize`/`unroll`), and GPU scheduling are deferred to later
-> revisions. Where one of those interacts with the model below in a way you can
-> already observe, it is flagged explicitly.
+> Scope of this revision: the programming model, pure Funcs, the default
+> (inline) schedule, `compute_root`, `compute_at`, `store_at` / `store_root`,
+> `hoist_storage` / `hoist_storage_root`, the loop transforms `split` / `fuse` /
+> `reorder` / `tile`, **update (reduction) definitions** with `RDom` / `RVar`,
+> and the `print_loop_nest()` output format. Wrappers (`in`/`clone_in`),
+> `rfactor`, loop-type directives (`parallel`/`vectorize`/`unroll`), and GPU
+> scheduling are deferred to later revisions. Where one of those interacts with
+> the model below in a way you can already observe, it is flagged explicitly.
 
 ---
 
@@ -43,13 +43,17 @@ storage used. This document is only about how the schedule maps to a loop nest.
     * its **name** (used for printing; see §7,
       and computation order tie-breaking, see §4),
     * its ordered list of **pure dimensions** (the `Var`s on the left-hand
-      side of its definition; the first listed is the *innermost* loop — see
-      §5),
+      side of its *initial* definition; the first listed is the *innermost*
+      loop — see §5),
+    * its ordered list of **stages**: an initial (pure) definition plus zero or
+      more **update definitions** (§10). A Func with no updates has just one
+      stage; each stage gets its own loops and its own per-stage schedule.
     * the set of **other Funcs it reads from** (its *producers*), derived from
-      its definition's right-hand side,
-    * its **compute level**: `inline` (the default), `root`, or `at(host,
-      var)`. This is the only piece of state the bootstrap schedule directives
-      change.
+      the right-hand sides (and update left-hand-side indices) of all its
+      stages,
+    * its **compute level** and **store level**: `inline` (the default),
+      `root`, or `at(host, var)`. These apply to the Func as a whole (all
+      stages move together).
 
 * **`ImageParam`** — an input buffer. It is a *leaf*: it is never computed and
   never appears in the loop nest. A Func that reads an `ImageParam` simply has
@@ -63,13 +67,21 @@ storage used. This document is only about how the schedule maps to a loop nest.
   Exception: 1-iteration loops are removed; this relies on bounds inference,
   which depends more deeply on the contents of an Expr. See §8.
 
+* **`RDom` / `RVar`** — a *reduction domain* and its *reduction variables*. An
+  `RDom r(min, extent, …)` declares one or more `RVar`s (`r.x`, `r.y`, …, or
+  just `r` for a 1-D domain) used in **update definitions** (§10). An `RVar`
+  names a loop just like a `Var`, but the loop iterates the declared reduction
+  range and is *ordered* (unlike a pure `Var`, its iterations may carry a
+  dependency). RVars only appear in update definitions and produce extra loops
+  there.
+
 The set of Funcs, connected by producer edges, forms a directed acyclic graph
 (the *pipeline*). One Func is the **output**: the one whose
 `print_loop_nest()` (or `realize`) you call. Everything reachable from the
 output by following producer edges is part of the pipeline; nothing else is.
 
 See [examples/two_funcs_root.cpp](examples/two_funcs_root.cpp) for the smallest
-two-stage pipeline.
+two-Func pipeline.
 
 ---
 
@@ -216,6 +228,11 @@ rewrite it:
 So `f(x, y, c) = ...` has dimension list `[x, y, c]` and produces, from outside
 in, `for c: for y: for x:`. This is row-major traversal: the first dimension
 varies fastest. (`reorder`, §6, is what changes this order.)
+
+(Strictly, the dimension list belongs to a *stage*. A Func with only a pure
+definition has one stage, described here. A Func with update definitions has
+several stages, each with its own dimension list — possibly including reduction
+loops — emitted one after another inside the single `produce f`; see §10.)
 
 ```
 produce f:
@@ -446,7 +463,7 @@ which is undecidable in general and out of scope for this document. We therefore
 which loops to drop. The split between *structure* (taught here, derived from
 the schedule) and *elision* (declared) is described in the README. The loop
 *structure* — produce/consume placement, ordering, and the surviving loops — is
-fully determined by the schedule as described in §§4–10.
+fully determined by the schedule as described in §§4–11.
 
 ### An elided loop is still a `compute_at` injection site
 
@@ -615,7 +632,129 @@ that it adds these two legality constraints.
 
 ---
 
-## 10. Putting the algorithm together (how the nest is built)
+## 10. Update (reduction) definitions
+
+So far each Func has had a single definition. A Func may also have **update
+definitions**: extra assignments, written after the initial one, that *modify*
+the Func's values in place. The initial definition plus the updates form an
+ordered list of **stages**.
+
+```cpp
+Func hist("hist");
+hist(x) = 0;              // stage 0: the pure / initial definition
+RDom r(0, N, "r");
+hist(in(r)) += 1;         // stage 1: an update definition
+```
+
+Each stage runs to completion before the next begins, and they all write to the
+**same** storage. A Func with `k` update definitions has `k + 1` stages,
+numbered `s0` (pure), `s1`, …, `sk` in definition order.
+
+### Stages share one `produce`
+
+All of a Func's stages are emitted **inside the single `produce f` block**, as
+consecutive sibling loop nests — *not* as separate `produce`/`consume` blocks.
+There is no `consume` between stages; a consumer's `consume f` (if any) wraps the
+whole thing, because a reader sees the Func's *final*, post-update values. For
+the histogram above (see [examples/hist_1d.cpp](examples/hist_1d.cpp)):
+
+```
+produce hist:
+  for x:              # stage 0: initialise hist(x) = 0
+    hist(...) = ...
+  for r:              # stage 1: the scatter update
+    hist(...) = ...
+```
+
+### A stage's loops: free `Var`s plus `RVar`s
+
+Each stage has its **own dimension list** (§5), built from its own
+left-hand side:
+
+> An update stage loops over the **free `Var`s** appearing on its left-hand
+> side **plus the `RVar`s** of any `RDom` it uses. Default order, innermost
+> first: the `RVar`s are innermost (in declaration order, the first-declared
+> being the *outermost* of them), and the free pure `Var`s sit outside them (in
+> the usual order, first LHS argument innermost among the pures). A pure
+> dimension whose left-hand-side slot is occupied by an `RVar` or a general
+> expression (e.g. the `in(r)` index in the histogram, or `f(x, r)`) does **not**
+> produce a loop in that stage.
+
+`RVar` loops print like any other (`for r in [min, max]`); the harness drops the
+constant bound, so they read as plain `for`. A `k`-dimensional `RDom` contributes
+`k` nested reduction loops. So `f(x, y) += in(x + r.x, y + r.y)` with a 2-D
+`RDom` gives the update stage loops `for y: for x: for r.x: for r.y:`
+([examples/update_2d_rdom.cpp](examples/update_2d_rdom.cpp)), while the pure
+stage `f(x, y) = 0` just gives `for y: for x:`. A reduction with no free
+variable on the left, like the histogram scatter, gives a stage with only the
+reduction loop(s).
+
+* [examples/sum_reduction.cpp](examples/sum_reduction.cpp): `f(x) = 0; f(x) +=
+  in(x, r)` — the pure stage loops over `x`, the update stage over `x` then the
+  reduction `r`.
+* [examples/two_updates.cpp](examples/two_updates.cpp): three stages (`s0`, `s1`,
+  `s2`) printed in order inside one `produce`.
+
+### Scheduling stages independently
+
+Every stage carries its own schedule, so the loop transforms of §6 (and, later,
+loop types) apply **per stage**:
+
+* `f.<directive>(…)` schedules the **pure** stage (`s0`).
+* `f.update(i).<directive>(…)` schedules update stage `s(i+1)` (so
+  `f.update(0)` is the first update).
+
+A `split`/`reorder`/`fuse`/`tile` on one stage rewrites only *that stage's*
+dimension list and leaves the others alone — and these transforms treat `RVar`s
+just like `Var`s in the list. In [examples/update_stage_split.cpp](examples/update_stage_split.cpp)
+only the update stage's `x` is split; the pure stage is untouched.
+[examples/update_stage_reorder.cpp](examples/update_stage_reorder.cpp) reorders a
+free `Var` inside the reduction loop of the update stage only.
+
+(One legality note that this document does **not** model mechanically: an `RVar`
+loop is *ordered*, so reordering two `RVar`s — or otherwise reshuffling them past
+each other — is rejected unless the reduction is associative *and* commutative,
+which Halide decides by analysing the update's arithmetic. Predicting that needs
+the actual expression semantics, which is out of scope here, just like bounds
+inference for loop elision in §8.)
+
+### Compute / store level, and `RVar`s as injection sites
+
+A Func's compute and store levels (§§7–9) apply to the Func as a **whole**: the
+entire `produce f` — all its stages — is realized together at the chosen site.
+Computing a Func with updates inside a consumer therefore drops the whole
+multi-stage block at that loop level
+([examples/func_update_compute_at.cpp](examples/func_update_compute_at.cpp)).
+
+Going the other way, a stage's loops — **including its `RVar` loops** — are
+valid sites at which to inject *other* Funcs. A producer read inside a reduction
+can be `compute_at` that reduction loop, and it is placed inside that specific
+stage's loop ([examples/producer_at_rvar.cpp](examples/producer_at_rvar.cpp)):
+
+```
+produce f:
+  for x:                      # stage 0
+    f(...) = ...
+  for x:                      # stage 1
+    for r:
+      produce p:              # p computed inside the reduction loop
+        p(...) = ...
+      consume p:
+        f(...) = ...
+```
+
+The legality rule of §8 carries over, now spanning **all** stages: a producer's
+compute site must enclose *every* use of it, across every stage that reads it.
+An `RVar` loop exists only within its own stage, so a producer that is also read
+by another stage cannot be computed there — its only common enclosing sites are
+the loops shared by all the using stages (and `root`). In
+[examples/neg_compute_at_update_rvar.cpp](examples/neg_compute_at_update_rvar.cpp),
+`p` is read by both the pure stage and the update stage, so computing it at the
+update's reduction loop is illegal.
+
+---
+
+## 11. Putting the algorithm together (how the nest is built)
 
 The whole loop nest follows from the rules above, assembled into one procedure:
 
@@ -641,18 +780,22 @@ The whole loop nest follows from the rules above, assembled into one procedure:
    step, so `v` is matched against the post-transform dimensions.
 
 4. **Emit from the outside in.** Walk the top-level chain (§4): for each Func
-   print `produce f`, then `f`'s loop nest, then — for every Func but the last —
-   `consume f` wrapping everything that follows. Printing a Func's loop nest
-   (§5) means working through its dimension list (§5, after the §6 transforms)
-   from its outermost dimension inward, and at each dimension:
+   print `produce f`, then `f`'s loop nest(s), then — for every Func but the
+   last — `consume f` wrapping everything that follows. A Func with update
+   definitions (§10) emits **one loop nest per stage**, in stage order, all
+   inside that single `produce f` (no `consume` between stages). Printing a
+   *stage's* loop nest (§5) means working through *that stage's* dimension list
+   (after its own §6 transforms; an update stage's list also contains its
+   `RVar`s) from its outermost dimension inward, and at each dimension:
      * if that dimension was declared elided (§8), skip its `for` line but still
        treat the level as a valid injection site;
-     * if this `(f, dim)` level is the **store level** of some Func `h` whose
-       compute level is deeper (§9), open an `h`'s `store h:` node here first;
-       everything emitted below at this level — the intervening loops and `h`'s
-       own `produce`/`consume` further in — falls inside that `store h:`;
-     * inject the Funcs filed at this `(f, dim)` level (from step 3) — each as a
-       `produce`/`consume` pair whose `consume` wraps the rest of `f`'s body;
+     * if this `(f, stage, dim)` level is the **store level** of some Func `h`
+       whose compute level is deeper (§9), open an `h`'s `store h:` node here
+       first; everything emitted below at this level — the intervening loops and
+       `h`'s own `produce`/`consume` further in — falls inside that `store h:`;
+     * inject the Funcs filed at this `(f, stage, dim)` level (from step 3) —
+       each as a `produce`/`consume` pair whose `consume` wraps the rest of the
+       stage's body;
      * descend to the next-inner dimension, bottoming out at the leaf
        `f(...) = ...`.
    Injection is recursive: an injected Func's own loop nest is emitted the same
