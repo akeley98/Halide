@@ -558,42 +558,58 @@ multi-stage block at that loop level
 
 ### When a `compute_at` is illegal
 
-`f.compute_at(g, v)` is not always legal. Halide computes the set of **legal
-compute sites** for `f` as the loop levels that **enclose every use of `f`** —
-formally, the intersection of the loop-level stacks at all of `f`'s call sites
-(across **all** stages that read `f`), plus `root`. If the requested site is not
-in that set, Halide rejects the schedule with *"Func f is computed at the
-following invalid location"* and lists the legal ones; no loop nest is produced.
-Ways to land outside the legal set:
+`f.compute_at(g, v)` is not always legal. Because `f` is injected **once into
+each stage of `g` that reads `f`** (previous subsection) and every one of those
+realizations lives inside `g`, a schedule is legal only if that injection can
+reach *every* read of `f`. Halide formalizes this as a set of **legal compute
+sites**: the loop levels that **enclose every use of `f`** — the intersection,
+over all of `f`'s call sites (across **every stage of every consumer**), of the
+enclosing-loop stacks, plus `root`. If `(g, v)` is not in that set, Halide
+rejects the schedule with *"Func f is computed at the following invalid
+location"* (and lists the legal ones); no loop nest is produced.
 
-* **The loop does not exist.** `v` must be a current dimension of `g` (an
-  argument, a transform-created dimension, or an `RVar` loop). Naming a `Var`
-  that `g` never loops over has no site to inject into —
-  [examples/neg_compute_at_bad_var.cpp](examples/neg_compute_at_bad_var.cpp).
-* **The host is not a consumer.** `g` must actually read `f` (directly, or
-  through Funcs inlined into it); otherwise `g` has no point that needs `f` —
+Note the legality test is **per use, not per a single site**: with several
+stages there are several `produce f` blocks, each feeding only its own stage, so
+the requirement is that *each* reading stage gets a block enclosing *its* use —
+not that one block serves everyone. The ways to fall outside the set:
+
+* **`v` is missing from a stage that reads `f`.** `v` must name a loop that, *in
+  each stage of `g` that reads `f`*, encloses that stage's use — only then does
+  every reading stage have somewhere to inject `f`. Two flavors:
+    * `v` is not a dimension of `g` at all, so no stage has a loop to inject into
+      ([examples/neg_compute_at_bad_var.cpp](examples/neg_compute_at_bad_var.cpp)).
+    * `v` exists in some stages but not in a *reading* one. A reduction `RVar`
+      lives only in its own stage, so computing `f` at it is legal when that is
+      the **only** stage reading `f`
+      ([examples/producer_at_rvar.cpp](examples/producer_at_rvar.cpp)) but illegal
+      when another stage *also* reads `f` and has no such loop
+      ([examples/neg_compute_at_update_rvar.cpp](examples/neg_compute_at_update_rvar.cpp):
+      `p` is read by both the pure and the update stage, so the update's `r` loop
+      is not a legal site). When the loop *is* shared by every reading stage
+      (e.g. a pure `Var` carried through all of them) the site is legal and `f`
+      is injected into each
+      ([examples/cross_stage_compute_at_shared.cpp](examples/cross_stage_compute_at_shared.cpp)).
+
+* **`g` is not a consumer.** No stage of `g` reads `f` (directly or through Funcs
+  inlined into it), so nothing in `g` needs `f` —
   [examples/neg_compute_at_nonconsumer.cpp](examples/neg_compute_at_nonconsumer.cpp).
-* **A consumer lies outside the chosen site.** If `f` is read in more than one
-  place, the site must enclose *all* of them. Computing `f` inside one consumer
-  when another consumer (e.g. the output at root) also needs it leaves that
-  other read with no values. When `f` is used at two unrelated places the only
-  common enclosing site is `root` —
-  [examples/neg_compute_at_two_consumers.cpp](examples/neg_compute_at_two_consumers.cpp).
-* **A reduction loop does not enclose another stage's use.** The site must be a
-  loop present in *every* stage that reads the producer. An `RVar` loop exists
-  only within its own stage, so a producer also read by another stage cannot be
-  computed there —
-  [examples/neg_compute_at_update_rvar.cpp](examples/neg_compute_at_update_rvar.cpp),
-  where `p` is read by both the pure and update stages, so the update's `r` loop
-  is not a legal site.
 
-The third case is the fundamental one: a Func computed at a single site can only
-feed consumers within that site. Feeding consumers that live at different,
-non-nested locations is exactly what the wrapper Funcs `in()` / `clone_in()` (a
-later milestone) exist to enable; until then, such a schedule is simply illegal.
+* **`f` is read outside `g`.** Every realization of `f` sits inside `g`, so a use
+  of `f` in a *different* Func — or at `g`'s own outer scope — is never reached
+  and would read undefined values. The chosen level must enclose those uses too;
+  when `f` is read at two unrelated places the only level enclosing both is
+  `root`
+  ([examples/neg_compute_at_two_consumers.cpp](examples/neg_compute_at_two_consumers.cpp)).
 
-These are *negative* examples: both Halide and `micro_halide` must reject them
-(exit with an error) rather than print a loop nest.
+The last case is the fundamental one: `f` placed inside one host can only feed
+reads within that host. Feeding consumers that live at different, non-nested
+locations is exactly what the wrapper Funcs `in()` / `clone_in()` (a later
+milestone) enable; until then such a schedule is simply illegal.
+
+The illegal cases above are *negative* examples — both Halide and `micro_halide`
+must reject them (exit with an error) rather than print a loop nest — while the
+legal ones cited (`producer_at_rvar`, `cross_stage_compute_at_shared`) print a
+nest the two must match.
 
 ---
 
@@ -829,7 +845,7 @@ Halide's exact names. This matters because some Funcs are auto-named:
 §§5–10 assumed every inline Func is pure, and therefore non-realized (§4). This
 section handles the one leftover case: a **non-pure** Func (one with update
 definitions, §3) left at the default **inline** level. It is uncommon — it is
-essentially never the fast choice — so it is isolated here rather than woven
+probably not the fastest choice — so it is isolated here rather than woven
 through the earlier sections.
 
 A non-pure Func cannot be textually substituted (a reduction is not an
