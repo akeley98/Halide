@@ -209,12 +209,33 @@ Marking convention:
 
       * ===== STATE AT PAUSE (resume here) =====
         DOC REORG (done, committed): loopdoc.md was reorganized "algorithm-first"
-        per user request. New section order: 1 model, 2 reading, 3 a single
-        Func's loops AND its stages (update defs live here, as ALGORITHM), 4
-        inlining, 5 compute_root, 6 compute_at, 7 store/hoist, 8 split/fuse/
-        reorder/tile, 9 names, 10 assembly. src_doc cross-refs remapped to match;
-        src_doc §11 extended with the LoopLevel-wildcard + use-gating +
-        inline_to_provide findings.
+        and then TERMINOLOGY-CLEANED per user request. Final section order:
+        1 model, 2 reading, 3 single Func's loops AND its stages (update defs =
+        ALGORITHM), 4 TERMINOLOGY (pure/non-pure, realized/non-realized, inline),
+        5 inlining (PURE only now), 6 compute_root, 7 compute_at, 8 store/hoist,
+        9 split/fuse/reorder/tile, 10 names, 11 INLINED NON-PURE Funcs (the
+        deferred default), 12 assembly. src_doc cross-refs remapped to match;
+        src_doc §11 extended with LoopLevel-wildcard + use-gating +
+        inline_to_provide + the is_pure/can_be_inlined terminology evidence.
+        TERMINOLOGY RESOLUTION (Halide's own wart, now documented in loopdoc §4 +
+        §11 + src_doc): "inline" is a compute LEVEL name (default), NOT a synonym
+        for "non-realized". Halide uses "inline" for non-pure Funcs it must
+        realize (compute_inline() doc: update Func left inline "gets computed as
+        close to the innermost loop as possible"). So inline != non-realized; the
+        opposite of "realized" is "textually substituted". Only a PURE inline Func
+        is non-realized. §5 now covers ONLY pure inline; the non-pure default is
+        isolated in §11.
+        KEY FINDING (tested): default-inline of a NON-PURE Func == an explicit
+        compute_at(consumer, innermost-use-var) ONLY when all uses share a depth
+        (e.g. update_default_inline, weird_histogram_sampling -- single depth).
+        When a non-pure Func is read at DIFFERENT depths across a consumer's
+        stages, the default places it at each use's OWN innermost loop
+        independently (inline_to_provide fires per Provide) -- NOT expressible as
+        any single compute_at (one var can't be both g.s0.x and g.s1.r;
+        compute_at at the deeper rvar is illegal for the shallower stage). So the
+        non-pure inline default is a per-use-site materialization, strictly more
+        general than one compute_at. (Optional future example to pin this general
+        case; current deferred examples are the single-depth equivalent.)
         DATA-MODEL REFACTOR (done, committed): micro_halide now uses a uniform
         StageData per stage (stages[0]=pure); whole-Func state (levels, union
         producers) on FuncContents. micro_halide_collapses is per-stage:
@@ -227,11 +248,11 @@ Marking convention:
             and each injection computes its OWN region (so loop counts can differ
             per stage). loopdoc §6 "what (g,var) points to"; src/Schedule.cpp
             LoopLevel::match, src/ScheduleFunctions.cpp ~1299/~1682.
-        (b) DEFAULT for a Func with updates: it is NOT inlined (can't be) -- it is
-            materialized at the innermost use (inline_to_provide,
+        (b) DEFAULT for a Func with updates: left at the inline LEVEL but cannot
+            be substituted, so materialized at the innermost use (inline_to_provide,
             src/ScheduleFunctions.cpp ~1358), i.e. a produce/consume wrapped
-            around the consumer's leaf, recomputed each iteration. loopdoc §4
-            "Funcs that cannot be inlined".
+            around the consumer's leaf, recomputed each iteration. loopdoc §11
+            "Inlined non-pure Funcs" (see also the per-use-site finding above).
 
         NOT-YET-DONE -- the next micro-agent delegation must implement (from the
         rewritten loopdoc.md ALONE) and these 4 examples must go green:

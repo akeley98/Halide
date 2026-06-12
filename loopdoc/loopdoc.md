@@ -24,14 +24,14 @@ A Halide program is built in two separable parts:
    optional **update definitions** that refine those values (§3).
 2. **The schedule** — *when and where* each value is computed and stored. This
    is expressed by scheduling directives (`compute_root`, `compute_at`, …)
-   attached to each `Func` (§§4–8).
+   attached to each `Func` (§§5–9).
 
 Crucially, the schedule never changes the *result*; it only changes the order
 of computation, the amount of redundant recomputation, and the temporary
 storage used. This document is only about how the program maps to a loop nest.
 
 This split drives the document's order: §§2–3 cover the loops implied by the
-**algorithm alone** (a single Func, possibly with update stages), and §§4–8
+**algorithm alone** (a single Func, possibly with update stages), and §§5–9
 add the **schedule** that places and reshapes those loops across the pipeline.
 
 ### Objects and their conceptual state
@@ -44,8 +44,8 @@ add the **schedule** that places and reshapes those loops across the pipeline.
   `Func` produces another handle to the *same* underlying function; scheduling
   through either handle affects the one function. The conceptual state of a
   Func is:
-    * its **name** (used for printing; see §9, and computation-order
-      tie-breaking, see §5),
+    * its **name** (used for printing; see §10, and computation-order
+      tie-breaking, see §6),
     * its ordered list of **stages**: an initial (pure) definition plus zero or
       more **update definitions** (§3). Each stage has its own ordered list of
       **loop dimensions** (the `Var`s/`RVar`s that drive its loops; the first
@@ -54,7 +54,7 @@ add the **schedule** that places and reshapes those loops across the pipeline.
       the right-hand sides (and update left-hand-side indices) of all its
       stages,
     * its **compute level** and **store level** — `inline` (the default),
-      `root`, or `at(host, var)` — set by the schedule (§§4–7). These apply to
+      `root`, or `at(host, var)` — set by the schedule (§§5–8). These apply to
       the Func as a whole (all stages move together).
 
 * **`ImageParam`** — an input buffer. It is a *leaf*: it is never computed and
@@ -67,7 +67,7 @@ add the **schedule** that places and reshapes those loops across the pipeline.
   Pointwise arithmetic, constants, `cast<T>(...)`, and the like are invisible
   in the loop nest — they live *inside* the `f(...) = ...` leaf line.
   Exception: 1-iteration loops are removed; this relies on bounds inference,
-  which depends more deeply on the contents of an Expr. See §6.
+  which depends more deeply on the contents of an Expr. See §7.
 
 * **`RDom` / `RVar`** — a *reduction domain* and its *reduction variables*. An
   `RDom r(min, extent, …)` declares one or more `RVar`s (`r.x`, `r.y`, …, or
@@ -97,7 +97,7 @@ produce <f>:        # contains a region computing (storing into) Func f
 consume <f>:        # contains a region that reads f's stored values
 for <var>:          # a loop over one dimension
 <f>(...) = ...      # the leaf: store one point of f (arguments and RHS elided)
-store <f>:          # f's storage scope, shown only when it differs from compute (§7)
+store <f>:          # f's storage scope, shown only when it differs from compute (§8)
 ```
 
 Indentation is containment. `produce f` contains the loops that compute `f` and
@@ -105,7 +105,7 @@ ends at the matching `consume`/dedent; everything that reads `f` is nested
 under `consume f`. A `for` contains its loop body. The leaf `f(...) = ...` is
 the body executed at the innermost point. `consume`/`store` arise only once the
 schedule places multiple Funcs or separates storage from computation, so they
-are introduced with the schedule (§§4–7); §3 needs only `produce`, `for`, and
+are introduced with the schedule (§§5–8); §3 needs only `produce`, `for`, and
 the leaf.
 
 Two cosmetic details are *not* part of the model and are normalized away by the
@@ -136,8 +136,8 @@ list of **loop dimensions**:
 
 So `f(x, y, c) = ...` has dimension list `[x, y, c]` and produces, from outside
 in, `for c: for y: for x:`. This is row-major traversal: the first dimension
-varies fastest. (A scheduling directive, `reorder` (§8), can change this order;
-`split`/`fuse`/`tile` (§8) can change the *number* of loops.)
+varies fastest. (A scheduling directive, `reorder` (§9), can change this order;
+`split`/`fuse`/`tile` (§9) can change the *number* of loops.)
 
 ```
 produce f:
@@ -214,24 +214,62 @@ only the reduction loop(s).
 
 So the number of `for` loops a stage emits equals the length of *that stage's*
 dimension list. (Two things in the schedule modify this: `compute_at` can elide
-single-point loops, §6; and `split`/`fuse`/`reorder`/`tile` reshape a stage's
-dimension list, §8 — and those reshape each stage independently.)
+single-point loops, §7; and `split`/`fuse`/`reorder`/`tile` reshape a stage's
+dimension list, §9 — and those reshape each stage independently.)
 
 > One legality note that this document does **not** model mechanically: an
 > `RVar` loop is *ordered*, so reordering two `RVar`s — or otherwise reshuffling
 > them past each other — is rejected unless the reduction is associative *and*
 > commutative, which Halide decides by analysing the update's arithmetic.
 > Predicting that needs the actual expression semantics, which is out of scope
-> here, just like bounds inference for loop elision (§6).
+> here, just like bounds inference for loop elision (§7).
 
 ---
 
-## 4. The default schedule: inlining
+## 4. Terminology: pure/non-pure, realized, inline
 
-We now turn to the *schedule*. By default every Func **except the output is
-inlined**. An inlined Func has no loops and no `produce`/`consume` of its own:
-wherever a consumer reads it, the inlined Func's definition is substituted in,
-as if textually pasted. It simply *disappears* from the loop nest.
+Three pairs of terms run through the rest of this document. They are worth
+pinning down precisely, because one of them ("inline") is overloaded — by Halide
+itself.
+
+* **Pure vs. non-pure Func.** A Func is **pure** if it has *only* its initial
+  definition — no update definitions (§3). A Func with one or more update
+  definitions is **non-pure**. (This is exactly Halide's `Function::is_pure()`.)
+
+* **Realized vs. non-realized.** A Func is **realized** when it is computed into
+  an allocated buffer somewhere in the nest — it gets its own `produce` (and,
+  where something reads it, `consume`) block. A **non-realized** Func has no
+  block of its own: its definition is pasted into every call site (textual
+  substitution), so it never appears in the loop nest at all.
+
+* **Inline.** "Inline" is the name of a Func's *default compute level* — the
+  other two levels, set by the schedule, are `root` (§6) and `at` (§7). It is
+  tempting to read "inline" as a synonym for "non-realized," and for a **pure**
+  Func that is exactly right: a pure inline Func is textually substituted and
+  does not appear. **But "inline" is a *level*, not a promise of
+  non-realization.** A non-pure Func cannot be substituted (a reduction is not
+  an expression), so the inline level *realizes* it instead — the awkward case
+  deferred to §11. Until then, every inline Func we discuss is pure (hence
+  non-realized).
+
+> **Terminology wart — Halide's, not this document's.** Halide applies "inline"
+> to the default level of *all* Funcs, including non-pure ones it must realize:
+> its own `compute_inline()` documentation says a Func with an update
+> definition, left inline, "gets computed as close to the innermost loop as
+> possible" (§11). So in Halide **"inline" and "realized" are not opposites** —
+> the true opposite of "realized" is "textually substituted." This document
+> keeps "inline" for the level and "realized/non-realized" for whether a block
+> is emitted, and says "pure inline" when it means the substituted case.
+
+---
+
+## 5. The default schedule: inlining
+
+We now turn to the *schedule*. By default every **pure** Func (§4) except the
+output is **inlined**, i.e. non-realized: it has no loops and no
+`produce`/`consume` of its own. Wherever a consumer reads it, its definition is
+substituted in, as if textually pasted — it simply *disappears* from the loop
+nest.
 
 So a pipeline of pure Funcs with no scheduling at all collapses to a single
 loop nest over the output's dimensions, with every producer folded into the
@@ -241,43 +279,20 @@ loops are emitted.
 
 Inlining trades memory for redundant computation: each use re-evaluates the
 producer (here `producer` is effectively computed twice per output pixel). The
-output Func itself is never inlined — it is always realized at the root (§5).
+output Func is never inlined — it is always realized at the root (§6).
 
-### Funcs that cannot be inlined: the default for update definitions
+Two Funcs are *not* covered by this default and are picked up later:
 
-Only a Func with a *pure* definition (no updates) can be textually inlined — an
-update definition (§3) cannot be pasted in as an expression. So for a Func with
-updates the default schedule is *still* "inline", but it means something
-slightly different: Halide **materializes the Func at the innermost point where
-it is used** — a small `produce f` / `consume f` block wrapped around the
-consumer's innermost loop (in fact, around the very leaf statement that reads
-it), recomputed on every iteration, exactly where and as often as inlining a
-pure Func would re-evaluate it. So an unscheduled reduction Func feeding
-`g(x, y) = f(x)` (see [examples/update_default_inline.cpp](examples/update_default_inline.cpp))
-appears as:
-
-```
-produce g:
-  for y:
-    for x:
-      produce f:          # all of f's stages, recomputed every (x, y)
-        f(...) = ...
-        for r:
-          f(...) = ...
-      consume f:
-        g(...) = ...
-```
-
-This is the deepest legal site (the innermost loop of the consumer that
-encloses every use of `f`; §6) — the same position inlining a pure Func would
-occupy. Like inlining, it maximises recomputation and minimises storage; lifting
-it out is exactly what `compute_root` / `compute_at` are for.
-
-<!-- User: explain what is the default behavior for the non-pure? See (but don't fix) examples/weird_histogram_sampling.cpp. The explanation for this default does not necessarily belong in this section (since it's not inlined) but should be placed elsewhere and referenced here. -->
+* the **output**, always realized at root (§6);
+* a **non-pure** Func (one with update definitions), which is *also* left at the
+  inline level by default but, being unable to be substituted, is realized at
+  the innermost point of each use. Because that behavior leans on `compute_at`
+  (§7) to describe, it is deferred to §11; it is rare in practice and never the
+  fast choice, so postponing it keeps the cleaner concepts uncluttered.
 
 ---
 
-## 5. `compute_root`: realize once at the top
+## 6. `compute_root`: realize once at the top
 
 `f.compute_root()` sets `f`'s compute level to `root`: `f` is computed in full,
 once, at the outermost level, *before* anything that uses it. It gets its own
@@ -353,11 +368,11 @@ first because `"a2d" < "b1d"`. The left-to-right order of `+` is irrelevant. The
 first-visitation tie-break only matters when two prefixes are equal (e.g.
 auto-named Funcs sharing a prefix); examples here use distinct prefixes so the
 order is purely alphabetical. This same ordering decides the order of sibling
-producers filed at any single `compute_at` level, not just root (§6).
+producers filed at any single `compute_at` level, not just root (§7).
 
 ---
 
-## 6. `compute_at`: realize inside a consumer's loop
+## 7. `compute_at`: realize inside a consumer's loop
 
 `f.compute_at(g, var)` sets `f`'s level to `at(g, var)`: `f` is realized
 *inside* `g`'s loop over `var`, recomputed on each iteration of that loop, just
@@ -385,7 +400,7 @@ computed inside another nests accordingly, because each Func's loops are
 generated the same way and children are injected at each of *its* loop levels.
 
 The named `var` must be a dimension of `g` — one of `g`'s argument `Var`s, or a
-dimension a loop transform created on `g` (§8), or one of `g`'s `RVar` loops
+dimension a loop transform created on `g` (§9), or one of `g`'s `RVar` loops
 (see "reduction loops as sites" below).
 
 ### Multiple producers of one consumer
@@ -395,7 +410,7 @@ When a consumer reads several producers, each producer is placed according to
 
 * **Both at the same level** (e.g. both `compute_at(output, y)`, or both at
   root): they form a nested produce/consume chain at that level, ordered by the
-  realization-order tie-break (§5) — alphabetical by name, *not* expression
+  realization-order tie-break (§6) — alphabetical by name, *not* expression
   order. The first producer's `consume` wraps the second producer, whose
   `consume` wraps the rest. (Root is just the special case where the "level" is
   the outermost one; see [examples/diamond_root.cpp](examples/diamond_root.cpp).)
@@ -424,7 +439,7 @@ When a consumer reads several producers, each producer is placed according to
   not the producer/consumer graph, determines this nesting.
 
 * **One at root, one `compute_at`.** The root producer joins the top-level chain
-  (§5) and never nests inside the consumer; the `compute_at` producer nests
+  (§6) and never nests inside the consumer; the `compute_at` producer nests
   inside the consumer's loops as usual. See
   [examples/producers_root_and_at.cpp](examples/producers_root_and_at.cpp).
 
@@ -467,7 +482,7 @@ schedule API: `micro_halide_collapses(f, …)` targets the pure stage and
 *structure* (taught here, derived from the schedule) and *elision* (declared) is
 described in the README. The loop *structure* — produce/consume placement,
 ordering, and the surviving loops — is fully determined by the schedule as
-described in §§4–8.
+described in §§5–9.
 
 ### An elided loop is still a `compute_at` injection site
 
@@ -525,7 +540,7 @@ Two consequences:
   into **each** of those stages
   ([examples/cross_stage_compute_at_shared.cpp](examples/cross_stage_compute_at_shared.cpp)).
   Each injection is independent, so `f`'s *required region* — and hence how many
-  of its loops survive (§6 elision) — is computed **per stage**: the same
+  of its loops survive (§7 elision) — is computed **per stage**: the same
   `compute_at` can leave `f` with no loops in one stage and a real loop in
   another, if the two stages read different ranges of `f`. (This per-stage
   elision is why `micro_halide_collapses` is declared per stage; see above.)
@@ -577,9 +592,9 @@ These are *negative* examples: both Halide and `micro_halide` must reject them
 
 ---
 
-## 7. `store_at` / `store_root`: storage level vs. compute level
+## 8. `store_at` / `store_root`: storage level vs. compute level
 
-So far a Func has had a single *compute level* (§5, §6) that fixes both where it
+So far a Func has had a single *compute level* (§6, §7) that fixes both where it
 is computed and where its storage is allocated. These can be separated. Besides
 its compute level, a Func has a **store level**: the loop at which its buffer is
 allocated. By default the store level **equals** the compute level. Two
@@ -606,7 +621,7 @@ its compute level.** When they are equal — the default, and also
 When shown, the `store f:` node sits at the **store level** and contains
 everything from there down to `f`'s `produce`/`consume` at the compute level. The
 `produce`/`consume` of `f` and every `for` loop stay exactly where `compute_at`
-alone (§6) would place them; `store_at` only adds the enclosing `store f:` line
+alone (§7) would place them; `store_at` only adds the enclosing `store f:` line
 (and the host loops between the store level and the compute level fall inside
 it). The `store f:` node wraps `f`'s *whole* realization — all of its stages
 (§3), since the store level is per-Func.
@@ -657,7 +672,7 @@ Func with update stages wraps all of them
 * A Func with a store level must also have a non-inline compute level: using
   `store_at`/`store_root` without `compute_at`/`compute_root` is illegal
   ([examples/neg_store_at_inlined.cpp](examples/neg_store_at_inlined.cpp)).
-* Like the compute level, the store level must enclose every use of `f` (§6's
+* Like the compute level, the store level must enclose every use of `f` (§7's
   legal-site rule applies to it too).
 
 ### `hoist_storage` / `hoist_storage_root`: no effect on the printed nest
@@ -691,7 +706,7 @@ that it adds these two legality constraints.
 
 ---
 
-## 8. Reshaping a Func's loops: `split`, `fuse`, `reorder`, `tile`
+## 9. Reshaping a Func's loops: `split`, `fuse`, `reorder`, `tile`
 
 These four directives rewrite a **stage's dimension list** (§3) — they add,
 remove, rename, and reorder its loops. They change *only that stage's own loops*
@@ -770,7 +785,7 @@ xi:`. Net effect: **two extra `for` loops**, in tiled order. See
 The dimensions these transforms produce are first-class loop levels. A producer
 filed at host dimension `d` is injected just inside `d`'s loop, with the host
 loops *inner* to `d` (those earlier in the list) falling inside the producer's
-`consume` — the same rule as §6, now applied to the *post-transform* list. In
+`consume` — the same rule as §7, now applied to the *post-transform* list. In
 [examples/split_compute_at.cpp](examples/split_compute_at.cpp), a producer is
 `compute_at` the consumer's split *outer* loop and so lands between the outer
 and inner loops of the split.
@@ -783,12 +798,12 @@ and inner loops of the split.
   ([examples/neg_reorder_bad_var.cpp](examples/neg_reorder_bad_var.cpp)) errors,
   and `compute_at` at a dimension a `fuse` removed
   ([examples/neg_compute_at_fused_away.cpp](examples/neg_compute_at_fused_away.cpp))
-  is just the §6 "site must be a current loop" rule applied after a transform.
+  is just the §7 "site must be a current loop" rule applied after a transform.
 * `reorder` must reference each dimension at most once.
 
 ---
 
-## 9. Function names and identity in the output
+## 10. Function names and identity in the output
 
 Halide prints each Func's name, but the test harness replaces names with
 positional ids (`F0`, `F1`, … in order of first appearance), so you only need
@@ -804,42 +819,106 @@ Halide's exact names. This matters because some Funcs are auto-named:
 
 ---
 
-## 10. Putting the algorithm together (how the nest is built)
+## 11. Inlined non-pure Funcs (the deferred default)
+
+§§5–10 assumed every inline Func is pure, and therefore non-realized (§4). This
+section handles the one leftover case: a **non-pure** Func (one with update
+definitions, §3) left at the default **inline** level. It is uncommon — it is
+essentially never the fast choice — so it is isolated here rather than woven
+through the earlier sections.
+
+A non-pure Func cannot be textually substituted (a reduction is not an
+expression), so the inline level **realizes** it — but at the latest, innermost
+place possible: Halide materializes it *at each use, just inside the innermost
+loop enclosing that use*, recomputing it from scratch every iteration (Halide's
+`compute_inline()` doc: a Func with an update definition, left inline, "gets
+computed as close to the innermost loop as possible"). For `g(x, y) = f(x)` with
+`f` an unscheduled reduction (see
+[examples/update_default_inline.cpp](examples/update_default_inline.cpp); and
+[examples/weird_histogram_sampling.cpp](examples/weird_histogram_sampling.cpp),
+a histogram feeding a pointwise consumer):
+
+```
+produce g:
+  for y:
+    for x:
+      produce f:          # all of f's stages, recomputed every (x, y)
+        f(...) = ...
+        for r:
+          f(...) = ...
+      consume f:
+        g(...) = ...
+```
+
+### When it equals a `compute_at`, and when it does not
+
+If `f` is read at a **single** loop depth, this default is *exactly*
+`f.compute_at(consumer, v)` with `v` the innermost loop enclosing the use — the
+nests are byte-identical. Both examples above are this common case, which is why
+the rest of the document can treat the non-pure default as "a default
+`compute_at` at the innermost use" and lose nothing.
+
+It stops being expressible as **any** single `compute_at` once `f` is read at
+*different depths in different stages* of a consumer, because the inline level
+places `f` at each use's *own* innermost enclosing loop, **independently per
+use**, whereas `compute_at(consumer, v)` can name only one loop. Take non-pure
+`f` read as `f(x)` in a consumer's pure stage (depth `x`) and as `f(r)` inside
+its update stage's reduction (depth `r`):
+
+* the inline default puts `f` inside `x` in stage 0 **and** inside `r` in stage 1;
+* `compute_at(consumer, x)` is too shallow for stage 1 (it puts `f` at `x` there,
+  not inside `r`);
+* `compute_at(consumer, r)` is **illegal** — `r` exists only in the update stage,
+  so it does not enclose the pure stage's use of `f` (§7's legal-site rule).
+
+So inline-of-non-pure is genuinely *more* than "a default `compute_at`": it is a
+per-use-site materialization, equal to a `compute_at` only when every use shares
+a depth. This is the deepest reason "inline" is not just a compute level with one
+site (§4's wart): for a non-pure Func it means "recompute at the innermost point
+of *each* use." (A model of the loop nest must therefore place it per use site,
+not by rewriting `f` to a single `compute_at`.)
+
+---
+
+## 12. Putting the algorithm together (how the nest is built)
 
 The whole loop nest follows from the rules above, assembled into one procedure:
 
 1. **Force the output to `root`** — the Func you call `print_loop_nest()` on is
-   always computed at the outermost level (§4, §5).
+   always computed at the outermost level (§5, §6).
 
 2. **Compute the realization order** — topologically sort the pipeline so every
-   producer precedes its consumers, breaking ties by name (§5). Inlined Funcs
-   remain in this order so they can pass dependencies along, but they are never
-   realized and so drop out of the steps below (§4).
+   producer precedes its consumers, breaking ties by name (§6). All Funcs remain
+   in this order so they can pass dependencies along; a **pure inline** Func
+   (§4) is never realized and drops out of the steps below (§5), but a non-pure
+   inline Func *is* realized (§11) and keeps its slot.
 
-3. **Give every realized Func a site.** A *realized* Func is one that is not
-   inlined: the output, plus anything scheduled `compute_root` or `compute_at`.
-   Each goes to exactly one place:
+3. **Give every realized Func a site.** A *realized* Func is any Func that is
+   **not** a pure-inline Func — i.e. it gets its own `produce` block. Each goes
+   to a site:
      * `compute_root` Funcs and the output form the **top-level chain**, kept in
        realization order;
      * a `compute_at(g, v)` Func is **filed under** host `g`'s loop over `v`. If
-       several Funcs are filed at the same `(g, v)`, they keep realization order.
-   Each realized Func also has a **store level** (§7), defaulting to its compute
+       several Funcs are filed at the same `(g, v)`, they keep realization order;
+     * a **non-pure inline** Func (§11) is filed at the innermost loop enclosing
+       each of its uses — like a `compute_at` resolved independently per use site.
+   Each realized Func also has a **store level** (§8), defaulting to its compute
    level. The site `v` is a dimension of the host's **(possibly transformed)
-   dimension list** for the relevant stage (§3, §8): `split`/`fuse`/`reorder`/
+   dimension list** for the relevant stage (§3, §9): `split`/`fuse`/`reorder`/
    `tile` have already rewritten that list before this step.
 
-4. **Emit from the outside in.** Walk the top-level chain (§5): for each Func
+4. **Emit from the outside in.** Walk the top-level chain (§6): for each Func
    print `produce f`, then `f`'s loop nest(s), then — for every Func but the
    last — `consume f` wrapping everything that follows. A Func with update
    definitions (§3) emits **one loop nest per stage**, in stage order, all
    inside that single `produce f` (no `consume` between stages). Printing a
    *stage's* loop nest (§3) means working through *that stage's* dimension list
-   (after its own §8 transforms; an update stage's list also contains its
+   (after its own §9 transforms; an update stage's list also contains its
    `RVar`s) from its outermost dimension inward, and at each dimension:
-     * if that dimension was declared elided (§6), skip its `for` line but still
+     * if that dimension was declared elided (§7), skip its `for` line but still
        treat the level as a valid injection site;
      * if this `(f, stage, dim)` level is the **store level** of some Func `h`
-       whose compute level is deeper (§7), open an `h`'s `store h:` node here
+       whose compute level is deeper (§8), open an `h`'s `store h:` node here
        first; everything emitted below at this level falls inside that
        `store h:`;
      * inject the Funcs filed at this `(f, stage, dim)` level (from step 3) —
@@ -849,7 +928,7 @@ The whole loop nest follows from the rules above, assembled into one procedure:
        `f(...) = ...`.
    Injection is recursive: an injected Func's own loop nest is emitted the same
    way, so a Func filed inside a Func that is itself filed inside a third nests
-   accordingly (§6). A Func scheduled `store_root()` is the special case where
+   accordingly (§7). A Func scheduled `store_root()` is the special case where
    its `store` node opens at the very outermost level, wrapping the whole nest.
 
 [examples/many_compute_root.cpp](examples/many_compute_root.cpp) puts the core
