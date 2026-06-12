@@ -548,12 +548,34 @@ points to" subsection, and for the per-stage `micro_halide_collapses`. Backs
 `producer_at_rvar` (only the update stage reads `p`),
 `cross_stage_compute_at_shared` (both stages read `p` → injected into both).
 
+### "inline" is a level; "realized" is orthogonal (the terminology wart)
+
+Halide names the default compute level "inline" for *all* Funcs, but only a
+pure Func is actually substitutable. The relevant predicates:
+
+    // src/Function.h ~185
+    bool is_pure() const {                 // "only a pure definition"
+        return has_pure_definition() && !has_update_definition()
+                                      && !has_extern_definition();
+    }
+    // src/Function.cpp ~1074
+    bool can_be_inlined() const {          // legal to textually substitute?
+        return is_pure() && definition().specializations().empty();
+    }
+
+and Halide's own user doc for the *default* schedule (`src/Func.h` ~2568,
+`Func::compute_inline`): "Aggressively inline all uses of this function. This is
+the default schedule … **For a Func with an update definition, that means it
+gets computed as close to the innermost loop as possible.**" So Halide
+explicitly uses "inline" for non-pure Funcs it must realize — i.e. in Halide
+"inline" (a level) and "realized" (a `produce` block exists) are *not*
+opposites. This backs loopdoc §4's terminology call-out.
+
 ### The default for a Func with updates: `inline_to_provide`
 
-A Func defaults to `LoopLevel::inlined()` (§2 above), but only a *pure* Func can
-be substituted as an expression. A Func with update definitions
-(`!is_pure()`) that is still at the default `inlined()` level is instead
-realized around the innermost consumer statement that uses it:
+A Func defaults to `LoopLevel::inlined()` (§2 above). A Func with update
+definitions (`!is_pure()`) still at that default level cannot be substituted, so
+it is realized around the innermost consumer statement that uses it:
 
     // src/ScheduleFunctions.cpp ~1358, InjectFunctionRealization::inline_to_provide
     if (provide_name != funcs[0].name() &&
@@ -564,8 +586,12 @@ realized around the innermost consumer statement that uses it:
         ...
     }
 
-So an unscheduled reduction Func gets a `produce`/`consume` wrapped around the
-consumer's leaf (`Provide`) node — the deepest legal site, recomputed every
-iteration, exactly like inlining a pure Func but materialized. This backs
-loopdoc §4's "Funcs that cannot be inlined" subsection and
-`update_default_inline.cpp`.
+`build_realize` emits a `produce`/`consume` around the consumer's leaf
+(`Provide`) node — the deepest legal site. Crucially this fires at **each**
+`Provide` that uses the Func (it is keyed on the provide node, per use), so when
+a non-pure Func is read at different depths in different stages it is placed at
+each use's own innermost loop *independently* — a placement no single
+`compute_at(g, v)` LoopLevel can express (one `v` cannot be both `g.s0.x` and
+`g.s1.r`). It coincides with `compute_at` at the innermost loop only when every
+use shares a depth. Backs loopdoc §11 (and `update_default_inline.cpp`,
+`weird_histogram_sampling.cpp`, both the single-depth case).
