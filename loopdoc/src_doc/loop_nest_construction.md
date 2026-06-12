@@ -541,12 +541,24 @@ func not referenced in that body:
                        !(function_is_used_in_stmt(funcs[i], consumer) || is_output_list[i]);
 
 Net rule: `f` is realized just inside the `var` loop of **each stage of `g`
-that reads `f`**, and each such realization computes its own required region
-(bounds inference runs per injection), so `f`'s surviving loop count can differ
-between stages. This is the source basis for loopdoc §7's "what `(g, var)`
-points to" subsection, and for the per-stage `micro_halide_collapses`. Backs
-`producer_at_rvar` (only the update stage reads `p`),
+whose body uses `f`**, and each such realization computes its own required
+region (bounds inference runs per injection), so `f`'s surviving loop count can
+differ between stages. This is the source basis for loopdoc §7's "what
+`(g, var)` points to" subsection, and for the per-stage `micro_halide_collapses`.
+Backs `producer_at_rvar` (only the update stage reads `p`),
 `cross_stage_compute_at_shared` (both stages read `p` → injected into both).
+
+Note the `body`/`consumer` passed to `build_pipeline_group` is the loop body
+*after* the recursive `mutate(body)` has already injected inner producers
+(`visit(const For *)` mutates the body before testing the compute level). So
+`function_is_used_in_stmt` sees **transitive** uses: a producer `g` already
+placed in that body brings its own calls to `f` with it. This is why
+`f.compute_at(h, v)` works even when `h` never reads `f` directly — an
+intermediate `g` (computed at `h.v`) is in the body, so the body "uses" `f` and
+`f` is injected at `h.v` before `g`. Backs loopdoc §7 "Computing at an indirect
+consumer's loop" / `transitive_compute_at_outer.cpp`. (micro_halide's current
+emission gates on *direct* reads of the host stage only, so it drops `f` here —
+an open impl gap; see progress.txt.)
 
 ### "inline" is a level; "realized" is orthogonal (the terminology wart)
 

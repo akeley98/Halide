@@ -519,9 +519,11 @@ actually read.** Concretely:
 
 > `(g, var)` denotes the loop named `var` in **every** stage of `g` (the stage
 > is left unspecified). When the nest is built, `f`'s realization is injected
-> just inside that loop in each stage of `g` **that actually reads `f`** —
-> stages that don't read `f` get nothing. So `f` lands once per *using* stage,
-> each as its own `produce f`/`consume f` (the stages are sibling nests, §3).
+> just inside that loop in each stage of `g` **whose body uses `f`** — where
+> "uses" counts *transitively*: directly, or through another producer already
+> realized in that body (see "indirect consumer" below). A stage that never uses
+> `f` gets nothing. So `f` lands once per *using* stage, each as its own
+> `produce f`/`consume f` (the stages are sibling nests, §3).
 
 Two consequences:
 
@@ -555,6 +557,36 @@ entire `produce f` — all of `f`'s stages — is realized together at the chose
 site. Computing a Func with updates inside a consumer drops its whole
 multi-stage block at that loop level
 ([examples/func_update_compute_at.cpp](examples/func_update_compute_at.cpp)).
+
+### Computing at an *indirect* consumer's loop
+
+`f.compute_at(h, v)` does **not** require `h` to read `f` directly. It is enough
+that `f`'s *use* lands inside `h`'s `v` loop — which is what happens when some
+intermediate Func `g` reads `f` and `g` is itself computed at (or within) `h`'s
+`v` loop. The injection rule above is "inject `f` wherever the loop body at the
+chosen level uses `f`", and that test is applied to the body *after* inner
+producers have been placed: once `g`'s realization sits at `h.v`, the body there
+calls `f` through `g`, so `f` is injected at `h.v` as a prefix — *before* `g`:
+
+```
+produce h:
+  for y:
+    produce f:          # f at h.y, before g, because the body here uses f (via g)
+      ...
+    consume f:
+      produce g:        # g reads f and is itself computed at h.y
+        ...
+      consume g:
+        ... h reads g ...
+```
+
+See [examples/transitive_compute_at_outer.cpp](examples/transitive_compute_at_outer.cpp)
+(a non-pure `g` computed at `h`'s `y`, with `f.compute_at(h, y)` legal even
+though only `g` reads `f`). This is also why `f`'s legal sites (next subsection)
+run **through** `g`: `f`'s use is enclosed by `h.y` and then `g`'s own loops, so
+those are the candidates — but **not** `h`'s loops that live in `consume g`
+(e.g. `h`'s inner `x`), which execute *after* `g` and so do not enclose `f`'s use
+([examples/neg_transitive_compute_at_inner.cpp](examples/neg_transitive_compute_at_inner.cpp)).
 
 ### When a `compute_at` is illegal
 
