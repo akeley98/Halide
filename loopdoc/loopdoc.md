@@ -561,7 +561,8 @@ multi-stage block at that loop level
 `f.compute_at(g, v)` is not always legal. First, what a **level** is, because it
 is the crux: `(g, v)` is *not* a pointer to one loop. With the stage left
 unspecified (previous subsection) it denotes `g`'s `v` loop in **every** stage of
-`g` — a whole **family** of loop locations, `g.s0.v`, `g.s1.v`, …, one per stage.
+`g` — a whole **family** of loop locations, `g.s0.v`, `g.s1.v`, …, one per stage
+that has `v` as a loop variable (§3, §9).
 (Halide calls such a `(Func, Var)` pair a *loop level*; the candidate levels at
 which `f` may be computed are its legal *sites* — "site" and "level" are the same
 kind of object, a `(Func, Var)` pattern, plus the special `root` and `inline`.)
@@ -578,14 +579,15 @@ a **different** consumer Func, or at `g`'s own outer scope, lies inside no
 `g.*.v` loop at all, so the level cannot cover it — the usual way to be illegal.
 
 Halide computes this directly: it walks the *whole* loop nest and, at **every
-place `f` is read**, intersects the stack of `(Func, Var)` levels enclosing that
+place `f` is read** (including indirectly through other functions `g` consumes),
+Halide intersects the stack of `(Func, Var)` levels enclosing that
 read; the legal sites are what survive (plus `root`). It is one global
 intersection over all reads — you pick a single level, not a different one per
 stage. If `(g, v)` does not survive, Halide rejects the schedule with *"Func f is
 computed at the following invalid location"* (and lists the legal ones); no loop
 nest is produced.
 
-(Choosing a *different* place per read is exactly the freedom the **default
+(Choosing a *different* level per read is exactly the freedom the **default
 inline** schedule has and a single `compute_at` does not — which is why the
 inline default of a non-pure Func cannot, in general, be rewritten as one
 `compute_at`; §11.)
