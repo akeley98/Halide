@@ -862,11 +862,32 @@ class Stage
         dimlist::reorder(dims(), owner(), names);
         return *this;
     }
+
+    // rfactor (loopdoc.md section 12): factor THIS update stage's associative
+    // reduction into a new intermediate Func plus a rewritten merge stage. It
+    // CREATES a new Func (returned) and MUTATES this stage. This is a STUB
+    // provided by the main agent only so examples compile; building the
+    // intermediate's stages and rewriting the merge is the documented behavior
+    // (loopdoc.md section 12) the micro-agent implements.
+    Func rfactor(const RVar &r, const Var &v)
+    {
+        return rfactor(std::vector<std::pair<RVar, Var>>{{r, v}});
+    }
+    Func rfactor(const std::vector<std::pair<RVar, Var>> &preserved);
 };
 
 inline Stage Func::update(int i) const
 {
     return Stage(contents, i);
+}
+
+// STUB (see Stage::rfactor declaration). Throws until the micro-agent
+// implements the loop-nest construction documented in loopdoc.md section 12.
+inline Func Stage::rfactor(const std::vector<std::pair<RVar, Var>> &preserved)
+{
+    (void)preserved;
+    throw std::runtime_error(
+        "micro_halide: TODO rfactor (loopdoc.md section 12) not implemented");
 }
 
 // ---------------------------------------------------------------------------
