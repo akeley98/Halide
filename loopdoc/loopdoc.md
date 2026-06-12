@@ -558,20 +558,29 @@ multi-stage block at that loop level
 
 ### When a `compute_at` is illegal
 
-`f.compute_at(g, v)` is not always legal. Because `f` is injected **once into
-each stage of `g` that reads `f`** (previous subsection) and every one of those
-realizations lives inside `g`, a schedule is legal only if that injection can
-reach *every* read of `f`. Halide formalizes this as a set of **legal compute
-sites**: the loop levels that **enclose every use of `f`** — the intersection,
-over all of `f`'s call sites (across **every stage of every consumer**), of the
-enclosing-loop stacks, plus `root`. If `(g, v)` is not in that set, Halide
-rejects the schedule with *"Func f is computed at the following invalid
-location"* (and lists the legal ones); no loop nest is produced.
+`f.compute_at(g, v)` is not always legal. The key constraint is that
+`compute_at` sets **one** compute level on `f` — a whole-Func property (§1) —
+and *every* per-stage realization of `f` (previous subsection) uses that **same**
+level `(g, v)`. So although `f` is emitted as several `produce f` blocks (one per
+stage of `g` that reads it), they are not free to sit at different sites: the
+single level `v` must simultaneously enclose **every** read of `f`.
 
-Note the legality test is **per use, not per a single site**: with several
-stages there are several `produce f` blocks, each feeding only its own stage, so
-the requirement is that *each* reading stage gets a block enclosing *its* use —
-not that one block serves everyone. The ways to fall outside the set:
+Halide computes this directly. It walks the *whole* loop nest and, at **every
+place `f` is read**, intersects the stack of loops enclosing that read; the
+**legal compute sites** are what survive the intersection (plus `root`). "Every
+place" is literal — each call site, wherever it sits, *including each stage of a
+multi-stage consumer that reads `f`* (and each separate consumer Func). It is a
+single global intersection, not a per-stage choice. If `(g, v)` is not in the
+surviving set, Halide rejects the schedule with *"Func f is computed at the
+following invalid location"* (and lists the legal ones); no loop nest is
+produced.
+
+(Picking a *different* site per consuming context is exactly the freedom the
+**default inline** schedule has and a single `compute_at` does not — which is
+why the inline default of a non-pure Func cannot, in general, be rewritten as
+one `compute_at`; §11.)
+
+The ways `(g, v)` falls outside the surviving set:
 
 * **`v` is missing from a stage that reads `f`.** `v` must name a loop that, *in
   each stage of `g` that reads `f`*, encloses that stage's use — only then does
