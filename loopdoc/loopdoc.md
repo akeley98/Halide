@@ -954,7 +954,106 @@ not by rewriting `f` to a single `compute_at`.)
 
 ---
 
-## 12. Putting the algorithm together (how the nest is built)
+## 12. `rfactor`: factoring an associative reduction into a new Func
+
+`rfactor` is a scheduling directive called on an **update stage**
+(`f.update(i).rfactor(...)`), but it is unusual: most directives only reshape
+existing loops, whereas `rfactor` changes the *structure* of the algorithm. It
+**creates a brand-new intermediate Func** and **rewrites** the update stage it
+was called on. It exists to parallelise or vectorise a reduction: a reduction
+loop carries a dependence across its iterations (each adds onto the running
+result), so it cannot be parallelised directly; `rfactor` splits the work into
+independent partial reductions — which *can* be parallelised — plus a final
+merge.
+
+`rfactor` takes a list of `{RVar, Var}` pairs, the **preserved** vars (the
+shorthand `rfactor(r.x, u)` is one pair). Each named `RVar` of the stage is
+mapped to a fresh **pure** `Var`. Conceptually, given
+
+```cpp
+f(x)  = 0;
+f(x) += in(r.x, r.y);             // update stage: reduces over r.x and r.y
+Func intm = f.update(0).rfactor(r.y, u);   // preserve r.y as a new pure Var u
+```
+
+the state becomes two Funcs ([examples/rfactor_basic.cpp](examples/rfactor_basic.cpp)):
+
+```cpp
+// the new intermediate Func (auto-named "f_intm"):
+intm(x, u)  = 0;                  // a pure stage
+intm(x, u) += in(r.x, u);         // an update stage; r.y has become the pure Var u
+// f's chosen update stage, rewritten to MERGE the partials:
+f(x)  = 0;                        // (pure stage unchanged)
+f(x) += intm(x, r.y);             // now reduces over r.y only, reading intm
+```
+
+### What `rfactor` builds
+
+Splitting the rule into the two Funcs it produces:
+
+* **The intermediate Func** (named `<orig>_intm`; the harness normalises names
+  away, so what matters is that it is *one new distinct Func*). It is a normal
+  multi-stage Func:
+    * Its **pure stage**'s dimension list is the original Func's pure-stage
+      dimensions, followed by the new pure `Var`s in `preserved` order — the new
+      vars **outermost**. (Innermost→outermost for `rfactor(r.y, u)`: `[x, u]`.)
+    * Its **update stage** is a *copy of the original update stage's dimension
+      list* — including any `split`/`reorder`/`tile` already applied to it
+      (§9) — with each **preserved** `RVar` replaced in place by its new pure
+      `Var`. The **non-preserved** `RVar`s stay as reduction loops (they are the
+      reduction the intermediate still performs); the loop order is otherwise
+      unchanged. It reads whatever the original update read.
+* **The original Func's chosen update stage is rewritten** into the *merge*: its
+  dimension list keeps the free `Var`s and the **preserved** `RVar`s (still
+  `RVar`s here), and **drops** the non-preserved `RVar`s. Its body now reads the
+  intermediate, so **the intermediate becomes a producer of the original Func**
+  (it gets a slot in the realization order before `f`, §6).
+
+The preserved `RVar`s thus end up reduced in the *merge* (still `RVar`s in the
+original Func) and pure in the *intermediate* (the new `Var`s); the
+non-preserved `RVar`s are lifted entirely into the intermediate's reduction.
+
+### Scheduling the intermediate
+
+The intermediate is an ordinary Func returned to you, with its **own default
+schedule**. It is non-pure (it has an update), so absent any directive it takes
+the **non-pure inline default** (§11): it is realized at its use inside the
+merge stage and recomputed for each value of the merge's loops — see
+[examples/rfactor_default_inline.cpp](examples/rfactor_default_inline.cpp). That
+defeats the purpose, so you normally schedule it: `intm.compute_root()`
+([rfactor_basic.cpp](examples/rfactor_basic.cpp)) realizes it once before `f`,
+and because it is a plain producer of `f` it can also be `compute_at` any loop
+of `f` that encloses the merge's use of it
+([examples/rfactor_compute_at.cpp](examples/rfactor_compute_at.cpp)). Its two
+stages are scheduled independently, exactly like any Func: `intm` schedules the
+pure stage, `intm.update(0)` the partial-reduction stage. So you can
+`reorder`/`split`/parallelise the partial reduction on its own
+([examples/rfactor_multivar.cpp](examples/rfactor_multivar.cpp), which preserves
+two reduction vars of a 3-D `RDom` and reorders the intermediate's update loops).
+
+### Legality and limits
+
+* `rfactor` may only be called on an **update** stage, never the pure stage —
+  the pure stage has no reduction to factor.
+* The reduction must be **associative** (and **commutative** too, when an inner
+  `RVar` is factored out while an outer one is preserved), or `rfactor` errors.
+  Like the `RVar`-reorder rule (§3), this is a property of the update's
+  *arithmetic*, which this document does not model mechanically (out of scope,
+  as with bounds inference).
+* Once the intermediate exists, all the ordinary rules apply to it unchanged:
+  its compute/store levels (§6–§8), the legality of a `compute_at` on it (§7),
+  and the per-stage transforms on its stages (§9).
+* A reduction var may be `split` (§9) *before* being factored — the tiled
+  histogram of Halide tutorial lesson 18 does
+  `split(r.x, rxo, rxi, …).rfactor({{rxo, u}})`, preserving the outer tile index
+  and lifting the inner one. This relies on splitting an `RVar` (whose halves are
+  themselves reduction loops), an interaction this document does not yet model;
+  it is deferred (see progress.txt). The multi-var example above factors several
+  whole `RVar`s of one `RDom` instead, which needs no `RVar` split.
+
+---
+
+## 13. Putting the algorithm together (how the nest is built)
 
 The whole loop nest follows from the rules above, assembled into one procedure:
 
@@ -965,7 +1064,9 @@ The whole loop nest follows from the rules above, assembled into one procedure:
    producer precedes its consumers, breaking ties by name (§6). All Funcs remain
    in this order so they can pass dependencies along; a **pure inline** Func
    (§4) is never realized and drops out of the steps below (§5), but a non-pure
-   inline Func *is* realized (§11) and keeps its slot.
+   inline Func *is* realized (§11) and keeps its slot. An `rfactor` intermediate
+   (§12) is just another Func in this order — a producer of the Func it was
+   factored from — with whatever schedule it was given.
 
 3. **Give every realized Func a site.** A *realized* Func is any Func that is
    **not** a pure-inline Func — i.e. it gets its own `produce` block. Each goes
