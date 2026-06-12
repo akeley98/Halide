@@ -396,6 +396,28 @@ inline void reorder(std::vector<Var> &a, const std::string &owner,
 }
 } // namespace dimlist
 
+// Declaration rank of an RVar within its RDom (innermost first): r.x < r.y <
+// r.z < r.w. A multi-dim RDom names its RVars "<base>$x", "$y", "$z", "$w"; a
+// 1-D RDom's single RVar is the bare base name (rank 0). Used to put the
+// first-declared reduction dimension innermost (loopdoc.md section 3).
+inline int rvar_decl_rank(const std::string &name)
+{
+    auto pos = name.rfind('$');
+    if (pos == std::string::npos)
+    {
+        return 0; // 1-D RDom: bare name
+    }
+    char c = (pos + 1 < name.size()) ? name[pos + 1] : 'x';
+    switch (c)
+    {
+    case 'x': return 0;
+    case 'y': return 1;
+    case 'z': return 2;
+    case 'w': return 3;
+    default: return 4;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // FuncRef: the result of Func::operator(). Acts as an lvalue to define a Func
 // (operator=) and as an rvalue Expr to read it.
@@ -478,14 +500,24 @@ class FuncRef
         }
         u.rvars = collect_rvars(rhs);
         u.producers = collect_producers(rhs);
-        // Build this stage's DEFAULT dimension list (loopdoc.md section 10),
-        // innermost-first: the RVars are innermost (first-declared is the
-        // OUTERMOST of them, so reverse declaration order), with the free pure
-        // Vars outside them (first LHS arg innermost among the pures, i.e. the
-        // pure_args order is already innermost-first like FuncContents::args).
-        for (auto it = u.rvars.rbegin(); it != u.rvars.rend(); ++it)
+        // Build this stage's DEFAULT dimension list (loopdoc.md section 3),
+        // innermost-first: the RVars are innermost -- and WITHIN the RVars the
+        // first-declared dimension (r.x) is the INNERMOST loop (matching the Var
+        // convention that the first dimension varies fastest). The free pure
+        // Vars sit OUTSIDE the RVars (first LHS arg innermost among the pures,
+        // i.e. pure_args is already innermost-first).
+        //
+        // The captured rvar names are in first-appearance order, which need not
+        // equal RDom declaration order; sort them into declaration order (r.x,
+        // r.y, r.z, r.w) so the first-declared lands at dims[0] (innermost).
+        std::vector<std::string> ordered_rvars = u.rvars;
+        std::stable_sort(ordered_rvars.begin(), ordered_rvars.end(),
+                         [](const std::string &a, const std::string &b) {
+                             return rvar_decl_rank(a) < rvar_decl_rank(b);
+                         });
+        for (const std::string &n : ordered_rvars)
         {
-            u.dims.push_back(Var(*it));
+            u.dims.push_back(Var(n));
         }
         for (const Var &v : u.pure_args)
         {
@@ -995,9 +1027,28 @@ struct LoopNestPrinter
 
     // --- Schedule validation (rejects illegal compute_at, like Halide) -------
 
+    // A Func is PURE iff it has only its initial definition -- no update stages
+    // (loopdoc.md section 4). A non-pure Func has one or more updates.
+    static bool is_pure(FuncContents *f)
+    {
+        return f->stages.size() <= 1;
+    }
+
+    // A Func is NON-REALIZED (textually substituted, no block of its own) iff it
+    // is at the default inline level AND pure (loopdoc.md section 4/5). A
+    // non-pure func cannot be substituted, so even at the inline level it is
+    // REALIZED, at the innermost point of each use (loopdoc.md section 11).
+    static bool is_non_realized(FuncContents *f)
+    {
+        return f->level == FuncContents::Level::Inline && is_pure(f);
+    }
+
+    // A Func is REALIZED iff it gets its own produce block: anything that is not
+    // non-realized. This includes compute_root, compute_at, and the awkward
+    // inline-non-pure default (loopdoc.md section 11).
     static bool is_realized(FuncContents *f)
     {
-        return f->level != FuncContents::Level::Inline;
+        return !is_non_realized(f);
     }
 
     // ---- Per-stage views (loopdoc.md section 10) -------------------------
@@ -1098,7 +1149,7 @@ struct LoopNestPrinter
                 return true;
             }
             std::set<FuncContents *> seen;
-            if (p->level == FuncContents::Level::Inline && inlined_reads(p.get(), f, seen))
+            if (is_non_realized(p.get()) && inlined_reads(p.get(), f, seen))
             {
                 return true;
             }
@@ -1119,7 +1170,7 @@ struct LoopNestPrinter
             {
                 return true;
             }
-            if (p->level == FuncContents::Level::Inline && inlined_reads(p.get(), f, seen))
+            if (is_non_realized(p.get()) && inlined_reads(p.get(), f, seen))
             {
                 return true;
             }
@@ -1162,13 +1213,12 @@ struct LoopNestPrinter
     {
         if (g == h)
         {
-            if (gs != hs)
-            {
-                // Different stages of one Func are SIBLING loop nests under one
-                // produce, not nested: neither encloses the other.
-                return false;
-            }
-            int ig = stage_dim_index(g, gs, gv);
+            // (g, gv) is a family of loops, one per stage of g (loopdoc.md
+            // section 7). The member in stage hs encloses loop (h, hs, hv) iff
+            // that same stage has gv and gv is the same or an outer loop. (The
+            // passed-in gs is irrelevant for a same-Func comparison: we ask
+            // whether the family's member in *hs* encloses hv.)
+            int ig = stage_dim_index(g, hs, gv);
             int ih = stage_dim_index(h, hs, hv);
             // Outer = higher dim index (dim0 innermost). gv encloses hv iff it is
             // the same or an outer loop.
@@ -1195,10 +1245,14 @@ struct LoopNestPrinter
     {
         if (g == h)
         {
-            // The use is in g's own stage; it is enclosed iff it is the SAME
-            // stage (gv is then one of this stage's loops, and the leaf sits
-            // inside it). A different stage is a sibling nest.
-            return gs == hs;
+            // The use is in g's own stage hs. The level (g, gv) is a FAMILY of
+            // loops, one per stage of g that has gv (loopdoc.md section 7); the
+            // member living in stage hs encloses this use iff stage hs actually
+            // has a loop named gv. (So a loop shared by every using stage --
+            // e.g. a pure Var carried into the updates -- is a legal site, while
+            // an RVar that exists only in one stage cannot enclose a use in a
+            // different stage.)
+            return stage_dim_index(g, hs, gv) >= 0;
         }
         if (h->level == FuncContents::Level::At)
         {
@@ -1470,6 +1524,19 @@ struct LoopNestPrinter
     {
         if (dim < 0)
         {
+            // A loop-less stage (no dims) is the innermost point: inject any
+            // non-pure-inline children filed here (sentinel empty var name, see
+            // print()), wrapping the leaf in their consume (loopdoc.md sec 11).
+            SiteKey leaf_key{f, stage, std::string()};
+            auto lit = children_at.find(leaf_key);
+            if (lit != children_at.end() && !lit->second.empty())
+            {
+                auto leaf = [this, f](int ind) {
+                    out << pad(ind) << f->name << "(...) = ...\n";
+                };
+                emit_realizations(lit->second, 0, indent, leaf, /*has_cont=*/true);
+                return;
+            }
             out << pad(indent) << f->name << "(...) = ...\n";
             return;
         }
@@ -1555,14 +1622,63 @@ struct LoopNestPrinter
             }
             else if (f->level == FuncContents::Level::At)
             {
-                // File under the host stage whose dimension list contains the
-                // named loop (loopdoc.md section 10: an RVar site belongs to one
-                // stage).
+                // (host, var) denotes the `var` loop in EVERY stage of the host
+                // (loopdoc.md section 7): f is injected just inside that loop in
+                // each stage of the host that actually READS f (use-gated), and
+                // stages that do not read f get nothing. So a producer read by
+                // several stages lands once per using stage. (For an RVar site
+                // only one stage has the loop, so this reduces to a single
+                // injection.)
                 FuncContents *host = f->at_func.get();
-                int hs = resolve_stage(host, f->at_var);
-                children_at[{host, hs, f->at_var}].push_back(f);
+                for (int hs = 0; hs < num_stages(host); hs++)
+                {
+                    if (stage_dim_index(host, hs, f->at_var) >= 0 &&
+                        stage_reads(host, hs, f))
+                    {
+                        children_at[{host, hs, f->at_var}].push_back(f);
+                    }
+                }
             }
-            // Inline funcs are not realized and never appear.
+            else if (f->level == FuncContents::Level::Inline && !is_pure(f))
+            {
+                // A non-pure Func left at the inline level cannot be textually
+                // substituted (a reduction is not an expression), so the inline
+                // level REALIZES it -- at the innermost point of EACH use,
+                // independently per use (loopdoc.md section 11). For every
+                // realized Func h and every stage hs of h that reads f, file f
+                // at the innermost loop of that stage (dims[0]); the leaf of h's
+                // stage then sits inside f's `consume`. (The injection-site
+                // machinery treats a collapsed innermost loop as a valid site,
+                // matching "as close to the innermost loop as possible".)
+                for (FuncContents *h : order)
+                {
+                    if (h == f || !is_realized(h))
+                    {
+                        continue;
+                    }
+                    for (int hs = 0; hs < num_stages(h); hs++)
+                    {
+                        if (!stage_reads(h, hs, f))
+                        {
+                            continue;
+                        }
+                        const std::vector<Var> &d = stage_dims(h, hs);
+                        if (d.empty())
+                        {
+                            // No loops in this stage: file f directly at the
+                            // produce level (innermost == the leaf level). We
+                            // model this with an empty var name as a sentinel
+                            // injection site at this stage.
+                            children_at[{h, hs, std::string()}].push_back(f);
+                        }
+                        else
+                        {
+                            children_at[{h, hs, d[0].name()}].push_back(f);
+                        }
+                    }
+                }
+            }
+            // Pure inline funcs are non-realized and never appear.
 
             // File this Func's `store` node, if any, at its store level.
             if (has_store_node(f))

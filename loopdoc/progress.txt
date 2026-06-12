@@ -164,7 +164,7 @@ Marking convention:
         (Var x_outer, x_inner; f.split(x, x_outer, x_inner, factor)) so that
         compute_at/store_at can later name them.
 
-[WIP] Update definitions (see e.g. `../apps/hist`)
+[✅] Update definitions (see e.g. `../apps/hist`)
     NOTES:
       * MODEL (explored, verified against Halide):
         - A Func has an ordered list of STAGES: stage 0 = pure/initial def, then
@@ -207,77 +207,37 @@ Marking convention:
         EMISSION for stages from the docs. apps/hist uses .update().reorder(...)
         and .rfactor(...) in the wild -- good citation.
 
-      * ===== STATE AT PAUSE (resume here) =====
-        DOC REORG (done, committed): loopdoc.md was reorganized "algorithm-first"
-        and then TERMINOLOGY-CLEANED per user request. Final section order:
-        1 model, 2 reading, 3 single Func's loops AND its stages (update defs =
-        ALGORITHM), 4 TERMINOLOGY (pure/non-pure, realized/non-realized, inline),
-        5 inlining (PURE only now), 6 compute_root, 7 compute_at, 8 store/hoist,
-        9 split/fuse/reorder/tile, 10 names, 11 INLINED NON-PURE Funcs (the
-        deferred default), 12 assembly. src_doc cross-refs remapped to match;
-        src_doc §11 extended with LoopLevel-wildcard + use-gating +
-        inline_to_provide + the is_pure/can_be_inlined terminology evidence.
-        TERMINOLOGY RESOLUTION (Halide's own wart, now documented in loopdoc §4 +
-        §11 + src_doc): "inline" is a compute LEVEL name (default), NOT a synonym
-        for "non-realized". Halide uses "inline" for non-pure Funcs it must
-        realize (compute_inline() doc: update Func left inline "gets computed as
-        close to the innermost loop as possible"). So inline != non-realized; the
-        opposite of "realized" is "textually substituted". Only a PURE inline Func
-        is non-realized. §5 now covers ONLY pure inline; the non-pure default is
-        isolated in §11.
-        KEY FINDING (tested): default-inline of a NON-PURE Func == an explicit
-        compute_at(consumer, innermost-use-var) ONLY when all uses share a depth
-        (e.g. update_default_inline, weird_histogram_sampling -- single depth).
-        When a non-pure Func is read at DIFFERENT depths across a consumer's
-        stages, the default places it at each use's OWN innermost loop
-        independently (inline_to_provide fires per Provide) -- NOT expressible as
-        any single compute_at (one var can't be both g.s0.x and g.s1.r;
-        compute_at at the deeper rvar is illegal for the shallower stage). So the
-        non-pure inline default is a per-use-site materialization, strictly more
-        general than one compute_at. (Optional future example to pin this general
-        case; current deferred examples are the single-depth equivalent.)
-        DATA-MODEL REFACTOR (done, committed): micro_halide now uses a uniform
-        StageData per stage (stages[0]=pure); whole-Func state (levels, union
-        producers) on FuncContents. micro_halide_collapses is per-stage:
-        (Func)->stage0, (Stage f.update(N))->stage N+1. halide_compat has the
-        Stage no-op overload.
-        TWO API CLARIFICATIONS (investigated in source, now documented):
-        (a) compute_at(g,v) builds LoopLevel(g,v,stage_index=-1) -- a WILDCARD
-            matching v in EVERY stage of g; the producer is realized only in the
-            stage(s) that actually READ it (use-gated by build_pipeline_group),
-            and each injection computes its OWN region (so loop counts can differ
-            per stage). loopdoc §6 "what (g,var) points to"; src/Schedule.cpp
-            LoopLevel::match, src/ScheduleFunctions.cpp ~1299/~1682.
-        (b) DEFAULT for a Func with updates: left at the inline LEVEL but cannot
-            be substituted, so materialized at the innermost use (inline_to_provide,
-            src/ScheduleFunctions.cpp ~1358), i.e. a produce/consume wrapped
-            around the consumer's leaf, recomputed each iteration. loopdoc §11
-            "Inlined non-pure Funcs" (see also the per-use-site finding above).
-
-        NOT-YET-DONE -- the next micro-agent delegation must implement (from the
-        rewritten loopdoc.md ALONE) and these 4 examples must go green:
-          - producer_at_2d_rvar.cpp      : RVar nesting order (r.x INNERMOST) so
-                                           compute_at at the OUTER rvar lands
-                                           between the two reduction loops. The
-                                           current micro_halide built RVar dims in
-                                           the WRONG (reversed) order in
-                                           FuncRef::record_update -- fix per §3.
-          - cross_stage_compute_at_shared.cpp : multi-stage USE-GATED injection
-                                           (inject producer into each stage that
-                                           READS it; current micro_halide wrongly
-                                           rejects the schedule).
-          - update_default_inline.cpp    : default realization of an un-inlinable
-                                           (has-updates) Func at the innermost use
-                                           (uses per-stage collapses on both
-                                           stages).
-          - weird_histogram_sampling.cpp : (user-added) same default-realization
-                                           behavior, histogram feeding weird(x);
-                                           hist's own loops all survive (no
-                                           elision -- scatter needs whole array).
-        Also: the per-stage collapse API and StageData are already scaffolded by
-        the main agent; the micro-agent only implements emission/legality.
-        DO NOT have the main agent fix these 4 -- they are the comprehension test.
-        After delegation: run review_micro.py --last, then adversarial pass.
+      * DONE (delegated; integrity-clean micro-agent run, no doc gaps reported).
+        loopdoc.md was reorganized "algorithm-first" and terminology-cleaned, and
+        a logged micro-agent implemented stage emission + multi-stage compute_at
+        + the non-pure inline default in micro_halide from the docs ALONE. All
+        59 examples pass. Final loopdoc order: 1 model, 2 reading, 3 single Func's
+        loops AND its stages (update defs = ALGORITHM), 4 TERMINOLOGY (pure/
+        non-pure, realized/non-realized, inline-as-level), 5 inlining (pure only),
+        6 compute_root, 7 compute_at, 8 store/hoist, 9 split/fuse/reorder/tile,
+        10 names, 11 INLINED NON-PURE Funcs (deferred default), 12 assembly.
+      * TERMINOLOGY (Halide's own wart, documented §4/§11 + src_doc): "inline" is
+        a compute LEVEL name (default), not a synonym for "non-realized". Only a
+        PURE inline Func is non-realized (substituted); a non-pure inline Func is
+        REALIZED at its innermost use (inline_to_provide). "level"/"site" = a
+        (Func,Var) pattern that, with stage unspecified, names a FAMILY of per-
+        stage loops; legality = the family covers every read of f (one global
+        intersection, not per-stage).
+      * NON-PURE INLINE DEFAULT (§11, tested incl. adversarial): equals
+        compute_at(consumer, innermost-use) only when all uses share a depth;
+        in general it is a per-use-site materialization at each use's innermost
+        loop, NOT expressible as one compute_at. Verified by
+        nonpure_inline_diff_depths (different depths across stages) and
+        nonpure_inline_two_consumers (two distinct consumers); both pass.
+      * Examples (all pass): hist_1d, sum_reduction, two_updates, update_2d_rdom,
+        update_stage_split, update_stage_reorder, producer_at_rvar,
+        func_update_compute_at, store_root_update, update_default_inline,
+        weird_histogram_sampling; negatives neg_compute_at_update_rvar; plus
+        adversarial producer_at_2d_rvar, cross_stage_compute_at_shared,
+        nonpure_inline_diff_depths, nonpure_inline_two_consumers,
+        update_split_compute_at. micro_halide: uniform StageData per stage,
+        per-stage micro_halide_collapses ((Func)->stage0, (f.update(N))->stage
+        N+1), RVar within-order (r.x innermost), use-gated multi-stage injection.
 
 [ ] `rfactor` (factor a reduction for parallelism)
     NOTES:
@@ -339,4 +299,4 @@ The main-agent may mark issues as [fixed] if changes to the docs seem to have ca
   - [fixed] bootstrap | how many `for` loops does a `compute_at` Func emit? Dims whose required extent at the compute site is 1 are simplified away. RESOLUTION: not derived (needs bounds inference, out of scope); declared per example via `micro_halide_collapses(f,{vars})` + no-op Halide shim. loopdoc §7 + README document it; examples loop_elide_x/_y/_both and compute_at_elided_level cover it. | loop_elide_*.cpp, compute_at_elided_level.cpp
   - [fixed] update defs | RVar nesting order: §10 originally said the first-declared RVar (r.x) is the OUTERMOST of the reduction loops; it is actually the INNERMOST (Var convention, first dim fastest). Hidden because canonicalize drops loop names (a bare 2-D RDom is symmetric); only a compute_at at a specific RVar exposes it. FIXED §10 + update_2d_rdom comment; producer_at_2d_rvar.cpp pins it down. | producer_at_2d_rvar.cpp
   - [fixed] update defs | When a producer is computed at a loop that appears in SEVERAL stages of the host (e.g. a pure Var present in both the pure and update stages), is it injected into each such stage? Yes -- one produce/consume per stage that has the loop, serving that stage's reads (legality: the site must be a loop present in EVERY reading stage). §10 originally under-specified this; the first update-defs micro-agent wrongly rejected the schedule. FIXED §10 "Compute / store level" subsection. | cross_stage_compute_at_shared.cpp
-  - [open] update defs | A producer computed at a loop shared by multiple host stages can need DIFFERENT loop elision per stage (e.g. p computed at f's x: read at a single point p(x) in the pure stage -> x collapses; read over a range p(r) in the update stage -> x survives). The current `micro_halide_collapses(p,{vars})` is keyed on the producer GLOBALLY and cannot express per-injection-site (per host-stage) elision. Need a collapse variant scoped to the injection context. DEFERRED: discussing the annotation design with the human before implementing. | (asymmetric variant of cross_stage_compute_at_shared, not yet committed)
+  - [open] update defs | A producer injected into MULTIPLE host stages can need DIFFERENT loop elision per injection (e.g. p.compute_at(f,x): in f's pure stage p(x) is a single point -> p's x collapses; in f's update stage p(r) spans a range -> p's x survives). The collapse API is keyed on the PRODUCER's own stages (micro_halide_collapses(p,...) / p.update(N)), which canNOT express "collapse in host-stage-0's injection but not host-stage-1's". STATUS after the update-defs milestone: still open but NARROW -- all committed examples (incl. adversarial nonpure_inline_diff_depths) have SYMMETRIC per-injection elision, which the per-producer-stage API handles. The asymmetric per-host-injection case would need a collapse keyed by (producer, host-stage); deferred as a declared-elision corner (out of scope like bounds inference) until an example needs it. | (asymmetric variant of cross_stage_compute_at_shared, not committed)
