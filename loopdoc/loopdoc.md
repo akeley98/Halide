@@ -265,9 +265,9 @@ itself.
 
 ## 5. The default schedule: inlining
 
-We now turn to the *schedule*. By default every **pure** Func (§4) except the
-output is **inlined**, i.e. non-realized: it has no loops and no
-`produce`/`consume` of its own. Wherever a consumer reads it, its definition is
+We now turn to the *schedule*. By default every Func (§4) except the
+output is **inlined**. For pure functions, this means non-realized: it has no loops
+and no `produce`/`consume` of its own. Wherever a consumer reads it, its definition is
 substituted in, as if textually pasted — it simply *disappears* from the loop
 nest.
 
@@ -285,10 +285,10 @@ Two Funcs are *not* covered by this default and are picked up later:
 
 * the **output**, always realized at root (§6);
 * a **non-pure** Func (one with update definitions), which is *also* left at the
-  inline level by default but, being unable to be substituted, is realized at
+  "inline" level by default but, being unable to be substituted, is realized at
   the innermost point of each use. Because that behavior leans on `compute_at`
-  (§7) to describe, it is deferred to §11; it is rare in practice and never the
-  fast choice, so postponing it keeps the cleaner concepts uncluttered.
+  (§7) to describe, it is deferred to §11; it is rare in practice and probably
+  an inefficient choice, so postponing it keeps the cleaner concepts uncluttered.
 
 ---
 
@@ -343,12 +343,17 @@ realizations that come after it.
 
 ### Realization order in detail
 
-Realization order is a topological sort of the *whole* graph (including inlined
-Funcs), then restricted to the realized Funcs. Inlined Funcs do not get their
-own slot, but they still transmit dependencies: if inlined `b` reads rooted
-`a`, then any Func that inlines `b` depends (transitively) on `a`, so `a`
-precedes it. In `box_blur`, `output` inlines `blur_y`→`blur_x`→`input_16`
-(rooted), so `input_16` is realized before `output`.
+Realization order is a topological sort of the *whole* graph — **every** Func in
+the pipeline gets a slot, including the ones that end up inlined (Halide computes
+this order over the full environment; inlining is decided separately, later).
+What makes inlined Funcs vanish from the *printed* nest is not their absence from
+this order but the fact that they are never **realized**: a pure inline Func is
+substituted into its callers rather than given a `produce` block (§5). Keeping
+them in the order is exactly what lets them **transmit dependencies**: if inlined
+`b` reads rooted `a`, then `b` sits between `a` and any consumer of `b` in the
+order, so `a` precedes that consumer. In `box_blur`, `output` inlines
+`blur_y`→`blur_x`→`input_16` (rooted), so `input_16` is realized before
+`output`.
 
 #### Tie-break: which sibling producer goes first
 
