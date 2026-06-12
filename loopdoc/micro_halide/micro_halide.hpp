@@ -1178,6 +1178,85 @@ struct LoopNestPrinter
         return false;
     }
 
+    // Does the loop body at site (host, hs, var) USE f -- directly, or
+    // TRANSITIVELY through another producer realized inside that body
+    // (loopdoc.md section 7, "Computing at an indirect consumer's loop")?
+    //
+    // The injection rule is "inject f wherever the loop body at the chosen level
+    // uses f", applied to the body AFTER inner producers have been placed: once
+    // some producer g sits at (or within) this site and g reads f, the body here
+    // calls f through g, so f's use lands here. "Reads f" is itself transitive,
+    // so we recurse (g may read f only through a further intermediate placed in
+    // the same body).
+    //
+    // A producer g is "realized in the body at (host, hs, var)" iff g is computed
+    // at this host stage's `var` loop or an INNER one (g's body is then nested
+    // inside this loop). g at an OUTER loop of the host is NOT in this body --
+    // this site lives in g's `consume`, after g (the neg_transitive_..._inner
+    // case): such a g does not pull f in here.
+    bool body_uses(FuncContents *host, int hs, const std::string &var, FuncContents *f,
+                   const std::vector<FuncContents *> &order)
+    {
+        if (stage_reads(host, hs, f))
+        {
+            return true;
+        }
+        int ivar = stage_dim_index(host, hs, var);
+        if (ivar < 0)
+        {
+            return false;
+        }
+        for (FuncContents *g : order)
+        {
+            if (g == f || g == host || !is_realized(g) ||
+                g->level != FuncContents::Level::At || g->at_func.get() != host)
+            {
+                continue;
+            }
+            // g must be realized in THIS stage's body, at var or an inner loop.
+            int ig = stage_dim_index(host, hs, g->at_var);
+            if (ig < 0 || ig > ivar)
+            {
+                continue;
+            }
+            // Does g (transitively) use f? g's body is its own loop nest; f's use
+            // through g is wherever g reads f, which is enclosed by g's loops --
+            // and g is in this host body, so f's use is too.
+            if (g_uses_f(g, f, order))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Does realized producer g use f anywhere in its own multi-stage body --
+    // directly (any stage reads f) or transitively (through a further producer
+    // realized inside g)?
+    bool g_uses_f(FuncContents *g, FuncContents *f, const std::vector<FuncContents *> &order)
+    {
+        for (int gs = 0; gs < num_stages(g); gs++)
+        {
+            if (stage_reads(g, gs, f))
+            {
+                return true;
+            }
+            // A producer p realized inside g's stage gs (at any of its loops, or
+            // its leaf) that uses f makes g use f. We approximate g's loops by its
+            // dimension list; any p computed at (g, gs, <any dim>) is inside g's
+            // body. Walk each dim as a candidate body site.
+            const std::vector<Var> &d = stage_dims(g, gs);
+            for (const Var &dv : d)
+            {
+                if (body_uses(g, gs, dv.name(), f, order))
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     // Is realized reader h enclosed by (i.e. computed inside) the loop (g, v)?
     bool enclosed_by(FuncContents *h, FuncContents *g, const std::string &v)
     {
@@ -1624,16 +1703,20 @@ struct LoopNestPrinter
             {
                 // (host, var) denotes the `var` loop in EVERY stage of the host
                 // (loopdoc.md section 7): f is injected just inside that loop in
-                // each stage of the host that actually READS f (use-gated), and
-                // stages that do not read f get nothing. So a producer read by
-                // several stages lands once per using stage. (For an RVar site
-                // only one stage has the loop, so this reduces to a single
-                // injection.)
+                // each stage of the host whose body at that level USES f, and
+                // stages that do not use f get nothing. "Uses" is transitive: the
+                // body uses f directly (the stage reads f) OR through another
+                // producer realized in that body that itself uses f (loopdoc.md
+                // section 7, "Computing at an indirect consumer's loop"). So a
+                // producer read by several stages lands once per using stage, and
+                // an indirect producer lands wherever its consumer chain is
+                // realized. (For an RVar site only one stage has the loop, so this
+                // reduces to a single injection.)
                 FuncContents *host = f->at_func.get();
                 for (int hs = 0; hs < num_stages(host); hs++)
                 {
                     if (stage_dim_index(host, hs, f->at_var) >= 0 &&
-                        stage_reads(host, hs, f))
+                        body_uses(host, hs, f->at_var, f, order))
                     {
                         children_at[{host, hs, f->at_var}].push_back(f);
                     }
