@@ -558,27 +558,37 @@ multi-stage block at that loop level
 
 ### When a `compute_at` is illegal
 
-`f.compute_at(g, v)` is not always legal. The key constraint is that
-`compute_at` sets **one** compute level on `f` — a whole-Func property (§1) —
-and *every* per-stage realization of `f` (previous subsection) uses that **same**
-level `(g, v)`. So although `f` is emitted as several `produce f` blocks (one per
-stage of `g` that reads it), they are not free to sit at different sites: the
-single level `v` must simultaneously enclose **every** read of `f`.
+`f.compute_at(g, v)` is not always legal. First, what a **level** is, because it
+is the crux: `(g, v)` is *not* a pointer to one loop. With the stage left
+unspecified (previous subsection) it denotes `g`'s `v` loop in **every** stage of
+`g` — a whole **family** of loop locations, `g.s0.v`, `g.s1.v`, …, one per stage.
+(Halide calls such a `(Func, Var)` pair a *loop level*; the candidate levels at
+which `f` may be computed are its legal *sites* — "site" and "level" are the same
+kind of object, a `(Func, Var)` pattern, plus the special `root` and `inline`.)
+`compute_at` gives `f` this single level, and `f` is realized at it in each stage
+of `g` that reads `f` — so the several `produce f` blocks share the *same level*
+`(g, v)` but sit at *different concrete loops* in the family.
 
-Halide computes this directly. It walks the *whole* loop nest and, at **every
-place `f` is read**, intersects the stack of loops enclosing that read; the
-**legal compute sites** are what survive the intersection (plus `root`). "Every
-place" is literal — each call site, wherever it sits, *including each stage of a
-multi-stage consumer that reads `f`* (and each separate consumer Func). It is a
-single global intersection, not a per-stage choice. If `(g, v)` is not in the
-surviving set, Halide rejects the schedule with *"Func f is computed at the
-following invalid location"* (and lists the legal ones); no loop nest is
-produced.
+Say the level **encloses** a read of `f` when that read lies inside *some* member
+of the family (some `g.s?.v`). The schedule is legal iff the level encloses
+**every** read of `f` — i.e. the family of `g.*.v` loops *collectively* covers
+them all. So "`v` must enclose every read" never means one loop containing
+everything; it means every read sits inside *some* loop of the family. A read in
+a **different** consumer Func, or at `g`'s own outer scope, lies inside no
+`g.*.v` loop at all, so the level cannot cover it — the usual way to be illegal.
 
-(Picking a *different* site per consuming context is exactly the freedom the
-**default inline** schedule has and a single `compute_at` does not — which is
-why the inline default of a non-pure Func cannot, in general, be rewritten as
-one `compute_at`; §11.)
+Halide computes this directly: it walks the *whole* loop nest and, at **every
+place `f` is read**, intersects the stack of `(Func, Var)` levels enclosing that
+read; the legal sites are what survive (plus `root`). It is one global
+intersection over all reads — you pick a single level, not a different one per
+stage. If `(g, v)` does not survive, Halide rejects the schedule with *"Func f is
+computed at the following invalid location"* (and lists the legal ones); no loop
+nest is produced.
+
+(Choosing a *different* place per read is exactly the freedom the **default
+inline** schedule has and a single `compute_at` does not — which is why the
+inline default of a non-pure Func cannot, in general, be rewritten as one
+`compute_at`; §11.)
 
 The ways `(g, v)` falls outside the surviving set:
 
