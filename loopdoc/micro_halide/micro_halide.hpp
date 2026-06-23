@@ -219,6 +219,31 @@ class RDom
     std::string _name;
 };
 
+struct DimData
+{
+    std::string _name;
+
+    DimData(std::string n) : _name(std::move(n))
+    {
+    }
+
+    const std::string &name() const
+    {
+        return _name;
+    }
+
+    template <typename VarList>
+    static std::vector<DimData> from_var_list(const VarList& lst)
+    {
+        std::vector<DimData> result;
+        result.reserve(lst.size());
+        for (const auto& var : lst) {
+            result.emplace_back(var.name());
+        }
+        return result;
+    }
+};
+
 // ---------------------------------------------------------------------------
 // FuncContents: the shared, mutable state behind a Func handle (mirrors
 // Halide::Internal::Function). Copying a Func shares this state.
@@ -234,7 +259,7 @@ struct StageData
     // This stage's ordered loop dimensions, innermost first (dims[0] is the
     // innermost loop). split/fuse/reorder/tile rewrite this list; for an update
     // stage it also contains the RVar loops.
-    std::vector<Var> dims;
+    std::vector<DimData> dims;
 
     // Loop variables of THIS stage that Halide elides (point loops, extent 1).
     // *Declared* per example via micro_halide_collapses (it needs bounds
@@ -312,7 +337,7 @@ struct FuncContents
 // ---------------------------------------------------------------------------
 namespace dimlist
 {
-inline int dim_pos(const std::vector<Var> &a, const std::string &name)
+inline int dim_pos(const std::vector<DimData> &a, const std::string &name)
 {
     for (int i = 0; i < (int)a.size(); i++)
     {
@@ -324,7 +349,7 @@ inline int dim_pos(const std::vector<Var> &a, const std::string &name)
     return -1;
 }
 
-inline void split(std::vector<Var> &a, const std::string &owner,
+inline void split(std::vector<DimData> &a, const std::string &owner,
                   const Var &old_var, const Var &outer, const Var &inner)
 {
     int pos = dim_pos(a, old_var.name());
@@ -334,11 +359,11 @@ inline void split(std::vector<Var> &a, const std::string &owner,
                                  "\" has no dimension \"" + old_var.name() + "\"");
     }
     a.erase(a.begin() + pos);
-    a.insert(a.begin() + pos, outer); // outer goes to old's slot first ...
-    a.insert(a.begin() + pos, inner); // ... then inner pushed inside it
+    a.insert(a.begin() + pos, DimData(outer.name())); // outer goes to old's slot first ...
+    a.insert(a.begin() + pos, DimData(inner.name())); // ... then inner pushed inside it
 }
 
-inline void fuse(std::vector<Var> &a, const std::string &owner,
+inline void fuse(std::vector<DimData> &a, const std::string &owner,
                  const Var &inner, const Var &outer, const Var &fused)
 {
     int ipos = dim_pos(a, inner.name());
@@ -358,10 +383,10 @@ inline void fuse(std::vector<Var> &a, const std::string &owner,
     a.erase(a.begin() + hi);
     a.erase(a.begin() + lo);
     int insert_pos = (opos < ipos) ? ipos - 1 : ipos;
-    a.insert(a.begin() + insert_pos, fused);
+    a.insert(a.begin() + insert_pos, DimData(fused.name()));
 }
 
-inline void reorder(std::vector<Var> &a, const std::string &owner,
+inline void reorder(std::vector<DimData> &a, const std::string &owner,
                     const std::vector<std::string> &names)
 {
     std::vector<int> slots;
@@ -383,7 +408,7 @@ inline void reorder(std::vector<Var> &a, const std::string &owner,
         }
         slots.push_back(pos);
     }
-    std::vector<Var> requested;
+    std::vector<DimData> requested;
     for (const std::string &n : names)
     {
         requested.push_back(a[dim_pos(a, n)]);
@@ -517,11 +542,11 @@ class FuncRef
                          });
         for (const std::string &n : ordered_rvars)
         {
-            u.dims.push_back(Var(n));
+            u.dims.push_back(DimData(n));
         }
         for (const Var &v : u.pure_args)
         {
-            u.dims.push_back(v);
+            u.dims.push_back(DimData(v.name()));
         }
         // Union this stage's producers into the Func's overall producer set
         // (used for realization order and cross-stage legality).
@@ -554,7 +579,7 @@ class FuncRef
         // args, and its reads are the producers. pure_args mirrors dims for
         // uniformity with update stages (no RVars in a pure definition).
         StageData s0;
-        s0.dims = vars;
+        s0.dims = DimData::from_var_list(vars);
         s0.pure_args = vars;
         s0.producers = collect_producers(rhs);
         func->stages.push_back(std::move(s0));
@@ -695,7 +720,7 @@ class FuncStageImpl
     // This update stage's dimension list (loopdoc.md section 10): the same
     // ordered list the printer walks, so transforming it here rewrites only
     // THIS stage's loops. RVars sit in the list just like Vars.
-    std::vector<Var> &dims()
+    std::vector<DimData> &dims()
     {
         return contents->stages[stage_index].dims; // stages[0] is pure; update i -> stage i+1
     }
@@ -801,12 +826,6 @@ class Func: public FuncStageImpl<Func>
         return *this;
     }
 
-    // The pure stage's dimension list.
-    std::vector<Var> &pure_dims() const
-    {
-        return contents->stages[0].dims;
-    }
-
     // Handle to an update stage for per-stage scheduling: f.update(i) schedules
     // update stage s(i+1) (loopdoc.md section 10). Returns a Stage (below).
     class Stage update(int i = 0) const;
@@ -895,9 +914,9 @@ inline Func repeat_edge(const ImageParam &im)
     StageData s0; // stage 0: pure definition, no producers
     for (int i = 0; i < im.dimensions(); i++)
     {
-        s0.dims.push_back(Var("_" + std::to_string(i)));
+        s0.pure_args.push_back(Var("_" + std::to_string(i)));
     }
-    s0.pure_args = s0.dims;
+    s0.dims = DimData::from_var_list(s0.pure_args);
     f.contents->stages.push_back(std::move(s0));
     f.contents->defined = true;
     return f;
@@ -1046,7 +1065,7 @@ struct LoopNestPrinter
         return (int)f->stages.size();
     }
 
-    static const std::vector<Var> &stage_dims(FuncContents *f, int s)
+    static const std::vector<DimData> &stage_dims(FuncContents *f, int s)
     {
         return f->stages[s].dims;
     }
@@ -1065,7 +1084,7 @@ struct LoopNestPrinter
     // if absent.
     static int stage_dim_index(FuncContents *g, int s, const std::string &var)
     {
-        const std::vector<Var> &d = stage_dims(g, s);
+        const std::vector<DimData> &d = stage_dims(g, s);
         for (int i = 0; i < (int)d.size(); i++)
         {
             if (d[i].name() == var)
@@ -1097,7 +1116,7 @@ struct LoopNestPrinter
     // or -1. (Used by store/hoist legality, whose hosts are pure Funcs.)
     static int dim_index(FuncContents *g, const std::string &var)
     {
-        const std::vector<Var> &a = g->stages[0].dims;
+        const std::vector<DimData> &a = g->stages[0].dims;
         for (int i = 0; i < (int)a.size(); i++)
         {
             if (a[i].name() == var)
@@ -1231,8 +1250,8 @@ struct LoopNestPrinter
             // its leaf) that uses f makes g use f. We approximate g's loops by its
             // dimension list; any p computed at (g, gs, <any dim>) is inside g's
             // body. Walk each dim as a candidate body site.
-            const std::vector<Var> &d = stage_dims(g, gs);
-            for (const Var &dv : d)
+            const std::vector<DimData> &d = stage_dims(g, gs);
+            for (const DimData &dv : d)
             {
                 if (body_uses(g, gs, dv.name(), f, order))
                 {
@@ -1731,7 +1750,7 @@ struct LoopNestPrinter
                         {
                             continue;
                         }
-                        const std::vector<Var> &d = stage_dims(h, hs);
+                        const std::vector<DimData> &d = stage_dims(h, hs);
                         if (d.empty())
                         {
                             // No loops in this stage: file f directly at the
