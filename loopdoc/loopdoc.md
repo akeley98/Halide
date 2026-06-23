@@ -592,6 +592,27 @@ those are the candidates — but **not** `h`'s loops that live in `consume g`
 (e.g. `h`'s inner `x`), which execute *after* `g` and so do not enclose `f`'s use
 ([examples/neg_transitive_compute_at_inner.cpp](examples/neg_transitive_compute_at_inner.cpp)).
 
+This pull-in is decided **per stage**, and only where the intermediate is itself
+present. The level `(h, v)` (stage left unspecified, above) names a `v` loop in
+*every* stage of `h`, but the rule "the body at this level uses `f`" is applied
+to **each stage's own body**, built by the same use-gating: an intermediate `g`
+is realized in a stage's body only if *that stage* actually uses `g` (directly,
+or transitively through a further intermediate present in that stage). So `g`
+can pull `f` into a stage **only where `g` itself lands** — a stage that uses
+neither `g` nor `f` gets no `produce f`, even though it has a `v` loop in the
+family. Concretely, when `f.compute_at(h, v)` is reached only through `g`, the
+two conditions stack: `f` appears in stage `s` iff `s`'s body uses `g` at the
+`v` loop *and* `g` uses `f`. This matters most after `rfactor`, whose
+intermediate has a pure stage (reading nothing) beside its reducing stage:
+filing the indirect producer at the intermediate injects it only into the
+reducing stage. [examples/rfactor_indirect_at_intm.cpp](examples/rfactor_indirect_at_intm.cpp)
+(`h.compute_at(intm, u)` through `g`, injected into the intermediate's reducing
+stage but **not** its pure stage), [examples/rfactor_indirect_nested.cpp](examples/rfactor_indirect_nested.cpp)
+(`g` at the intermediate, `h` nested in `g`), and
+[examples/neg_rfactor_indirect_h_at_intm.cpp](examples/neg_rfactor_indirect_h_at_intm.cpp)
+(illegal: with `g` at root, the intermediate's `u` loop no longer encloses `h`'s
+use) exercise the three cases.
+
 ### When a `compute_at` is illegal
 
 `f.compute_at(g, v)` is not always legal. First, what a **level** is, because it

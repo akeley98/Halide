@@ -556,9 +556,23 @@ placed in that body brings its own calls to `f` with it. This is why
 `f.compute_at(h, v)` works even when `h` never reads `f` directly — an
 intermediate `g` (computed at `h.v`) is in the body, so the body "uses" `f` and
 `f` is injected at `h.v` before `g`. Backs loopdoc §7 "Computing at an indirect
-consumer's loop" / `transitive_compute_at_outer.cpp`. (micro_halide's current
-emission gates on *direct* reads of the host stage only, so it drops `f` here —
-an open impl gap; see progress.txt.)
+consumer's loop" / `transitive_compute_at_outer.cpp`.
+
+Crucially this is all **per stage**, and self-grounding: the test is run on each
+stage's own already-mutated body, and `g` itself was injected into that body only
+if `function_is_used_in_stmt(g, that_stage_body)` held. So the transitive chain
+bottoms out in *direct* reads by the stage: `f` lands in stage `s` iff `s`'s body
+contains a call to `g` (recursively) at the `v` loop **and** `g` calls `f`. A
+stage whose body never calls `g` (e.g. an `rfactor` intermediate's pure `= 0`
+stage, which reads nothing) gets neither `g` nor `f`, even though the
+stage-wildcard `LoopLevel(h, v)` matches a `v` loop in it. Backs loopdoc §7's
+per-stage indirect-pull paragraph and `rfactor_indirect_at_intm` /
+`rfactor_indirect_nested` / `neg_rfactor_indirect_h_at_intm`. (micro_halide's
+`body_uses` recursion correctly grounds the *direct* transitive case from the
+earlier milestone, but initially counted an intermediate `g` as present in a
+stage merely because the stage had a loop matching `g`'s compute level — without
+checking `g` is itself used there — so it wrongly pulled the indirect `f` into a
+non-using stage; see progress.txt.)
 
 ### "inline" is a level; "realized" is orthogonal (the terminology wart)
 
