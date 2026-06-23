@@ -728,6 +728,18 @@ alone (§7) would place them; `store_at` only adds the enclosing `store f:` line
 it). The `store f:` node wraps `f`'s *whole* realization — all of its stages
 (§3), since the store level is per-Func.
 
+The store node follows `f` **per host stage**, just as the `produce`/`consume`
+does (§7). When the **host** of the store/compute level has several stages, the
+level `(host, v)` names a `v` loop in every one of them, but `f` is computed only
+in the host stages whose body uses it — so the `store f:` node appears at `v` in
+exactly those stages, never in a host stage that merely has a `v` loop but never
+computes `f`. A producer read only in a consumer's *update* stage therefore gets
+its `store` node in that stage alone, not in the pure stage
+([examples/store_at_update_stage.cpp](examples/store_at_update_stage.cpp); and
+[examples/rfactor_intm_store_at.cpp](examples/rfactor_intm_store_at.cpp), an
+`rfactor` intermediate stored at the merge stage's outer loop but absent from
+`f`'s pure stage).
+
 For `g.store_at(f, y).compute_at(f, x)` — store at the outer loop `y`, compute at
 the inner loop `x` (see [examples/store_at_compute_at.cpp](examples/store_at_compute_at.cpp)):
 
