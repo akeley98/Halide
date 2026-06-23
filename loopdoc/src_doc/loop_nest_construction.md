@@ -756,12 +756,24 @@ mutated at call time is the **wrapped** Func, plus creation of the new wrapper:
      storage; an `in` wrapper is a one-line reader of the original.
      **Its callees are NOT duplicated.** The clone's copied definition expressions
      still hold the *same* `FunctionPtr`s to whatever the original called, so the
-     clone reads the *shared* producers (verified: `f.clone_in(g)` with `f(x) =
-     p(x)+1` yields a single `produce p`, read by both `f` and the clone). This is
-     why `Func::clone_in`'s own doc says "Only this Func is cloned." (See the
-     verdict on the `Function::deep_copy` header comment at the end of this
-     section for why "recursively deep copies all called functions" does not
-     contradict this.)
+     clone reads the *shared* producers. Two independent checks confirm this:
+       - **Produce count.** With a 2-level callee chain `q <- p <- f`,
+         `f.clone_in(g)` (everything `compute_root`) prints exactly one
+         `produce q` and one `produce p`; the clone `f_clone_in_g` reads the same
+         `p`. A recursive callee copy would print each twice.
+       - **Legality discriminator.** With `f(x)=p(x)`, `f.clone_in(g)`, then
+         `p.compute_at(f, x)`, Halide rejects the schedule and its own diagnostic
+         lists the uses of `p`: *"`f_clone_in_g$0` uses p"* **and** *"`f` uses
+         p"*, with the only legal location `p.compute_root()`. If the clone had a
+         private copy of `p`, then `p` would be used by `f` alone and
+         `p.compute_at(f, x)` would be legal. (It is illegal, so `p` is shared.)
+     Do **not** mis-cite `Func::clone_in`'s "Only this Func is cloned … the
+     intermediate Funcs along the path are not" for this: that sentence is about
+     the transitive *caller* chain (the Funcs *between* `fs` and the wrapped Func,
+     e.g. `sum()`'s anonymous reduction Func), not the wrapped Func's callees. It
+     happens to be *consistent* with callee-sharing but is not evidence for it.
+     The evidence is the two checks above (and the source trace in the verdict at
+     the end of this section).
 
 2. **The mapping is recorded on the WRAPPED Func** (`add_wrapper`,
    `src/Function.cpp` ~1229): it inserts into `wrapped.func_schedule.wrappers()`,
@@ -877,20 +889,29 @@ This is exactly why `clone_in` shares callees: `create_clone_wrapper` drives the
 member `deep_copy` with a `copied_map` seeded **only** with the wrapped Func's
 self-reference, and runs `substitute_calls` for **only** `{wrapped -> clone}`.
 With no callees in the map and no env-wide substitution, the copied definition's
-`Call`s keep pointing at the originals — the clone shares them. The user-facing
-`Func::clone_in` doc ("Only this Func is cloned") matches the member's true
-behavior; the `Function::deep_copy` comment overstates it.
+`Call`s keep pointing at the originals — the clone shares them. The
+`Function::deep_copy` comment overstates the member's behavior.
 
 (The user's hypothesis — that "copying a function" has a subtler internal meaning
 than a scheduling-visible copy — is essentially right: the member copies one
 Func's *structure*, and "all called functions" is achieved only when a caller
 supplies the full `copied_map` and a follow-up `substitute_calls`.)
 
-**Confidence: high (~0.9).** Grounded in: the member body (no callee creation),
+A separate caution, noted above: the `Func::clone_in` user-doc phrase "the
+intermediate Funcs along the path are not [cloned]" is about the transitive
+*caller* chain, **not** callees, so it is not independent evidence here. The
+callee-sharing claim rests on the source trace plus the two empirical checks in
+part (b): a single `produce p`/`produce q` over a 2-level callee chain, and
+Halide's own legality diagnostic naming both `f` and `f_clone_in_g$0` as users
+of the shared `p`.
+
+**Confidence: high (~0.95).** Grounded in: the member body (no callee creation),
 `Definition::get_copy` (shallow `Expr`/`FunctionPtr` share), the free
 `deep_copy` + `substitute_calls` protocol, `create_clone_wrapper`'s self-only
-remapping, and the empirical single `produce p`. Residual uncertainty: I did not
-line-by-line audit `FuncSchedule::deep_copy` or specialization copying for some
-hidden Function-creating path, but the empirical clone result rules out callee
-duplication along the `clone_in` path regardless, so any such path would not
-change the verdict for the behavior that matters here.
+remapping, and **two** empirical discriminators (produce-count and the
+`compute_at` legality error that explicitly lists the clone as a user of the
+shared callee). Residual uncertainty: I did not line-by-line audit
+`FuncSchedule::deep_copy` or specialization copying for some hidden
+Function-creating path, but the empirical results rule out callee duplication
+along the `clone_in` path regardless, so any such path would not change the
+verdict for the behavior that matters here.
