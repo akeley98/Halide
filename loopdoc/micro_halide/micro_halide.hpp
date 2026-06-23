@@ -1924,9 +1924,26 @@ struct LoopNestPrinter
                 }
                 else
                 {
+                    // The store node follows f PER HOST STAGE, just as the
+                    // produce/consume does (loopdoc.md section 8). The level
+                    // (store_host, store_var) names a store_var loop in EVERY
+                    // stage of the host, but f is computed only in the host
+                    // stages whose body USES f -- so the `store f:` node appears
+                    // at store_var in exactly those stages, never in a host stage
+                    // that merely has the loop but never computes f. This mirrors
+                    // the per-stage compute-injection above (body_uses), instead
+                    // of a single resolve_stage that would wrongly pin the store
+                    // node to the lowest-index stage having the loop (e.g. a pure
+                    // stage that does not read f).
                     FuncContents *sh = f->store_func.get();
-                    int ss = resolve_stage(sh, f->store_var);
-                    store_at_level[{sh, ss, f->store_var}].push_back(f);
+                    for (int hs = 0; hs < num_stages(sh); hs++)
+                    {
+                        if (stage_dim_index(sh, hs, f->store_var) >= 0 &&
+                            body_uses(sh, hs, f->store_var, f, order))
+                        {
+                            store_at_level[{sh, hs, f->store_var}].push_back(f);
+                        }
+                    }
                 }
             }
         }
