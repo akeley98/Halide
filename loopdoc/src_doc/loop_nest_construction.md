@@ -1,6 +1,6 @@
 # Source evidence: loop-nest construction (bootstrap subset)
 
-This file backs the claims in [../loopdoc.md](../loopdoc.md) §§2–12 with
+This file backs the claims in [../loopdoc.md](../loopdoc.md) §§2–14 with
 citations into the Halide compiler. Paths are relative to the Halide source
 root (`../src` from the loopdoc directory). Line numbers are approximate and
 may drift; the surrounding function names are the stable anchors.
@@ -21,7 +21,7 @@ lowering:
     }
 
 This is why the output never inlines and always appears as the outermost
-`produce` (loopdoc §5, §6, §13 step 1). In the real `realize`/`compile` path the
+`produce` (loopdoc §5, §6, §14 step 1). In the real `realize`/`compile` path the
 same effect comes from the output simply being the realized buffer.
 
 ## 2. The default schedule is "inlined"
@@ -52,7 +52,7 @@ The topological producers-before-consumers order is computed by
 `print_loop_nest` calls it (`auto [order, fused_groups] =
 realization_order(outputs, env);`) and `schedule_functions` injects each
 function's realization in that order. This backs loopdoc §6 ("realization
-order") and §13 step 2. Inlined Funcs remain in `env` and so still contribute
+order") and §14 step 2. Inlined Funcs remain in `env` and so still contribute
 edges to the ordering even though they get no realization.
 
 ### Sibling tie-break
@@ -156,7 +156,7 @@ producer's realization at that point. The matching is done by the
 
 The realization (`produce`/loops/`consume`) is spliced in as a prefix of that
 loop's body, with the remainder of the body becoming the `consume` content.
-This backs loopdoc §7's nesting picture and §13 steps 3–4.
+This backs loopdoc §7's nesting picture and §14 steps 3–4.
 
 ### Legality of a compute_at site
 
