@@ -323,7 +323,9 @@ Marking convention:
     NOTES:
 
 [ ] `specialize`
-    NOTES:
+    NOTES: may run into test harness bugs here with loop nest diffing.
+    Micro-agent should stop and report problems back to the main agent
+    if this is the case.
 
 [ ] `vectorize`, `unroll`, `parallel`, `gpu`, `gpu_lanes`, `gpu_threads`, `gpu_blocks`, `gpu_tile`
     NOTES: micro_halide will not reason about bounds analysis so do
