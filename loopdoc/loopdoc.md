@@ -1093,7 +1093,80 @@ two reduction vars of a 3-D `RDom` and reorders the intermediate's update loops)
 
 ---
 
-## 13. Putting the algorithm together (how the nest is built)
+## 13. `in` and `clone_in`: wrapper and clone Funcs
+
+Both directives create a **new, separate Func** that a chosen set of consumers
+read *instead of* the original. They differ in what that new Func computes. In
+both cases the new Func is an ordinary realized Func — it gets a slot in the
+realization order and is scheduled like any other.
+
+### `f.in(g)` — an identity *wrapper*
+
+`f.in(g)` returns a new Func (printed `f_in_g`) whose definition is the pointwise
+identity `f_in_g(args) = f(args)`, and it makes `g` read `f_in_g` where it used
+to read `f`. The wrapper reads `f`; `f`'s *other* consumers are untouched. A new
+realized Func therefore sits between `f` and `g` (realization order
+`f` → `f_in_g` → `g`):
+
+```
+produce f:
+  ...
+consume f:
+  produce f_in_g:        # the wrapper reads f
+    for ...: f_in_g(...) = ...
+  consume f_in_g:
+    produce g:           # g now reads f_in_g, not f
+      ...
+```
+
+The wrapper is schedulable like any Func (`f_in_g.compute_root()`,
+`f_in_g.compute_at(g, …)`, …). Two common uses: give a shared producer a
+per-consumer staging point (each consumer reads `f` through its own wrapper at
+its own level), and repair the "two consumers force `f` to `root`" situation
+(§7, [neg_compute_at_two_consumers.cpp](examples/neg_compute_at_two_consumers.cpp)):
+wrap `f` separately per consumer so each wrapper has a single consumer and can be
+computed inside it. Variants: `f.in(g)`, `f.in({g1, g2, …})` (one shared wrapper
+for several named consumers), and `f.in()` (a single **global** wrapper used by
+every consumer that has no custom wrapper of its own).
+
+### `f.clone_in(g)` — an independent *clone*
+
+`f.clone_in(g)` returns a new Func that is a **copy of `f`'s entire definition**
+(all stages and schedule), and makes `g` read the clone. Unlike a wrapper, the
+clone *recomputes* `f`'s work rather than reading `f`'s result, so `f` and the
+clone are independent and may be scheduled differently.
+
+A clone duplicates `f` itself but **not `f`'s inputs**: the clone reads the
+*same* producer Funcs that `f` reads — callees are **shared, not copied**. This
+has a sharp scheduling consequence. If `f` reads a producer `p`, then after
+`f.clone_in(g)` the Func `p` is read in two places — inside `f` and inside the
+clone — so the only level enclosing *both* uses is `root`. A schedule that
+computes `p` *inside* `f` (e.g. `p.compute_at(f, x)`) becomes **illegal**: Halide
+reports `p` "is used in" both `f` and `f_clone_in_g` and lists
+`p.compute_root()` as the only legal location. To give a clone genuinely private
+inputs you must clone those inputs too. (The `Func::clone_in` doc's phrase about
+"intermediate Funcs along the path" refers to the transitive *caller* chain
+between the consumers and `f`, **not** to `f`'s callees; the callees are shared.
+See [src_doc §13](src_doc/loop_nest_construction.md) for the verification.)
+
+### Identity in the output, and which consumers are redirected
+
+Each wrapper or clone is a **distinct** Func with its own auto-generated name
+(`f_in_g`, `f_clone_in_g`, plus an internal uniqueness suffix the printer
+strips); the harness treats it as a separate node (§10 — names are normalized to
+positional ids, so what matters is that it is one more distinct Func). They are
+*not* "the same Func appearing twice." Only the **named** consumers are
+redirected — and, transitively, the *direct callers* on each path down to `f`
+(so `f.in(h)` where `h` reaches `f` only through `g` actually redirects `g`); a
+global `f.in()` redirects every other consumer. Crucially, none of this mutates
+the consumer Funcs at the time you call `in`/`clone_in`: the wrapper is recorded
+on `f`, and the consumers' reads are rewritten as a *derived* step when the nest
+is built. [src_doc §13](src_doc/loop_nest_construction.md) documents the
+identity model and that call-rewrite mechanism in detail.
+
+---
+
+## 14. Putting the algorithm together (how the nest is built)
 
 The whole loop nest follows from the rules above, assembled into one procedure:
 
@@ -1105,8 +1178,9 @@ The whole loop nest follows from the rules above, assembled into one procedure:
    in this order so they can pass dependencies along; a **pure inline** Func
    (§4) is never realized and drops out of the steps below (§5), but a non-pure
    inline Func *is* realized (§11) and keeps its slot. An `rfactor` intermediate
-   (§12) is just another Func in this order — a producer of the Func it was
-   factored from — with whatever schedule it was given.
+   (§12), and any `in`/`clone_in` wrapper or clone (§13), are likewise ordinary
+   Funcs in this order — a wrapper/clone sits between the wrapped Func and the
+   consumers it was created for — with whatever schedule each was given.
 
 3. **Give every realized Func a site.** A *realized* Func is any Func that is
    **not** a pure-inline Func — i.e. it gets its own `produce` block. Each goes

@@ -320,8 +320,48 @@ Marking convention:
         untested. s3 wording sharpened to call this out.
 
 
-[ ] `in` (wrapper functions) and `clone_in`
+[WIP] `in` (wrapper functions) and `clone_in`
     NOTES:
+      * SOURCE RESEARCH DONE (src_doc §13). Key findings: (a) wrappers/clones are
+        NOT same-named -- each gets a distinct internal name (<wrapped>_in_<c>$N,
+        _clone_in_); the f.in(g) string is a cosmetic profiler display name only;
+        FunctionGroup membership is weak-pointer lifetime mgmt, not identity. (b)
+        in()/clone_in() do NOT mutate the consumers in fs; they build the wrapper
+        and record {consumer_name -> wrapper} on the WRAPPED Func's
+        func_schedule.wrappers() (key "" = global), normalize fs to DIRECT callers
+        (resolve_transitive_callers), and freeze the wrapper. The consumer
+        call-rewrite is a DERIVED lowering pass, wrap_func_calls (run by
+        print_loop_nest), applied on the env copy. (c) `in` wrapper =
+        pointwise reader f_in_g(args)=f(args); `clone_in` = deep_copy of the
+        wrapped Func's OWN contents only -- CALLEES ARE SHARED, not copied
+        (verified: 2-level chain q<-p<-f prints one produce q/p; and
+        p.compute_at(f,x) is ILLEGAL after f.clone_in(g) because Halide lists both
+        f and f_clone_in_g as users of the shared p). (d) Verdict on the
+        Function::deep_copy header comment ("recursively deep copies all called
+        functions"): accurate only for the whole-pipeline free deep_copy(outputs,
+        env) + substitute_calls protocol; the MEMBER copies one Func's structure
+        and shares callee FunctionPtrs (conf ~0.95).
+      * STAGE-1 REFACTOR DONE (functionality-neutral; all 91 tests still pass):
+        added LoopNestPrinter::func_producers(f) twin of stage_producers(f,s) and
+        routed the three whole-func producer reads (compute_visit_order,
+        realization_order, inlined_reads) through it. Both accessors are marked as
+        THE WRAPPER-RESOLUTION SEAM: the in()/clone_in() consumer-redirection is to
+        be inserted there (and only there), keyed by the consumer, mirroring
+        Halide's wrap_func_calls (record on the wrapped Func, resolve at build
+        time -- NO eager consumer mutation, NO tree-search of consumer
+        shared_ptr<FuncContents>). See micro_halide/wrappers_refactor_proposal.md.
+      * STUBS DONE: Func::in(Func)/in(vector)/in()/clone_in(Func)/clone_in(vector)
+        throw a TODO; they exist only so wrapper-using code compiles (e.g. the
+        human-added examples/humans_compute_at_clone_DONT_DELETE_ME.hpp template,
+        which is a clone+compute_at legality demo and NOT built by the harness --
+        it is a .hpp with no main). That .hpp is the SEED for the milestone's
+        positive/negative examples (do_clone=false legal vs do_clone=true illegal,
+        the shared-callee gotcha); rewrite as proper committed examples then.
+      * OPEN QUESTIONS to settle before implementing (from the proposal): whether
+        to implement Halide's transitive-caller normalization
+        (resolve_transitive_callers); how to target the so-far-UNTESTED
+        realization-order tie-break secondary key (wrappers share a name prefix);
+        one-time precompute vs lazy per-accessor resolution (recommend one-time).
       * Realization-order tie-break (see bootstrap): sibling producers are
         ordered by (name prefix, first-visitation order, full name). Wrappers
         and clones are auto-named from the wrapped Func (e.g. `f`, `f_in_g`,

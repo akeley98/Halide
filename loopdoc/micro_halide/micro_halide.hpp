@@ -831,6 +831,18 @@ class Func: public FuncStageImpl<Func>
     // update stage s(i+1) (loopdoc.md section 10). Returns a Stage (below).
     class Stage update(int i = 0) const;
 
+    // in() / clone_in() (loopdoc.md section 13): create a wrapper / clone Func
+    // that the named consumer(s) read instead of this Func, and return it. These
+    // are STUBS provided by the main agent only so code that uses them COMPILES;
+    // the actual behavior (record the wrapper on THIS Func keyed by consumer,
+    // resolve consumer reads at nest-construction time via the producer-accessor
+    // seam) is the micro-agent's task for that milestone. They throw until then.
+    Func in(const Func &consumer);
+    Func in(const std::vector<Func> &consumers);
+    Func in();
+    Func clone_in(const Func &consumer);
+    Func clone_in(const std::vector<Func> &consumers);
+
     void print_loop_nest();
 };
 
@@ -864,6 +876,30 @@ class Stage: public FuncStageImpl<Stage>
 inline Stage Func::update(int i) const
 {
     return Stage(contents, i);
+}
+
+// STUBS (see the in()/clone_in() declarations in Func). Throw until the
+// in()/clone_in() milestone implements wrappers/clones from loopdoc.md section
+// 13. They exist only so code using these scheduling directives compiles.
+inline Func Func::in(const Func &)
+{
+    throw std::runtime_error("micro_halide: TODO Func::in (loopdoc.md section 13) not implemented");
+}
+inline Func Func::in(const std::vector<Func> &)
+{
+    throw std::runtime_error("micro_halide: TODO Func::in (loopdoc.md section 13) not implemented");
+}
+inline Func Func::in()
+{
+    throw std::runtime_error("micro_halide: TODO Func::in (loopdoc.md section 13) not implemented");
+}
+inline Func Func::clone_in(const Func &)
+{
+    throw std::runtime_error("micro_halide: TODO Func::clone_in (loopdoc.md section 13) not implemented");
+}
+inline Func Func::clone_in(const std::vector<Func> &)
+{
+    throw std::runtime_error("micro_halide: TODO Func::clone_in (loopdoc.md section 13) not implemented");
 }
 
 // rfactor (loopdoc.md section 12): factor THIS update stage's associative
@@ -1109,7 +1145,7 @@ struct LoopNestPrinter
             return;
         }
         visit_order[f] = counter++;
-        for (auto &p : f->producers)
+        for (auto &p : func_producers(f))
         {
             compute_visit_order(p.get(), seen, counter);
         }
@@ -1134,7 +1170,7 @@ struct LoopNestPrinter
             return;
         }
         std::vector<FuncContents *> prods;
-        for (auto &p : f->producers)
+        for (auto &p : func_producers(f))
         {
             prods.push_back(p.get());
         }
@@ -1190,6 +1226,22 @@ struct LoopNestPrinter
     static const std::set<std::string> &stage_collapsed(FuncContents *f, int s)
     {
         return f->stages[s].collapsed;
+    }
+
+    // THE WRAPPER-RESOLUTION SEAM (loopdoc.md section 13, in()/clone_in()).
+    // Every producer read during nest construction goes through one of these two
+    // accessors, keyed by the CONSUMER `f`. Today they return the stored producer
+    // lists verbatim. When in()/clone_in() is implemented, the redirection of a
+    // consumer's reads to a wrapper/clone is inserted HERE (and only here): for
+    // consumer `f`, a producer that has a wrapper registered for `f` is swapped
+    // for that wrapper. Nothing else in the builder reads `->producers` directly,
+    // so the rest of the nest logic needs no changes. (Mirrors Halide's
+    // wrap_func_calls, which records the wrapper on the WRAPPED Func and resolves
+    // consumer calls as a derived pass -- it does not mutate consumers at in()
+    // time; see src_doc section 13.)
+    static const std::vector<std::shared_ptr<FuncContents>> &func_producers(FuncContents *f)
+    {
+        return f->producers;
     }
 
     static const std::vector<std::shared_ptr<FuncContents>> &stage_producers(FuncContents *f, int s)
@@ -1286,7 +1338,7 @@ struct LoopNestPrinter
         {
             return false;
         }
-        for (auto &p : b->producers)
+        for (auto &p : func_producers(b))
         {
             if (p.get() == f)
             {
