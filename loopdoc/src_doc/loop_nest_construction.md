@@ -284,6 +284,22 @@ This is the source basis for "the `store` node is shown only when store !=
 compute" (loopdoc §8), and for `store_root().compute_root()` printing no store
 node (both at root, so equal).
 
+### Per host stage (store node follows the produce)
+
+`store_level().match(for_loop->name)` is tested on the loop names actually
+emitted, which are per stage (`host.s0.v`, `host.s1.v`, … — the stage-wildcard
+`match` accepts any of them, §11). The `Realize` is injected into the same
+mutated stage body that received the func's `produce`/`consume`, and that
+injection is itself per-stage and use-gated (§7: a producer is realized only in
+the host stages whose body uses it). So when the host has several stages, the
+`store` node lands at `v` only in the stages that actually compute the func, not
+in a host stage that merely owns a matching `v` loop. Backs loopdoc §8's
+"per host stage" paragraph and `store_at_update_stage` (producer read only in
+the update stage) / `rfactor_intm_store_at` (intermediate stored at the merge
+stage, absent from the pure stage). (micro_halide initially emitted the store
+node in the first stage owning the store-level loop, regardless of where the
+func is computed — see progress.txt.)
+
 ### Legality
 
 `validate_schedule` (~2285) looks up the requested store and compute levels in
