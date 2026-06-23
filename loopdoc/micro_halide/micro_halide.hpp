@@ -272,13 +272,6 @@ struct StageData
     // Funcs read by THIS stage (deduped). Per-stage so the section-10 legal-site
     // rule can tell which specific stage of a reader uses a producer.
     std::vector<std::shared_ptr<FuncContents>> producers;
-
-    // Raw capture from the definition's left-hand side, recorded by the main
-    // agent because only the C++ types can distinguish these: the bare-Var LHS
-    // args (free dims, in order) and the distinct RVar names the stage uses. The
-    // default `dims` above is built from these per loopdoc.md section 10.
-    std::vector<Var> pure_args;
-    std::vector<std::string> rvars;
 };
 
 // ---------------------------------------------------------------------------
@@ -515,15 +508,16 @@ class FuncRef
     // type-distinguished data; the micro-agent turns it into a dimension list.
     void record_update(const Expr &rhs)
     {
+        std::vector<Var> pure_args;
         StageData u;
         for (size_t i = 0; i < vars.size(); i++)
         {
             if (is_var[i])
             {
-                u.pure_args.push_back(vars[i]); // a bare Var LHS arg = free dim
+                pure_args.push_back(vars[i]); // a bare Var LHS arg = free dim
             }
         }
-        u.rvars = collect_rvars(rhs);
+        std::vector<std::string> rvars = collect_rvars(rhs);
         u.producers = collect_producers(rhs);
         // Build this stage's DEFAULT dimension list (loopdoc.md section 3),
         // innermost-first: the RVars are innermost -- and WITHIN the RVars the
@@ -535,7 +529,7 @@ class FuncRef
         // The captured rvar names are in first-appearance order, which need not
         // equal RDom declaration order; sort them into declaration order (r.x,
         // r.y, r.z, r.w) so the first-declared lands at dims[0] (innermost).
-        std::vector<std::string> ordered_rvars = u.rvars;
+        std::vector<std::string> ordered_rvars = rvars;
         std::stable_sort(ordered_rvars.begin(), ordered_rvars.end(),
                          [](const std::string &a, const std::string &b) {
                              return rvar_decl_rank(a) < rvar_decl_rank(b);
@@ -544,7 +538,7 @@ class FuncRef
         {
             u.dims.push_back(DimData(n));
         }
-        for (const Var &v : u.pure_args)
+        for (const Var &v : pure_args)
         {
             u.dims.push_back(DimData(v.name()));
         }
@@ -580,7 +574,6 @@ class FuncRef
         // uniformity with update stages (no RVars in a pure definition).
         StageData s0;
         s0.dims = DimData::from_var_list(vars);
-        s0.pure_args = vars;
         s0.producers = collect_producers(rhs);
         func->stages.push_back(std::move(s0));
         func->producers = func->stages[0].producers;
@@ -914,9 +907,8 @@ inline Func repeat_edge(const ImageParam &im)
     StageData s0; // stage 0: pure definition, no producers
     for (int i = 0; i < im.dimensions(); i++)
     {
-        s0.pure_args.push_back(Var("_" + std::to_string(i)));
+        s0.dims.push_back(DimData("_" + std::to_string(i)));
     }
-    s0.dims = DimData::from_var_list(s0.pure_args);
     f.contents->stages.push_back(std::move(s0));
     f.contents->defined = true;
     return f;
