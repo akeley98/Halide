@@ -1316,6 +1316,13 @@ struct LoopNestPrinter
     // inside this loop). g at an OUTER loop of the host is NOT in this body --
     // this site lives in g's `consume`, after g (the neg_transitive_..._inner
     // case): such a g does not pull f in here.
+    // Guard against mutual recursion: two producers g, h both filed at (host, v)
+    // can each ask whether the other is present in host stage hs ("is g in this
+    // body?" -> "is h in this body?" -> ...). The "is X present in this stage"
+    // question is monotone, so treating an in-progress query as "not yet known to
+    // be present" (false) is the correct fixpoint and breaks the cycle.
+    std::set<std::tuple<FuncContents *, int, FuncContents *>> body_uses_active_;
+
     bool body_uses(FuncContents *host, int hs, const std::string &var, FuncContents *f,
                    const std::vector<FuncContents *> &order)
     {
@@ -1328,6 +1335,14 @@ struct LoopNestPrinter
         {
             return false;
         }
+        auto key = std::make_tuple(host, hs, f);
+        if (!body_uses_active_.insert(key).second)
+        {
+            // Already evaluating this exact (host, stage, f) query higher in the
+            // recursion -- treat as not (yet) present to terminate the cycle.
+            return false;
+        }
+        bool result = false;
         for (FuncContents *g : order)
         {
             if (g == f || g == host || !is_realized(g) ||
@@ -1341,15 +1356,30 @@ struct LoopNestPrinter
             {
                 continue;
             }
+            // ...AND g must actually be injected INTO this host stage. The level
+            // (host, g->at_var) names a g->at_var loop in EVERY stage of host, but
+            // g lands only in the stages whose body uses g (loopdoc.md section 7:
+            // "an intermediate g is realized in a stage's body only if THAT stage
+            // actually uses g"). So the pull-in stacks per stage: f appears in
+            // stage hs iff hs's body uses g at the var loop AND g uses f. Without
+            // this check the rfactor intermediate's pure stage (which reads
+            // neither g nor f) would wrongly pull f in just because it shares the
+            // var loop with the reducing stage (rfactor_indirect_at_intm).
+            if (!body_uses(host, hs, g->at_var, g, order))
+            {
+                continue;
+            }
             // Does g (transitively) use f? g's body is its own loop nest; f's use
             // through g is wherever g reads f, which is enclosed by g's loops --
             // and g is in this host body, so f's use is too.
             if (g_uses_f(g, f, order))
             {
-                return true;
+                result = true;
+                break;
             }
         }
-        return false;
+        body_uses_active_.erase(key);
+        return result;
     }
 
     // Does realized producer g use f anywhere in its own multi-stage body --

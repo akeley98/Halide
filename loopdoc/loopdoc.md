@@ -611,7 +611,10 @@ stage but **not** its pure stage), [examples/rfactor_indirect_nested.cpp](exampl
 (`g` at the intermediate, `h` nested in `g`), and
 [examples/neg_rfactor_indirect_h_at_intm.cpp](examples/neg_rfactor_indirect_h_at_intm.cpp)
 (illegal: with `g` at root, the intermediate's `u` loop no longer encloses `h`'s
-use) exercise the three cases.
+use) exercise the three cases. The pull-in fires in *every* using stage, not just
+one: in [examples/transitive_multistage_inject.cpp](examples/transitive_multistage_inject.cpp)
+two update stages both read `g`, so `h.compute_at(f, x)` (through `g`) is injected
+into both — but still not the pure stage.
 
 ### When a `compute_at` is illegal
 
