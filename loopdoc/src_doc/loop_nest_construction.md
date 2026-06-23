@@ -748,11 +748,20 @@ mutated at call time is the **wrapped** Func, plus creation of the new wrapper:
      `wrapper(args) = wrapped(args)` — a pointwise identity that reads the wrapped
      Func. That is the whole body; it is what makes an `in` wrapper a thin
      "caching"/redirection layer.
-   * `create_clone_wrapper` (~2176): `deep_copy`s the wrapped Func's entire
-     `FunctionContents` into the new member, then `substitute_calls` remaps the
+   * `create_clone_wrapper` (~2176): `deep_copy`s the wrapped Func's **own**
+     `FunctionContents` (its init/update `Definition`s, schedule, specializations,
+     reduction domains) into the new member, then `substitute_calls` remaps the
      clone's **self-references** to point at the clone itself (weakened). A clone
-     is therefore a full, independent duplicate — its own stages, schedule, and
-     storage — whereas an `in` wrapper is a one-line reader of the original.
+     is an independent duplicate of *that one Func's* definition + schedule +
+     storage; an `in` wrapper is a one-line reader of the original.
+     **Its callees are NOT duplicated.** The clone's copied definition expressions
+     still hold the *same* `FunctionPtr`s to whatever the original called, so the
+     clone reads the *shared* producers (verified: `f.clone_in(g)` with `f(x) =
+     p(x)+1` yields a single `produce p`, read by both `f` and the clone). This is
+     why `Func::clone_in`'s own doc says "Only this Func is cloned." (See the
+     verdict on the `Function::deep_copy` header comment at the end of this
+     section for why "recursively deep copies all called functions" does not
+     contradict this.)
 
 2. **The mapping is recorded on the WRAPPED Func** (`add_wrapper`,
    `src/Function.cpp` ~1229): it inserts into `wrapped.func_schedule.wrappers()`,
@@ -826,3 +835,62 @@ redirection while walking producers during nest construction) needs no
 tree-search over consumer `shared_ptr<FuncContents>` at `in()` time. The eager
 alternative — rewriting every consumer's producer pointers when `in()` is called
 — is *not* what Halide does and is the churn worth avoiding.
+
+### Verdict on the `Function::deep_copy` header comment
+
+The header comment (`src/Function.h`) on `Function::deep_copy` reads:
+
+> Deep copy this Function into 'copy'. It recursively deep copies all called
+> functions, schedules, update definitions, extern func arguments,
+> specializations, and reduction domains. … This method also takes a map of
+> <old Function, deep-copied version> as input and would use the deep-copied
+> Function from the map if exists instead of creating a new deep-copy …
+
+**Verdict: the comment is accurate for the method's intended *whole-pipeline*
+use, but misleading about the method *in isolation* — the member
+`Function::deep_copy` does not by itself recurse into or copy called functions.**
+What the body actually does (`src/Function.cpp` ~497):
+
+* It copies *this* Function's own components: scalar fields, `func_schedule`
+  (`FuncSchedule::deep_copy`), `init_def` and each update via
+  `Definition::get_copy()`, and extern arguments. `get_copy()`
+  (`src/Definition.cpp` ~120) copies the `Definition`'s `values`/`args` `Expr`s
+  by plain assignment — and copying an `Expr` is a shallow `IntrusivePtr` share,
+  so every `Call` node keeps the **same** `FunctionPtr` to the original callee.
+  No callee `FunctionContents` is created here.
+* `copied_map` is *consulted* (not populated with new copies) in exactly one
+  place inside the method: `deep_copy_extern_func_argument_helper` (~470), which
+  looks up an extern-arg callee and `internal_assert`s it is **already** in the
+  map. Regular `Call` expressions are not remapped by this method at all.
+
+The "recursively … all called functions" behavior is realized by the **free
+function** `deep_copy(const vector<Function>&, const map<string,Function>&)`
+(`src/Function.cpp` ~1304), the *caller* that the comment tacitly assumes: it
+pre-seeds `copied_map` with an empty copy of **every** Function in the
+environment, calls the member `deep_copy` on each, and *then* runs
+`substitute_calls(copied_map)` to repoint every `Call` to its copy. The
+recursion/coverage is that caller's loop plus the separate `substitute_calls`
+pass — not logic inside the member. So the comment describes the *cooperating
+protocol's* end-to-end effect and pins it on the member method.
+
+This is exactly why `clone_in` shares callees: `create_clone_wrapper` drives the
+member `deep_copy` with a `copied_map` seeded **only** with the wrapped Func's
+self-reference, and runs `substitute_calls` for **only** `{wrapped -> clone}`.
+With no callees in the map and no env-wide substitution, the copied definition's
+`Call`s keep pointing at the originals — the clone shares them. The user-facing
+`Func::clone_in` doc ("Only this Func is cloned") matches the member's true
+behavior; the `Function::deep_copy` comment overstates it.
+
+(The user's hypothesis — that "copying a function" has a subtler internal meaning
+than a scheduling-visible copy — is essentially right: the member copies one
+Func's *structure*, and "all called functions" is achieved only when a caller
+supplies the full `copied_map` and a follow-up `substitute_calls`.)
+
+**Confidence: high (~0.9).** Grounded in: the member body (no callee creation),
+`Definition::get_copy` (shallow `Expr`/`FunctionPtr` share), the free
+`deep_copy` + `substitute_calls` protocol, `create_clone_wrapper`'s self-only
+remapping, and the empirical single `produce p`. Residual uncertainty: I did not
+line-by-line audit `FuncSchedule::deep_copy` or specialization copying for some
+hidden Function-creating path, but the empirical clone result rules out callee
+duplication along the `clone_in` path regardless, so any such path would not
+change the verdict for the behavior that matters here.
