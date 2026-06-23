@@ -272,6 +272,13 @@ struct StageData
     // Funcs read by THIS stage (deduped). Per-stage so the section-10 legal-site
     // rule can tell which specific stage of a reader uses a producer.
     std::vector<std::shared_ptr<FuncContents>> producers;
+
+    // Names of THIS stage's dimensions that are RVar (reduction) loops, as
+    // opposed to free Vars. Needed because a 1-D RDom's RVar name has no "$"
+    // suffix and so is indistinguishable from a Var by name alone -- rfactor
+    // (loopdoc.md section 12) must know which dims are RVars to decide which to
+    // drop in the merge stage. The pure stage has none.
+    std::set<std::string> rvars;
 };
 
 // ---------------------------------------------------------------------------
@@ -537,6 +544,7 @@ class FuncRef
         for (const std::string &n : ordered_rvars)
         {
             u.dims.push_back(DimData(n));
+            u.rvars.insert(n); // mark this dim as an RVar (reduction) loop
         }
         for (const Var &v : pure_args)
         {
@@ -858,13 +866,130 @@ inline Stage Func::update(int i) const
     return Stage(contents, i);
 }
 
-// STUB (see Stage::rfactor declaration). Throws until the micro-agent
-// implements the loop-nest construction documented in loopdoc.md section 12.
+// rfactor (loopdoc.md section 12): factor THIS update stage's associative
+// reduction into a fresh intermediate Func plus a rewritten merge stage.
+//
+// Given the original Func `f` with pure-stage dims P (innermost first) and the
+// chosen update stage with dim list U (innermost first, containing RVars and
+// free Vars), and a list of preserved pairs {RVar -> Var}:
+//
+//   * The intermediate Func `<f>_intm` is built with two stages:
+//       - pure stage: dims = P, then the new pure Vars in preserved order,
+//         the new vars OUTERMOST (so appended to the innermost-first list).
+//       - update stage: a COPY of U with each preserved RVar name replaced
+//         in place by its new pure Var name. Non-preserved RVars stay as
+//         reduction loops; the loop order is otherwise unchanged. It reads
+//         whatever the original update read (its producers).
+//   * The original chosen update stage is REWRITTEN into the merge: its dim
+//     list keeps the free Vars and the preserved RVars (still RVars) and
+//     DROPS the non-preserved RVars. Its only producer becomes the
+//     intermediate (so `intm` is a producer of `f`).
 inline Func Stage::rfactor(const std::vector<std::pair<RVar, Var>> &preserved)
 {
-    (void)preserved;
-    throw std::runtime_error(
-        "micro_halide: TODO rfactor (loopdoc.md section 12) not implemented");
+    if (stage_index == 0)
+    {
+        throw std::runtime_error(
+            "micro_halide: rfactor may only be called on an update stage, "
+            "not the pure stage (loopdoc.md section 12)");
+    }
+
+    FuncContents *orig = contents.get();
+    StageData &update = orig->stages[stage_index];
+
+    // Map preserved RVar name -> new pure Var name, and the set of preserved
+    // RVar names (to decide which dims are dropped in the merge).
+    std::map<std::string, std::string> rvar_to_var;
+    std::set<std::string> preserved_rvars;
+    for (const auto &p : preserved)
+    {
+        rvar_to_var[p.first.name()] = p.second.name();
+        preserved_rvars.insert(p.first.name());
+    }
+
+    // ---- Build the intermediate Func --------------------------------------
+    Func intm(orig->name + "_intm");
+    intm.contents->defined = true;
+
+    // Intermediate pure stage: original pure dims, then new pure Vars in
+    // preserved order, new vars outermost (appended to the innermost-first
+    // list).
+    StageData intm_pure;
+    intm_pure.dims = orig->stages[0].dims;
+    for (const auto &p : preserved)
+    {
+        intm_pure.dims.push_back(DimData(p.second.name()));
+    }
+    // The pure init reads nothing (it is `= 0`).
+
+    // Intermediate update stage: copy of the original update dim list with
+    // each preserved RVar replaced in place by its new pure Var.
+    StageData intm_update;
+    for (const DimData &d : update.dims)
+    {
+        auto it = rvar_to_var.find(d.name());
+        if (it != rvar_to_var.end())
+        {
+            // A preserved RVar becomes a pure Var in the intermediate.
+            intm_update.dims.push_back(DimData(it->second));
+        }
+        else
+        {
+            intm_update.dims.push_back(d);
+            // A non-preserved RVar stays a reduction loop here.
+            if (update.rvars.count(d.name()))
+            {
+                intm_update.rvars.insert(d.name());
+            }
+        }
+    }
+    // It reads whatever the original update read.
+    intm_update.producers = update.producers;
+
+    intm.contents->stages.push_back(std::move(intm_pure));
+    intm.contents->stages.push_back(std::move(intm_update));
+    // The intermediate's overall producers are those of its update stage.
+    intm.contents->producers = intm.contents->stages[1].producers;
+
+    // ---- Rewrite the original chosen update stage into the merge ----------
+    std::vector<DimData> merged;
+    std::set<std::string> merged_rvars;
+    for (const DimData &d : update.dims)
+    {
+        bool is_rvar = update.rvars.count(d.name()) != 0;
+        if (is_rvar && !preserved_rvars.count(d.name()))
+        {
+            continue; // non-preserved RVar: lifted into the intermediate
+        }
+        merged.push_back(d); // free Var, or preserved RVar (stays an RVar here)
+        if (is_rvar)
+        {
+            merged_rvars.insert(d.name());
+        }
+    }
+    update.dims = std::move(merged);
+    update.rvars = std::move(merged_rvars);
+    // The merge now reads only the intermediate.
+    update.producers = {intm.contents};
+
+    // The intermediate becomes a producer of the original Func. Add it to the
+    // Func's overall producer set if not already present.
+    {
+        bool have = false;
+        for (auto &p : orig->producers)
+        {
+            if (p.get() == intm.contents.get())
+            {
+                have = true;
+                break;
+            }
+        }
+        if (!have)
+        {
+            orig->producers.push_back(intm.contents);
+        }
+    }
+
+    return intm;
 }
 
 // ---------------------------------------------------------------------------

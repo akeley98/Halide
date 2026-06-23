@@ -239,7 +239,7 @@ Marking convention:
         per-stage micro_halide_collapses ((Func)->stage0, (f.update(N))->stage
         N+1), RVar within-order (r.x innermost), use-gated multi-stage injection.
 
-[WIP] `rfactor` (factor a reduction for parallelism)
+[✅] `rfactor` (factor a reduction for parallelism)
     NOTES:
       * Added as its own milestone (was missing from the original list). It
         builds directly on Update definitions + RDom/RVar, so it must come AFTER
@@ -289,6 +289,35 @@ Marking convention:
         the merge-drop can recognise rxi as an RVar. rfactor_multivar uses a 3-D
         RDom to get multi-var coverage WITHOUT splitting RVars. See DISCOVERED
         DOC GAPS below.
+      * DONE (delegated; integrity-clean micro-agent run add700e5976729ba6, no
+        forbidden accesses, read loopdoc.md, no commits; reported NO doc gaps).
+        The micro-agent implemented Stage::rfactor from loopdoc s12 + s3 + s11
+        ALONE. Notable: it INDEPENDENTLY RE-INTRODUCED a per-stage RVar record
+        (StageData::rvars, std::set<string>) -- the same field the human had
+        just deleted as dead weight -- because the merge-drop must distinguish
+        non-preserved RVars (dropped) from free Vars (kept), and a 1-D RDom's
+        RVar is a bare name indistinguishable from a Var otherwise. So the
+        experiment confirmed s12+s3 convey that need without source access.
+        Impl: pure stage = orig pure dims + new vars (outermost); update = copy
+        of orig update dims with preserved RVar->Var, non-preserved stay RVars;
+        merge = drop non-preserved RVars, rewire producers (intm reads what the
+        update read; merge reads only intm; intm added to f's producer set).
+      * ADVERSARIAL follow-ups (main agent, all PASS with ZERO further micro
+        changes -> impl generalizes, no overfit): rfactor_func_producer (reduces
+        over a real compute_root Func, not an ImageParam -> tests producer
+        wiring + realization order g->intm->f), rfactor_preserve_inner (preserve
+        the FIRST-declared r.x and lift r.y, mirror of rfactor_basic -> guards
+        against hardcoded "drop r.x"), rfactor_second_update (rfactor update(1)
+        of a 2-update Func -> tests stage_index handling; trivial reorder on
+        update(0) suppresses Halide's all-or-nothing-scheduling warning). 81
+        examples total, all pass.
+      * VALIDATION SIDE-FIX (during the StageData discussion): added
+        update_rvar_decl_order.cpp -- the ONLY example where an RVar's textual
+        appearance order (r.y before r.x) differs from RDom declaration order.
+        Confirmed Halide orders reduction loops by DECLARATION (r.x innermost),
+        not appearance; micro_halide matches. Closes a latent unverified clause
+        in s3 ("first-declared innermost") that every prior example left
+        untested. s3 wording sharpened to call this out.
 
 
 [ ] `in` (wrapper functions) and `clone_in`
