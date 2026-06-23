@@ -626,19 +626,96 @@ class ImageParam
     }
 };
 
+class Func;
+class Stage;
+
 // ---------------------------------------------------------------------------
-// Func: a handle to a (shared) FuncContents.
+// Common code for scheduling operators valid both on Func (program the
+// pure stage) and Stage (program an update stage).
 // ---------------------------------------------------------------------------
-class Func
+template <typename Derived>
+class FuncStageImpl
 {
   public:
     std::shared_ptr<FuncContents> contents;
+    int stage_index;  // 0 for pure stage, 1 + n for n-th update stage.
 
-    Func() : contents(std::make_shared<FuncContents>())
+    FuncStageImpl(std::shared_ptr<FuncContents> _contents, int _stage_index)
+      : contents(std::move(_contents))
+      , stage_index(_stage_index)
     {
     }
 
-    explicit Func(std::string name) : contents(std::make_shared<FuncContents>())
+    // split(old, outer, inner, factor): replace `old` with two dimensions --
+    // `inner` (innermost, at old's former slot) and `outer` just outside it.
+    // [x, y] under split(x, xo, xi, 8) -> [xi, xo, y]. One extra `for`.
+    Derived &split(const Var &old_var, const Var &outer, const Var &inner, int factor)
+    {
+        (void)factor; // bound is normalized away by the harness
+        dimlist::split(dims(), owner(), old_var, outer, inner);
+        return static_cast<Derived&>(*this);
+    }
+
+    // fuse(inner, outer, fused): remove `inner` and `outer`, place a single
+    // `fused` dimension at inner's former position. [x, y] under fuse(x, y, xy)
+    // -> [xy]. One fewer `for`.
+    Derived &fuse(const Var &inner, const Var &outer, const Var &fused)
+    {
+        dimlist::fuse(dims(), owner(), inner, outer, fused);
+        return static_cast<Derived&>(*this);
+    }
+
+    // tile(x, y, xo, yo, xi, yi, xf, yf): split(x,xo,xi,xf); split(y,yo,yi,yf);
+    // reorder(xi, yi, xo, yo). [x, y] -> [xi, yi, xo, yo]. Two extra `for`s.
+    Derived &tile(const Var &x, const Var &y,
+                  const Var &xo, const Var &yo,
+                  const Var &xi, const Var &yi,
+                  int xfactor, int yfactor)
+    {
+        (void)xfactor; (void)yfactor;
+        dimlist::split(dims(), owner(), x, xo, xi);
+        dimlist::split(dims(), owner(), y, yo, yi);
+        dimlist::reorder(dims(), owner(), {xi.name(), yi.name(), xo.name(), yo.name()});
+        return static_cast<Derived&>(*this);
+    }
+
+    // reorder(v_inner, ..., v_outer): lists dimensions innermost first and
+    // permutes ONLY the listed dimensions among the slots they currently
+    // occupy; unnamed dimensions keep their position. Each listed dimension
+    // must exist and be named at most once.
+    // accepts Vars, RVars, or a 1-D RDom (anything with .name()).
+    template <typename... Vars>
+    Derived &reorder(const Vars &...vars)
+    {
+        std::vector<std::string> names{vars.name()...};
+        dimlist::reorder(dims(), owner(), names);
+        return static_cast<Derived&>(*this);
+    }
+
+    // This update stage's dimension list (loopdoc.md section 10): the same
+    // ordered list the printer walks, so transforming it here rewrites only
+    // THIS stage's loops. RVars sit in the list just like Vars.
+    std::vector<Var> &dims()
+    {
+        return contents->stages[stage_index].dims; // stages[0] is pure; update i -> stage i+1
+    }
+    const std::string &owner() const
+    {
+        return contents->name;
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Func: a handle to a (shared) FuncContents.
+// ---------------------------------------------------------------------------
+class Func: public FuncStageImpl<Func>
+{
+  public:
+    Func(): FuncStageImpl(std::make_shared<FuncContents>(), 0)
+    {
+    }
+
+    explicit Func(std::string name): FuncStageImpl(std::make_shared<FuncContents>(), 0)
     {
         contents->name = std::move(name);
     }
@@ -724,76 +801,10 @@ class Func
         return *this;
     }
 
-    // ---- Loop transforms (loopdoc.md section 6) --------------------------
-    // These rewrite the PURE stage's ordered dimension list (stages[0].dims,
-    // with dims[0] the INNERMOST loop). They change only this Func's own loops
-    // and the dimension names usable as compute_at/store_at sites; they never
-    // move the Func relative to others and never change which values are
-    // computed. (Update stages are transformed through Func::update(i); see
-    // the Stage class.)
-
     // The pure stage's dimension list.
     std::vector<Var> &pure_dims() const
     {
         return contents->stages[0].dims;
-    }
-
-    // Find a Var's index in the pure stage's dimension list, or -1.
-    int dim_pos(const std::string &name) const
-    {
-        const std::vector<Var> &a = pure_dims();
-        for (int i = 0; i < (int)a.size(); i++)
-        {
-            if (a[i].name() == name)
-            {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    // split(old, outer, inner, factor): replace `old` with two dimensions --
-    // `inner` (innermost, at old's former slot) and `outer` just outside it.
-    // [x, y] under split(x, xo, xi, 8) -> [xi, xo, y]. One extra `for`.
-    Func &split(const Var &old_var, const Var &outer, const Var &inner, int factor)
-    {
-        (void)factor; // bound is normalized away by the harness
-        dimlist::split(pure_dims(), contents->name, old_var, outer, inner);
-        return *this;
-    }
-
-    // fuse(inner, outer, fused): remove `inner` and `outer`, place a single
-    // `fused` dimension at inner's former position. [x, y] under fuse(x, y, xy)
-    // -> [xy]. One fewer `for`.
-    Func &fuse(const Var &inner, const Var &outer, const Var &fused)
-    {
-        dimlist::fuse(pure_dims(), contents->name, inner, outer, fused);
-        return *this;
-    }
-
-    // tile(x, y, xo, yo, xi, yi, xf, yf): split(x,xo,xi,xf); split(y,yo,yi,yf);
-    // reorder(xi, yi, xo, yo). [x, y] -> [xi, yi, xo, yo]. Two extra `for`s.
-    Func &tile(const Var &x, const Var &y,
-               const Var &xo, const Var &yo,
-               const Var &xi, const Var &yi,
-               int xfactor, int yfactor)
-    {
-        split(x, xo, xi, xfactor);
-        split(y, yo, yi, yfactor);
-        reorder(xi, yi, xo, yo);
-        return *this;
-    }
-
-    // reorder(v_inner, ..., v_outer): lists dimensions innermost first and
-    // permutes ONLY the listed dimensions among the slots they currently
-    // occupy; unnamed dimensions keep their position. Each listed dimension
-    // must exist and be named at most once.
-    template <typename... Vars>
-    Func &reorder(const Vars &...vars)
-    {
-        std::vector<std::string> names{vars.name()...};
-        dimlist::reorder(pure_dims(), contents->name, names);
-        return *this;
     }
 
     // Handle to an update stage for per-stage scheduling: f.update(i) schedules
@@ -810,57 +821,11 @@ class Func
 // THAT stage's dimension list (which may contain RVars) -- is the micro-agent's
 // task, from loopdoc.md sections 6 and 10.
 // ---------------------------------------------------------------------------
-class Stage
+class Stage: public FuncStageImpl<Stage>
 {
   public:
-    std::shared_ptr<FuncContents> func;
-    int index; // update index: updates[index]
-
-    Stage(std::shared_ptr<FuncContents> f, int i) : func(std::move(f)), index(i)
+    Stage(std::shared_ptr<FuncContents> f, int i) : FuncStageImpl(std::move(f), i + 1)
     {
-    }
-
-    // This update stage's dimension list (loopdoc.md section 10): the same
-    // ordered list the printer walks, so transforming it here rewrites only
-    // THIS stage's loops. RVars sit in the list just like Vars.
-    std::vector<Var> &dims()
-    {
-        return func->stages[index + 1].dims; // stages[0] is pure; update i -> stage i+1
-    }
-    const std::string &owner() const
-    {
-        return func->name;
-    }
-
-    Stage &split(const Var &old_var, const Var &outer, const Var &inner, int factor)
-    {
-        (void)factor;
-        dimlist::split(dims(), owner(), old_var, outer, inner);
-        return *this;
-    }
-    Stage &fuse(const Var &inner, const Var &outer, const Var &fused)
-    {
-        dimlist::fuse(dims(), owner(), inner, outer, fused);
-        return *this;
-    }
-    Stage &tile(const Var &x, const Var &y,
-                const Var &xo, const Var &yo,
-                const Var &xi, const Var &yi,
-                int xfactor, int yfactor)
-    {
-        (void)xfactor; (void)yfactor;
-        dimlist::split(dims(), owner(), x, xo, xi);
-        dimlist::split(dims(), owner(), y, yo, yi);
-        dimlist::reorder(dims(), owner(), {xi.name(), yi.name(), xo.name(), yo.name()});
-        return *this;
-    }
-    // reorder accepts Vars, RVars, or a 1-D RDom (anything with .name()).
-    template <typename... Vars>
-    Stage &reorder(const Vars &...vars)
-    {
-        std::vector<std::string> names{vars.name()...};
-        dimlist::reorder(dims(), owner(), names);
-        return *this;
     }
 
     // rfactor (loopdoc.md section 12): factor THIS update stage's associative
@@ -913,7 +878,7 @@ inline void micro_halide_collapses(const Stage &s, std::initializer_list<Var> va
 {
     for (const Var &v : vars)
     {
-        s.func->stages[s.index + 1].collapsed.insert(v.name());
+        s.contents->stages[s.stage_index].collapsed.insert(v.name());
     }
 }
 
