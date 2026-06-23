@@ -26,6 +26,8 @@ template <bool do_clone>
     }
     f.compute_root(); g.compute_root(); h.compute_root();
 
+    micro_halide_collapses(p, {x});
+
 // Human hypocrisy going on here (violates USE_MICRO_HALIDE rule)
 #ifdef USE_MICRO_HALIDE
     out.print_loop_nest();
