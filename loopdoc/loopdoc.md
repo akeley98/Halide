@@ -191,8 +191,12 @@ Each stage has its **own dimension list**, built from its own left-hand side:
 > side **plus the `RVar`s** of any `RDom` it uses. Default order, innermost
 > first: the `RVar`s are innermost — and *within* the `RVar`s the first-declared
 > dimension (`r.x`) is the **innermost** loop, matching the `Var` convention
-> that the first dimension varies fastest — and the free pure `Var`s sit outside
-> them (in the usual order, first LHS argument innermost among the pures). A
+> that the first dimension varies fastest. This order follows the `RDom`'s
+> **declaration** order, *not* the order the `RVar`s happen to appear in the
+> update expression: a stage that writes `r.y` before `r.x` still loops with
+> `r.x` innermost ([examples/update_rvar_decl_order.cpp](examples/update_rvar_decl_order.cpp)).
+> The free pure `Var`s sit outside the `RVar`s
+> (in the usual order, first LHS argument innermost among the pures). A
 > pure dimension whose left-hand-side slot is occupied by an `RVar` or a general
 > expression (e.g. the `in(r)` index in the histogram, or `f(x, r)`) does
 > **not** produce a loop in that stage.
