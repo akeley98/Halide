@@ -40,3 +40,16 @@ then prune). Add a one-line `why` so future-me knows the trigger.
       functions") is misleading for the member in isolation — the recursion is the
       free `deep_copy(outputs, env)` + `substitute_calls` protocol. See src_doc §13
       verdict. Worth a comment fix in Halide proper if/when touching that file.
+
+## Notes / gotchas (standing reminders)
+
+- canonicalize.py keys Func identity on the printed NAME, not on first-appearance
+  position: `func_id[name] = F{len}` (canonicalize.py ~151). So two DISTINCT
+  micro_halide Funcs that print the same name are merged into one positional id
+  (and one structurally-different func can be masked). This bit the custom+global
+  wrapper case (two `f_in` wrappers collapsed until the custom one was renamed
+  `f_in_<consumer>`). Implication for clone/auto-name-heavy milestones
+  (`compute_with`, more wrappers): micro_halide must give each distinct Func a
+  distinct printed name matching how Halide disambiguates, or tests silently
+  conflate funcs. Not a harness bug (Halide always gives distinct names); just a
+  naming-discipline requirement to keep in mind.
