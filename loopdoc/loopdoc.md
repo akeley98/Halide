@@ -1140,6 +1140,16 @@ for several named consumers), and `f.in()` (a single **global** wrapper used by
 every consumer that has no custom wrapper of its own, either defined before or
 after the `f.in()`).
 
+A global wrapper coexists with custom ones. When `f` has both a custom wrapper
+(for some consumers) and a global wrapper, a consumer with its own custom wrapper
+uses that (**custom takes precedence**), and every other consumer uses the
+global wrapper — **except `f`'s own wrappers, which keep reading `f`**. A wrapper
+is created precisely to read `f`, so the global redirect never applies to `f`'s
+custom or global wrappers themselves: each of them reads `f`, and they sit as
+siblings both consuming `f` (see
+[examples/in_custom_and_global.cpp](examples/in_custom_and_global.cpp): `g1`'s
+custom wrapper and the global wrapper both read `f`, neither reads the other).
+
 ### `f.clone_in(g)` — an independent *clone*
 
 `f.clone_in(g)` returns a new Func that is a **copy of `f`'s entire definition**

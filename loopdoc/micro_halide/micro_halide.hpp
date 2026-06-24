@@ -328,6 +328,18 @@ struct FuncContents
     bool hoist_is_root = false;            // hoist_storage_root() (else hoist_storage)
     std::shared_ptr<FuncContents> hoist_func; // host, for hoist_storage
     std::string hoist_var;                 // host loop var name, for hoist_storage
+
+    // in() / clone_in() wrappers (loopdoc.md section 13). The wrapper/clone is
+    // recorded on the WRAPPED Func (this one), keyed by the redirected
+    // *direct-caller* consumer (transitive-caller normalization is resolved at
+    // in()/clone_in() time -- see Func::in/clone_in -- so the keys here are the
+    // direct callers of this Func that should read the wrapper instead). The
+    // consumers' reads are not mutated; the producer-accessor seam
+    // (func_producers/stage_producers) performs the substitution as a one-time
+    // pass at the start of nest construction. A `global_wrapper` (from `f.in()`)
+    // redirects every consumer that has no per-consumer wrapper of its own.
+    std::map<FuncContents *, std::shared_ptr<FuncContents>> wrappers;
+    std::shared_ptr<FuncContents> global_wrapper;
 };
 
 // ---------------------------------------------------------------------------
@@ -878,28 +890,129 @@ inline Stage Func::update(int i) const
     return Stage(contents, i);
 }
 
-// STUBS (see the in()/clone_in() declarations in Func). Throw until the
-// in()/clone_in() milestone implements wrappers/clones from loopdoc.md section
-// 13. They exist only so code using these scheduling directives compiles.
-inline Func Func::in(const Func &)
+// ---------------------------------------------------------------------------
+// in() / clone_in() (loopdoc.md section 13). Both create a new, separate Func
+// that a chosen set of consumers read instead of the wrapped Func `f`:
+//   * an `in` wrapper is a pure pointwise reader of `f` (its single producer is
+//     `f`); left at the default inline level it is a pure inline Func and is
+//     substituted away (so unscheduled it has no effect), and it always keeps
+//     `f` in the pipeline (the wrapper reads `f`).
+//   * a clone is an independent copy of `f`'s OWN definition (all stages) whose
+//     calls still point at the SAME callees (callees are shared, not copied):
+//     so the clone reads `f`'s inputs, not `f`. If every consumer of `f` is
+//     redirected to the clone, `f` becomes unreachable and drops out.
+//
+// We do NOT mutate the named consumers here. We record the new Func on `f`,
+// keyed by the redirected *direct-caller* consumers; the actual reads are
+// rewritten by the producer-accessor seam at nest-construction time
+// (loopdoc.md section 13 "Implementation note"). Transitive-caller
+// normalization ("f.in(h)" where h reaches f only through g redirects g) IS
+// resolved here, since the producer graph already exists by the time in()/
+// clone_in() is called for a named consumer.
+namespace internal
 {
-    throw std::runtime_error("micro_halide: TODO Func::in (loopdoc.md section 13) not implemented");
-}
-inline Func Func::in(const std::vector<Func> &)
+// Direct callers of `f` reachable on a path from `consumer` down to `f` (i.e.
+// the Funcs that DIRECTLY read `f` and lie between `consumer` and `f`). If
+// `consumer` itself reads `f`, it is its own redirect target.
+inline void collect_direct_callers(FuncContents *node, FuncContents *f,
+                                    std::set<FuncContents *> &seen,
+                                    std::set<FuncContents *> &out)
 {
-    throw std::runtime_error("micro_halide: TODO Func::in (loopdoc.md section 13) not implemented");
+    if (!seen.insert(node).second)
+    {
+        return;
+    }
+    if (node == f)
+    {
+        return;
+    }
+    for (auto &p : node->producers)
+    {
+        if (p.get() == f)
+        {
+            out.insert(node); // node directly reads f -> it is a redirect target
+        }
+        else
+        {
+            collect_direct_callers(p.get(), f, seen, out);
+        }
+    }
 }
+} // namespace internal
+
+inline Func Func::in(const std::vector<Func> &consumers)
+{
+    // One shared wrapper for all the named consumers (loopdoc.md section 13).
+    Func w(contents->name + "_in");
+    StageData s0;
+    s0.dims = contents->stages[0].dims; // identity wrapper: same dimensions as f
+    s0.producers = {contents};          // the wrapper reads f
+    w.contents->stages.push_back(std::move(s0));
+    w.contents->producers = {contents};
+    w.contents->defined = true;
+
+    for (const Func &c : consumers)
+    {
+        std::set<FuncContents *> seen, callers;
+        internal::collect_direct_callers(c.contents.get(), contents.get(), seen, callers);
+        for (FuncContents *caller : callers)
+        {
+            contents->wrappers[caller] = w.contents;
+        }
+    }
+    return w;
+}
+
+inline Func Func::in(const Func &consumer)
+{
+    return in(std::vector<Func>{consumer});
+}
+
 inline Func Func::in()
 {
-    throw std::runtime_error("micro_halide: TODO Func::in (loopdoc.md section 13) not implemented");
+    // A single GLOBAL wrapper used by every consumer with no custom wrapper of
+    // its own (loopdoc.md section 13). Redirection is resolved at build time.
+    Func w(contents->name + "_in");
+    StageData s0;
+    s0.dims = contents->stages[0].dims;
+    s0.producers = {contents};
+    w.contents->stages.push_back(std::move(s0));
+    w.contents->producers = {contents};
+    w.contents->defined = true;
+    contents->global_wrapper = w.contents;
+    return w;
 }
-inline Func Func::clone_in(const Func &)
+
+inline Func Func::clone_in(const std::vector<Func> &consumers)
 {
-    throw std::runtime_error("micro_halide: TODO Func::clone_in (loopdoc.md section 13) not implemented");
+    // An independent clone: a COPY of f's entire definition (all stages and the
+    // producer set), but the callees are SHARED (the copied stages reference the
+    // same producer shared_ptrs). The clone therefore reads f's inputs, not f
+    // (loopdoc.md section 13).
+    Func w(contents->name + "_clone_in");
+    w.contents->stages = contents->stages;       // copy all stages (shared callees)
+    w.contents->producers = contents->producers; // same callees, shared
+    w.contents->defined = true;
+    // A clone must NOT inherit f's wrapper registry (those wrappers wrap f, not
+    // the clone).
+    w.contents->wrappers.clear();
+    w.contents->global_wrapper.reset();
+
+    for (const Func &c : consumers)
+    {
+        std::set<FuncContents *> seen, callers;
+        internal::collect_direct_callers(c.contents.get(), contents.get(), seen, callers);
+        for (FuncContents *caller : callers)
+        {
+            contents->wrappers[caller] = w.contents;
+        }
+    }
+    return w;
 }
-inline Func Func::clone_in(const std::vector<Func> &)
+
+inline Func Func::clone_in(const Func &consumer)
 {
-    throw std::runtime_error("micro_halide: TODO Func::clone_in (loopdoc.md section 13) not implemented");
+    return clone_in(std::vector<Func>{consumer});
 }
 
 // rfactor (loopdoc.md section 12): factor THIS update stage's associative
@@ -1253,14 +1366,89 @@ struct LoopNestPrinter
     // must redirect every consumer reachable from the output, including ones
     // defined after the in() call -- so deferred, build-time resolution is
     // required, not merely preferred.)
-    static const std::vector<std::shared_ptr<FuncContents>> &func_producers(FuncContents *f)
+    //
+    // Backing store filled once by resolve_wrappers() at the start of print().
+    // When no in()/clone_in() is in play these are exact copies of the stored
+    // producer lists, so behavior is unchanged.
+    std::map<FuncContents *, std::vector<std::shared_ptr<FuncContents>>> resolved_producers_;
+    std::map<std::pair<FuncContents *, int>, std::vector<std::shared_ptr<FuncContents>>>
+        resolved_stage_producers_;
+
+    // For consumer `c`, return f' = the wrapper/clone that `c` should read in
+    // place of producer `f`, or `f` itself if no redirection applies. A
+    // per-consumer wrapper (keyed on the direct-caller `c`) wins; otherwise a
+    // global f.in() wrapper redirects `c` (but never the wrapper itself, which
+    // reads f).
+    static const std::shared_ptr<FuncContents> &redirect(
+        const std::shared_ptr<FuncContents> &f, FuncContents *c)
     {
-        return f->producers;
+        auto it = f->wrappers.find(c);
+        if (it != f->wrappers.end())
+        {
+            return it->second;
+        }
+        if (f->global_wrapper && f->global_wrapper.get() != c)
+        {
+            return f->global_wrapper;
+        }
+        return f;
     }
 
-    static const std::vector<std::shared_ptr<FuncContents>> &stage_producers(FuncContents *f, int s)
+    // One-time pass (loopdoc.md section 13 "Implementation note"): rewrite every
+    // Func's / stage's producer list, swapping any producer that has a
+    // wrapper/clone registered for this consumer. Fills the backing store the
+    // two accessors below read from. Called once at the start of print(); see
+    // the RESOLUTION TIMING note above for why this is build-time, not at in()
+    // time (a global f.in() may redirect consumers defined after the call).
+    //
+    // Reachability must be taken over the RESOLVED graph (a wrapper/clone is
+    // reachable from the output only through the consumers redirected to it), so
+    // we walk from the output, resolving each node's producers as we discover it
+    // and following the resolved edges to find the rest. One pass, stable refs.
+    void resolve_wrappers(FuncContents *output)
     {
-        return f->stages[s].producers;
+        std::vector<FuncContents *> stack{output};
+        std::set<FuncContents *> done;
+        while (!stack.empty())
+        {
+            FuncContents *c = stack.back();
+            stack.pop_back();
+            if (!done.insert(c).second)
+            {
+                continue;
+            }
+            std::vector<std::shared_ptr<FuncContents>> rp;
+            for (auto &p : c->producers)
+            {
+                const std::shared_ptr<FuncContents> &r = redirect(p, c);
+                rp.push_back(r);
+                stack.push_back(r.get());
+            }
+            resolved_producers_[c] = std::move(rp);
+            for (int s = 0; s < (int)c->stages.size(); s++)
+            {
+                std::vector<std::shared_ptr<FuncContents>> rsp;
+                for (auto &p : c->stages[s].producers)
+                {
+                    const std::shared_ptr<FuncContents> &r = redirect(p, c);
+                    rsp.push_back(r);
+                    stack.push_back(r.get());
+                }
+                resolved_stage_producers_[{c, s}] = std::move(rsp);
+            }
+        }
+    }
+
+    const std::vector<std::shared_ptr<FuncContents>> &func_producers(FuncContents *f)
+    {
+        auto it = resolved_producers_.find(f);
+        return it != resolved_producers_.end() ? it->second : f->producers;
+    }
+
+    const std::vector<std::shared_ptr<FuncContents>> &stage_producers(FuncContents *f, int s)
+    {
+        auto it = resolved_stage_producers_.find({f, s});
+        return it != resolved_stage_producers_.end() ? it->second : f->stages[s].producers;
     }
 
     // Index of a Var name within stage s's dimension list (dim0 = innermost), -1
@@ -1897,6 +2085,12 @@ struct LoopNestPrinter
         // The output Func is always computed at the outermost (root) level.
         output->level = FuncContents::Level::Root;
         output->at_func.reset();
+
+        // Resolve in()/clone_in() wrapper redirection ONCE, up front, before any
+        // producer is read (loopdoc.md section 13 "Implementation note"). All
+        // later producer reads go through func_producers/stage_producers, which
+        // return from the backing store this fills.
+        resolve_wrappers(output);
 
         // Establish first-visitation order (tie-breaker), then realization order.
         std::set<FuncContents *> visit_seen;
