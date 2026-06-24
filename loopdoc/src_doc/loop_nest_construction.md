@@ -143,8 +143,8 @@ confirms the leaf line shape `f(...) = ...` (loopdoc §2).
 
 ## 6. compute_at injection point
 
-For a Func with `compute_level == at(host, var)`, `schedule_functions` finds
-the loop in `host` whose name matches the compute level and injects the
+For a Func with `compute_level == at(site func, var)`, `schedule_functions` finds
+the loop in the site func whose name matches the compute level and injects the
 producer's realization at that point. The matching is done by the
 `compute_level.match(for_loop->name)` test inside the injecting mutator:
 
@@ -190,7 +190,7 @@ Func (their common ancestors), always including `root`. The requested
 This is the source basis for loopdoc §7 "When a compute_at is illegal":
 
 * loop does not exist  → requested level matches no `Site` → not found.
-* host is not a consumer → the host's loops never appear in any use's stack, so
+* site func is not a consumer → the site func's loops never appear in any use's stack, so
   they are never in `sites_allowed`.
 * a consumer lies outside the site → that consumer's use stack does not contain
   the site, so intersection drops it; with two unrelated uses only `root`
@@ -218,7 +218,7 @@ value:
 `print_loop_nest` runs `simplify(s)` as its last step, so these extent-1 loops
 are gone before printing. A root Func is required over its full output region,
 so none of its loops collapse; a `compute_at` Func is required only over the
-sub-region read per host iteration, so any pointwise dimension collapses. This
+sub-region read per site-func iteration, so any pointwise dimension collapses. This
 is the source-level basis for the caveat in loopdoc §7: the loop *count* of a
 `compute_at` Func is a function of bounds inference, not just its
 dimensionality.
@@ -258,7 +258,7 @@ loops that go at its compute level. In the For-loop mutator:
     s = Realize::make(name, func.output_types(), memory_type, bounds, const_true(), s);
 
 So the `Realize` wraps everything from the store-level loop down (including the
-host loops between the store and compute levels, and the `produce`/`consume`
+site-func loops between the store and compute levels, and the `produce`/`consume`
 spliced in deeper at the compute level). `store_root()` is `LoopLevel::root()`,
 the outermost level, so its `Realize` ends up wrapping the whole pipeline body —
 this is why loopdoc §8's `store_root` node prints outside the output's
@@ -284,17 +284,17 @@ This is the source basis for "the `store` node is shown only when store !=
 compute" (loopdoc §8), and for `store_root().compute_root()` printing no store
 node (both at root, so equal).
 
-### Per host stage (store node follows the produce)
+### Per site-func stage (store node follows the produce)
 
 `store_level().match(for_loop->name)` is tested on the loop names actually
-emitted, which are per stage (`host.s0.v`, `host.s1.v`, … — the stage-wildcard
-`match` accepts any of them, §11). The `Realize` is injected into the same
-mutated stage body that received the func's `produce`/`consume`, and that
+emitted, which are per stage (one `v` loop per stage of the site func — the
+stage-wildcard `match` accepts any of them, §11). The `Realize` is injected into
+the same mutated stage body that received the func's `produce`/`consume`, and that
 injection is itself per-stage and use-gated (§7: a producer is realized only in
-the host stages whose body uses it). So when the host has several stages, the
-`store` node lands at `v` only in the stages that actually compute the func, not
-in a host stage that merely owns a matching `v` loop. Backs loopdoc §8's
-"per host stage" paragraph and `store_at_update_stage` (producer read only in
+the site-func stages whose body uses it). So when the site func has several
+stages, the `store` node lands at `v` only in the stages that actually compute the
+func, not in a site-func stage that merely owns a matching `v` loop. Backs loopdoc
+§8's "per site-func stage" paragraph and `store_at_update_stage` (producer read only in
 the update stage) / `rfactor_intm_store_at` (intermediate stored at the merge
 stage, absent from the pure stage). (micro_halide initially emitted the store
 node in the first stage owning the store-level loop, regardless of where the
@@ -439,7 +439,7 @@ A serial-loop `reorder` changes only names and the order of otherwise-identical
 topological consequence". The consequence is real because `compute_at`
 injection (§7 above) matches the *level name* in the post-reorder `dims`: moving
 a dim inward/outward moves the loop a producer is filed under, changing how many
-host loops land inside its `consume`. Backs `reorder_topological.cpp` vs
+site-func loops land inside its `consume`. Backs `reorder_topological.cpp` vs
 `reorder_baseline.cpp`. (A loop-type change — `parallel`/`vectorize`/`unroll`,
 which set `Dim::for_type` — *is* kept by both the printer and canonicalizer, so
 reordering typed loops would be visible; that is a later milestone.)
@@ -453,7 +453,7 @@ four resulting vars to `{xi, yi, xo, yo}` (innermost first), exactly as loopdoc
 ### Sites are matched post-transform
 
 Because `compute_at`/`store_at` resolve their level by matching the name against
-the host's `dims` at scheduling time, the transformed vars are the legal sites,
+the site func's `dims` at scheduling time, the transformed vars are the legal sites,
 and consumed vars are gone. `g.compute_at(out, x)` after `out.fuse(x, y, xy)`
 fails the `ComputeLegalSchedules` lookup (§7 above) since no loop named `x`
 remains — only `xy` (and `outermost`/`root`). Backs
