@@ -374,6 +374,10 @@ Marking convention:
     Need mega-example that combines compute_with, multiple update stages, ForMode, and transitivity (indirect producer/consumer dependencies).
     But save this for the adversarial stage.
 
+    TODO: loopdoc.md seems to have made up "host" terminology that isn't used in the real Halide.
+    Check if this accusation is accurate.
+    If so, this should be changed, because it'll conflict with host/device terms that will matter a lot for GPU.
+
 
 # DISCOVERED DOC GAPS
 

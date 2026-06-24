@@ -626,6 +626,21 @@ into both — but still not the pure stage.
 
 ### When a `compute_at` is illegal
 
+<!-- Human: some problems that don't necessarily belong in this section, but need to be discussed:
+
+f.compute_at(...) being illegal because some other g.compute_with(f) exists and this breaks a consumer of g (that is not a consumer of f).
+This will surely interact is weird ways with update stages, and especially the rule of re-materializing consumers multiple times when used in multiple stages.
+
+How do g.compute_at(...) and g.compute_with(...) interact?
+Is it illegal, doing something different than g.compute_with(...) alone, ignoring g.compute_at(...), or something else entirely.
+
+I'm worried about the length of the document.
+If possible, compute_at legality should be described as a general rule or principle (precisely describing when producer/consumer relations break),
+rather than a huge list of deduction rules that will grow even longer with future milestones.
+However, if this generality is not possible to express real Halide behavior with full precision, fall back to the huge list of rules strategy.
+
+-->
+
 `f.compute_at(g, v)` is not always legal. First, what a **level** is, because it
 is the crux: `(g, v)` is *not* a pointer to one loop. With the stage left
 unspecified (previous subsection) it denotes `g`'s `v` loop in **every** stage of
@@ -1249,6 +1264,11 @@ identity model and that call-rewrite mechanism in detail.
 
 ## 14. `compute_with`: fusing the loops of two stages
 
+<!-- Human: There needs to be brief clarification that the directive records state that guides future loop nest creation.
+This is part of why I wanted the scheduling state elucidated so badly (in §1)
+So e.g. the reader isn't confused why f.compute_with(a, ...) and f.compute_with(b, ...) isn't creating a fused group {f, a, b}.
+-->
+
 Every directive so far gives one Func its *own* loop nest. `compute_with` is
 different: it takes two stages that would otherwise be computed in **separate**
 loop nests and **interleaves them into one shared nest**. It creates no new Func
@@ -1312,6 +1332,8 @@ this is the parent's `compute_at`/`compute_root` *site*, a separate thing from
 the fuse level `v`. (`compute_root` → the group is at root; `compute_at(out, y)`
 → the group sits inside `out`'s `y` loop.) Within the group:
 
+<!-- Human: there isn't necessarily a single `v` for parents with multiple children? -->
+
 * From the outermost loop **down to and including the fuse level `v`** there is
   **one shared loop nest** (one loop per level, *not* one per member). Halide
   prints these loop vars with a `fused.` prefix; the canonicalizer drops loop
@@ -1348,6 +1370,25 @@ multi-stage Func's sibling stage nests (§3), except each is now fused.
 the init and the update stages: two shared nests, side by side, inside the one
 pair of `produce` blocks. A stage left **unfused** simply emits its own ordinary
 (unfused) loop nest as a sibling in that same sequence.
+
+<!-- Human: please look into RealizationOrder.cpp, check_fused_stages_are_scheduled_in_order.
+ 
+Concerned about full description of legal/illegal compute_with and interaction with other scheduling features.
+For example, what happens with
+
+g.compute_at(...)
+h.compute_at(...)  // Not same as g
+f.compute_with(g, ...)
+f.update().compute_with(h, ...)
+
+In general, the description of fused groups being a relation between stages (not functions) leaves open questions about interactions with loop generation steps that consider functions as a whole.
+
+Bonus, what if g and h actually have the same compute_at?
+
+Bonus 2, what if one of the f.compute_with or f.update().compute_with is omitted?
+e.g. if only the f.update() is compute_with'd, it seems f should still have its own place in realization order (assuming f is not inlined) ... but when f is realized, it's contradictory where the code for the f.update() stage should go (should it go into the `produce f:` block that includes the pure stage, because that's what "3. A single Func's loops and its stages" says, or does it get fused into h's loops?
+
+-->
 
 ### Member ordering — two distinct orders
 
@@ -1407,6 +1448,7 @@ computes a shared producer at the parent's fused loop. Note its `input` keeps
 *both* its loops there — a fused loop's bounds are the union over the members, so
 a producer at a fused level can avoid a collapse it would suffer at a plain
 `compute_at`; as always, such elision is *declared* per example, not derived.
+
 
 ### Out of scope (bounds-only, invisible here)
 
@@ -1479,6 +1521,27 @@ The whole loop nest follows from the rules above, assembled into one procedure:
    way, so a Func filed inside a Func that is itself filed inside a third nests
    accordingly (§7). A Func scheduled `store_root()` is the special case where
    its `store` node opens at the very outermost level, wrapping the whole nest.
+
+  <!-- Human: I'm sorry this is frustrating not-too-actionable criticism,
+  but I find the description below and the long section 14 very hard to put together in my head into a clear loop nest structure for a realized fused group.
+  In general, it feels like the description in the compute_with section is a large set of "constraints" for what the output will look like, described as a set of cases for different features.
+  This makes it hard for me to deduce how all constraints are satisfied when lots of features interact.
+  I would prefer a clear exposition describing how the loop nest "grows" over time, if that makes sense.
+
+  My mental model is that we start by injecting produce/consume and a loop nest based on the parent alone.
+  This includes update stages of the parent.
+  After that, some additional produce/consume wrapping and "sibling" loop nests will be injected for each child.
+  This will be in some ordering.
+  This step maybe could lead to broken producer/consumer relationships, which is detected by some rules I don't understand.
+
+  Additionally, is my mental model (if not already functionally incorrect) also similar to how the actual Halide compiler injects the func stage realizations?
+  This is partially answered by Loop emission of the src_doc; a simplified-for-user-explanation version of this may form the basis for loopdoc.md as well.
+
+  Keep in mind the main_agent.md actually encourages you to modify the Halide compiler itself,
+  with `debug(1) << text` statements, to more confidently reverse-engineer Halide.
+  No main agent has done this so far; you may be the first.
+
+  -->
 
    When the Func reached at a site is the parent of a **fused group** (§14), the
    group emits as a unit in place of a lone `produce f`: the shared loops
