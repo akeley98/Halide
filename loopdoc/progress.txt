@@ -375,6 +375,24 @@ Marking convention:
             cheaper on the hot accessors, keeps pointer identity stable for
             p.get()==f comparisons, and lets the accessors keep returning
             const-ref. [confirm with human before delegating]
+      * EXAMPLES WRITTEN (verified against Halide; the in/clone_in POSITIVES fail
+        under micro pending the stub's implementation, like rfactor pre-delegate;
+        the NEGATIVE passes as both-error; the tie-break passes now):
+          in_basic, in_unscheduled (wrapper inlines away), in_compute_at
+          (collapse fw{y}), in_multi (f.in({g1,g2}) shared), in_global (f.in()),
+          in_two_consumers_fix (collapse fw{x,y}; positive for
+          neg_compute_at_two_consumers), clone_basic (shared callee p),
+          neg_clone_shared_callee (p.compute_at(f,x) illegal after clone),
+          in_transitive (f stays) vs clone_transitive (f drops),
+          tiebreak_visitation_order.
+        NOTE on tie-break: wrapper NAMES do not actually create same-prefix
+        siblings-of-one-consumer (f vs f_in_g have different prefixes; clones for
+        different consumers are not siblings). The visitation-order secondary key
+        is exercised instead with plain numbered funcs b1/b2 (prefix "b") where
+        b2 is listed first so visitation overrides alphabetical -- micro's
+        existing tie-break MATCHES Halide, closing the long-untested secondary
+        key. Ready to delegate the in/clone_in implementation once examples are
+        reviewed.
       * Realization-order tie-break (see bootstrap): sibling producers are
         ordered by (name prefix, first-visitation order, full name). Wrappers
         and clones are auto-named from the wrapped Func (e.g. `f`, `f_in_g`,
