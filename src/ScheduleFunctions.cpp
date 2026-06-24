@@ -1805,6 +1805,27 @@ private:
         vector<pair<string, Expr>> add_lets;
         map<string, set<string>> aliases;
 
+        // [loopdoc-trace] Show how a fused group is assembled. Permanent research
+        // aid for the loopdoc branch (this branch is never merged upstream); fires
+        // only at HL_DEBUG_CODEGEN>=1, so it does not affect the diffed debug_0 log.
+        if (funcs.size() > 1) {
+            debug(1) << "[loopdoc-trace] fused group of " << funcs.size() << " Funcs:\n";
+            for (size_t i = 0; i < funcs.size(); i++) {
+                debug(1) << "[loopdoc-trace]   funcs[" << i << "] = " << funcs[i].name()
+                         << (i + 1 == funcs.size() ? "   <- funcs.back() (group_parent / outermost produce, last realized)" : "")
+                         << "\n";
+            }
+            debug(1) << "[loopdoc-trace] stage order (each injected at its own fuse level):\n";
+            for (const auto &fs : stage_order) {
+                const auto &def = (fs.second == 0) ? fs.first.definition() : fs.first.updates()[fs.second - 1];
+                const auto &fl = def.schedule().fuse_level().level;
+                debug(1) << "[loopdoc-trace]   inject " << fs.first.name() << ".s" << fs.second
+                         << " at fuse level "
+                         << (fl.is_inlined() ? "<none: own nest>" : (fl.is_root() ? "<root>" : fl.to_string()))
+                         << "\n";
+            }
+        }
+
         for (const auto &func_stage : stage_order) {
             const auto &f = func_stage.first;
 
