@@ -942,8 +942,17 @@ inline void collect_direct_callers(FuncContents *node, FuncContents *f,
 
 inline Func Func::in(const std::vector<Func> &consumers)
 {
-    // One shared wrapper for all the named consumers (loopdoc.md section 13).
-    Func w(contents->name + "_in");
+    // One shared wrapper for all the named consumers (loopdoc.md section 13). A
+    // CUSTOM wrapper's name embeds its (first) named consumer (Halide names it
+    // `f_in_g1`) so it is a DISTINCT node from a global `f.in()` wrapper (named
+    // `f_in`) -- the two must not collapse to one identity when both coexist
+    // (in_custom_and_global.cpp).
+    std::string wname = contents->name + "_in";
+    if (!consumers.empty())
+    {
+        wname += "_" + consumers.front().contents->name;
+    }
+    Func w(wname);
     StageData s0;
     s0.dims = contents->stages[0].dims; // identity wrapper: same dimensions as f
     s0.producers = {contents};          // the wrapper reads f
@@ -1376,9 +1385,12 @@ struct LoopNestPrinter
 
     // For consumer `c`, return f' = the wrapper/clone that `c` should read in
     // place of producer `f`, or `f` itself if no redirection applies. A
-    // per-consumer wrapper (keyed on the direct-caller `c`) wins; otherwise a
-    // global f.in() wrapper redirects `c` (but never the wrapper itself, which
-    // reads f).
+    // per-consumer wrapper (keyed on the direct-caller `c`) wins (CUSTOM TAKES
+    // PRECEDENCE, loopdoc.md section 13); otherwise a global f.in() wrapper
+    // redirects `c` -- EXCEPT `f`'s own wrappers, which keep reading `f`. A
+    // wrapper (custom or global) is created precisely to read `f`, so the global
+    // redirect never applies to any of `f`'s own wrappers: they sit as siblings
+    // all consuming `f` (loopdoc.md section 13, in_custom_and_global.cpp).
     static const std::shared_ptr<FuncContents> &redirect(
         const std::shared_ptr<FuncContents> &f, FuncContents *c)
     {
@@ -1387,11 +1399,30 @@ struct LoopNestPrinter
         {
             return it->second;
         }
-        if (f->global_wrapper && f->global_wrapper.get() != c)
+        if (f->global_wrapper && !is_own_wrapper(f, c))
         {
             return f->global_wrapper;
         }
         return f;
+    }
+
+    // Is consumer `c` one of `f`'s OWN wrappers (a custom wrapper recorded in
+    // f->wrappers, or f's global wrapper)? Such a wrapper reads `f` directly and
+    // must NOT be redirected by f's global wrapper (loopdoc.md section 13).
+    static bool is_own_wrapper(const std::shared_ptr<FuncContents> &f, FuncContents *c)
+    {
+        if (f->global_wrapper && f->global_wrapper.get() == c)
+        {
+            return true;
+        }
+        for (auto &kv : f->wrappers)
+        {
+            if (kv.second.get() == c)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     // One-time pass (loopdoc.md section 13 "Implementation note"): rewrite every
