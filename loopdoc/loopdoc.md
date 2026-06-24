@@ -1250,11 +1250,12 @@ loop nests and **interleaves them into one shared nest**. It creates no new Func
 and changes no computed value — it only re-shapes loops.
 
 `b.compute_with(a, v)` fuses stage `b` into stage `a`, sharing the loops from
-the **outermost down to and including the level `v`**. Here `a` is the
-**parent** (the stage whose loops survive and own the fused nest) and `b` is the
-**child** (its matching loops are merged into the parent's). The first argument
-can be a Func (its initial stage) or a `Stage` (`a.update(j)`); the call is made
-on the child:
+the **outermost down to and including the level `v`**. The method is called *on*
+the stage being fused in and takes the stage to fuse *into* as its argument: `b`
+(the **receiver**) is the **child**, and `a` (the **argument**) is its
+**parent** — the stage `b` is fused into, whose loops the child's are merged
+into. The argument can be a Func (its initial stage) or a `Stage`
+(`a.update(j)`):
 
 ```cpp
 g.compute_with(f, y);                       // fuse g's init stage into f's, at level y
@@ -1277,9 +1278,20 @@ g.update().compute_with(f.update(), y);     // fuse the update stages too
 
 ### The fused group and its loop structure
 
-All stages tied together by `compute_with` form one **fused group**, realized as
-a unit at the **parent's** compute level (`compute_root` → at root;
-`compute_at(out, y)` → inside `out`'s `y` loop). Within the group:
+All stages tied together by `compute_with` form one **fused group** (the
+grouping is by *connected component*: `compute_with` can chain — a child may
+itself be the parent of a further `compute_with`, as in
+[examples/compute_with_chain.cpp](examples/compute_with_chain.cpp), and the whole
+chain is one group). One member of the group is its **group parent**: the member
+that is *nobody's child* — the root of the chain — and whose loops actually
+survive as the shared nest. When every child fuses directly into one stage (the
+common case, and all but one example here), that stage is the group parent. The
+unqualified word **"parent" below means the group parent**, which is what the
+ordering and placement rules turn on.
+
+The group is realized as a unit at the **group parent's** compute level
+(`compute_root` → at root; `compute_at(out, y)` → inside `out`'s `y` loop).
+Within the group:
 
 * From the outermost loop **down to and including `v`** there is **one shared
   loop nest**. (Halide prints these loop vars with a `fused.` prefix; the
@@ -1292,10 +1304,11 @@ a unit at the **parent's** compute level (`compute_root` → at root;
 
 The members appear in **two different orders**, and both must be reproduced:
 
-* **Compute (body) order**, inside the fused loop: the **parent first**, then the
-  other members in realization-order tie-break (§6). (This is a topological order
-  of the `compute_with` edges: a parent stage is always computed before a child
-  fused onto it.)
+* **Compute (body) order**, inside the fused loop: a **topological order of the
+  `compute_with` edges** — each parent stage before any child fused onto it, so
+  the group parent comes first — with the §6 tie-break ordering any members that
+  have no edge between them. (When all children fuse directly into the group
+  parent, this is just "parent first, then the children in §6 order".)
 * **`produce`/`consume` nesting**: the **parent's `produce` is outermost**; the
   other members nest *inside* it, in the **reverse** of realization-tie-break
   order (the member realized first is the innermost `produce`). The matching
