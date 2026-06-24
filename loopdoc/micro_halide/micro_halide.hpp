@@ -1239,6 +1239,20 @@ struct LoopNestPrinter
     // wrap_func_calls, which records the wrapper on the WRAPPED Func and resolves
     // consumer calls as a derived pass -- it does not mutate consumers at in()
     // time; see src_doc section 13.)
+    //
+    // RESOLUTION TIMING: do the consumer->wrapper substitution ONCE, up front --
+    // a single pass at the start of nest construction that fills a backing store
+    // these accessors then return from -- rather than recomputing it on every
+    // call. These accessors are hot (the realization-order DFS, body_uses /
+    // g_uses_f recursion, stage_reads, store-node placement all go through them),
+    // and one-time resolution keeps the returned shared_ptrs stable so the
+    // p.get()==f identity comparisons throughout the builder stay consistent, and
+    // lets both accessors keep returning by const-ref. This mirrors
+    // wrap_func_calls building the substituted env once before lowering. (A
+    // global f.in() in particular CANNOT be resolved eagerly at in() time: it
+    // must redirect every consumer reachable from the output, including ones
+    // defined after the in() call -- so deferred, build-time resolution is
+    // required, not merely preferred.)
     static const std::vector<std::shared_ptr<FuncContents>> &func_producers(FuncContents *f)
     {
         return f->producers;
