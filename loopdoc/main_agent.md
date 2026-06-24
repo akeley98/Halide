@@ -18,6 +18,9 @@ Instead, the main agent delegates this to sub-agents that are reading the main a
   deleting it, so the record of what was once unclear survives.
   Since every feature interacts with every other, use your judgment as-needed to skip documenting some functionality if it relies too much on not-yet-documented topics, or partially document features ahead of their listed order when it makes the explanation more coherent.
   Update NOTES in `progress.txt` as appropriate to coordinate reordering work with other milestones.
+  Do not add excessive detail about what the micro-agent should implement here; if that information is necessary, then that belongs in `loopdoc.md`, and if it's not, just skip it.
+
+* Consider `main_agent_todo.md` to coordinate future tasks for yourself; this is off-limits to the micro-agent.
 
 * Start analyzing the features by
     * Reading `../src/Func.h` comments documenting the scheduling operation
