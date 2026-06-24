@@ -357,11 +357,24 @@ Marking convention:
         it is a .hpp with no main). That .hpp is the SEED for the milestone's
         positive/negative examples (do_clone=false legal vs do_clone=true illegal,
         the shared-callee gotcha); rewrite as proper committed examples then.
-      * OPEN QUESTIONS to settle before implementing (from the proposal): whether
-        to implement Halide's transitive-caller normalization
-        (resolve_transitive_callers); how to target the so-far-UNTESTED
-        realization-order tie-break secondary key (wrappers share a name prefix);
-        one-time precompute vs lazy per-accessor resolution (recommend one-time).
+      * DESIGN DECISIONS (settled with the human):
+        (1) Transitive-caller normalization (Halide's resolve_transitive_callers):
+            the micro-agent IMPLEMENTS it -- f.in(h) where h reaches f only via g
+            redirects the DIRECT caller g; record the wrapper under each direct
+            caller on the path. Add examples that exercise this (a consumer that
+            reaches the wrapped Func only through an intermediate).
+        (2) Realization-order tie-break secondary key (visitation order), so far
+            UNTESTED because all prior siblings have distinct name prefixes: add
+            examples this milestone where two same-prefix wrapper/clone siblings
+            of one consumer force the visitation-order key to decide.
+        (3) Resolution timing = WHEN micro resolves the consumer->wrapper swap
+            inside the func_producers/stage_producers seam. DECISION: one-time
+            precompute at the start of nest construction (build resolved producer
+            lists once; accessors read them), NOT lazy per-accessor-call. Mirrors
+            Halide's wrap_func_calls (substitute the env once before lowering);
+            cheaper on the hot accessors, keeps pointer identity stable for
+            p.get()==f comparisons, and lets the accessors keep returning
+            const-ref. [confirm with human before delegating]
       * Realization-order tie-break (see bootstrap): sibling producers are
         ordered by (name prefix, first-visitation order, full name). Wrappers
         and clones are auto-named from the wrapped Func (e.g. `f`, `f_in_g`,
