@@ -1020,3 +1020,25 @@ diagnostic lists only `compute_at(parent, …)`.
 shifts, and the differing-extent guards become `IfThenElse` nodes. `PrintLoopNest`
 has **no** `visit(const IfThenElse*)` and never prints bounds expressions, so
 none of this appears — consistent with loopdoc §14 "out of scope (bounds-only)."
+
+### Legality and loop matching (`src/ScheduleFunctions.cpp` ~2460)
+
+`validate_fused_group_was_legal` checks each pair against the *resulting*
+dimension lists (`def.schedule().dims()`), not scheduling provenance — backing
+loopdoc §14's "matching loop nests down to `v`" framing:
+
+* the fuse var must be found in each stage's dims via `var_name_match`, else
+  *"cannot find `v` in …"* (loopdoc `neg_compute_with_mismatch.cpp`);
+* `n_fused = dims.size() - start_fuse - 1` (dims from `v` outward, ignoring the
+  synthetic `__outermost`) must be equal for both, else *"# of fused dims … do not
+  match"* (`neg_compute_with_dim_count.cpp`); and
+* each corresponding shared `Dim` must match in `var` name, `for_type`,
+  `device_api`, and `dim_type` (~2496–2514). So loops *below* `v` and all extents
+  are free, but the shared prefix must agree on name and loop kind. (For the
+  current loopdoc scope everything is serial/pure, so name + count are what bite;
+  `for_type`/`dim_type` matching becomes relevant once loop types and RVars enter
+  a fused prefix.)
+
+The producer/consumer-dependency rejection (loopdoc `neg_compute_with_dependency.cpp`)
+comes earlier, from `validate_fused_pair` in `RealizationOrder.cpp` (~88, the
+`indirect_calls` check) — see the grouping discussion above.

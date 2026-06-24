@@ -365,8 +365,14 @@ Marking convention:
     NOTES: micro_halide will not reason about bounds analysis so do
     not write negative examples that fail because of detected race conditions.
     Also skip the gpu_lanes requirement for 32 or fewer iterations.
-    In fact, this should be a fairly easy milestone, since all I expect will
-    change is the loop type printed.
+
+    Need to think about interaction with compute_with; what happens if
+    the two fused stages don't have the same ForMode?
+
+    Need examples with multiple update stages.
+
+    Need mega-example that combines compute_with, multiple update stages, ForMode, and transitivity (indirect producer/consumer dependencies).
+    But save this for the adversarial stage.
 
 
 # DISCOVERED DOC GAPS
