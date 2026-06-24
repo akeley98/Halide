@@ -54,7 +54,7 @@ add the **schedule** that places and reshapes those loops across the pipeline.
       the right-hand sides (and update left-hand-side indices) of all its
       stages,
     * its **compute level** and **store level** — `inline` (the default),
-      `root`, or `at(host, var)` — set by the schedule (§§5–8). These apply to
+      `root`, or `at(site func, var)` — set by the schedule (§§5–8). These apply to
       the Func as a whole (all stages move together).
     * a per-stage **fuse level**, set by `compute_with` (§14) and *empty* by
       default. A stage with a fuse level is not computed in its own loop nest but
@@ -464,14 +464,14 @@ When a consumer reads several producers, each producer is placed according to
 
 A root Func always emits one loop per dimension (§3). A `compute_at` Func does
 **not**, in general. Halide computes only the *region* of the producer needed
-per iteration of the host, and a dimension whose needed extent is a single
+per iteration of the site func, and a dimension whose needed extent is a single
 point becomes an extent-1 loop that Halide **simplifies away entirely** — no
 `for` line is printed for it. Conceptually:
 
 > A dimension `d` of `f.compute_at(g, L)` survives as a loop iff the values of
 > `f`'s `d`-coordinate read by `g` span more than one point as `g`'s loops
 > *inner to `L`* run. Reading `f` at a multi-tap stencil in `d`, or at an index
-> that varies with an inner host loop, keeps the loop; a single-point read
+> that varies with an inner site-func loop, keeps the loop; a single-point read
 > collapses it.
 
 Worked cases, all `f.compute_at(output, x)` with `output` reading `f` at offsets
@@ -505,7 +505,7 @@ described in §§5–9.
 
 Eliding a loop only removes its `for` line; the loop's *position* in the nest is
 preserved. So a Func computed at an elided loop is still injected there, as a
-prefix of the host's body, outside any surviving inner loops of the host. See
+prefix of the site func's body, outside any surviving inner loops of the site func. See
 [examples/compute_at_elided_level.cpp](examples/compute_at_elided_level.cpp):
 `h.compute_at(output, x)` elides `h`'s `y` loop, yet `p.compute_at(h, y)` still
 places `p` at that (loop-less) level:
@@ -523,7 +523,7 @@ produce h:
 
 ### What `(g, var)` points to when `g` has several stages
 
-`compute_at` names a host **Func and a `Var`**, never a stage — yet a Func with
+`compute_at` names a **site Func and a `Var`**, never a stage — yet a Func with
 update definitions (§3) has several stages, each a separate loop nest that may
 *each* contain a loop named `var`. So which one does `f.compute_at(g, var)`
 target? The answer: **all of them, but `f` is only materialized where it is
@@ -634,6 +634,10 @@ that has `v` as a loop variable (§3, §9).
 (Halide calls such a `(Func, Var)` pair a *loop level*; the candidate levels at
 which `f` may be computed are its legal *sites* — "site" and "level" are the same
 kind of object, a `(Func, Var)` pattern, plus the special `root` and `inline`.)
+The Func of a level — the one whose loop `f` is placed inside, `g` here — is the
+**site func** (Halide's codegen has no dedicated name for it; it is just
+`loop_level.func()`). Throughout, "site func" means this Func; bare "site" /
+"level" means the `(Func, Var)` location.
 `compute_at` gives `f` this single level, and `f` is realized at it in each stage
 of `g` that reads `f` — so the several `produce f` blocks share the *same level*
 `(g, v)` but sit at *different concrete loops* in the family.
@@ -690,8 +694,8 @@ The ways `(g, v)` falls outside the surviving set:
   `root`
   ([examples/neg_compute_at_two_consumers.cpp](examples/neg_compute_at_two_consumers.cpp)).
 
-The last case is the fundamental one: `f` placed inside one host can only feed
-reads within that host. Feeding consumers that live at different, non-nested
+The last case is the fundamental one: `f` placed inside one site func can only
+feed reads within that site func. Feeding consumers that live at different, non-nested
 locations is exactly what the wrapper Funcs `in()` / `clone_in()` (a later
 milestone) enable; until then such a schedule is simply illegal.
 
@@ -720,7 +724,7 @@ its compute level, a Func has a **store level**: the loop at which its buffer is
 allocated. By default the store level **equals** the compute level. Two
 directives change it (and *only* it — they do not move the computation):
 
-* `f.store_at(g, v)` — allocate `f`'s storage in host `g`'s loop over `v`.
+* `f.store_at(g, v)` — allocate `f`'s storage in site func `g`'s loop over `v`.
 * `f.store_root()` — allocate `f`'s storage at the outermost level.
 
 The point of separating them is to allocate storage at an *outer* loop while
@@ -742,15 +746,15 @@ When shown, the `store f:` node sits at the **store level** and contains
 everything from there down to `f`'s `produce`/`consume` at the compute level. The
 `produce`/`consume` of `f` and every `for` loop stay exactly where `compute_at`
 alone (§7) would place them; `store_at` only adds the enclosing `store f:` line
-(and the host loops between the store level and the compute level fall inside
+(and the site-func loops between the store level and the compute level fall inside
 it). The `store f:` node wraps `f`'s *whole* realization — all of its stages
 (§3), since the store level is per-Func.
 
-The store node follows `f` **per host stage**, just as the `produce`/`consume`
-does (§7). When the **host** of the store/compute level has several stages, the
-level `(host, v)` names a `v` loop in every one of them, but `f` is computed only
-in the host stages whose body uses it — so the `store f:` node appears at `v` in
-exactly those stages, never in a host stage that merely has a `v` loop but never
+The store node follows `f` **per site-func stage**, just as the `produce`/`consume`
+does (§7). When the **site func** of the store/compute level has several stages, the
+level `(site func, v)` names a `v` loop in every one of them, but `f` is computed only
+in the site-func stages whose body uses it — so the `store f:` node appears at `v` in
+exactly those stages, never in a site-func stage that merely has a `v` loop but never
 computes `f`. A producer read only in a consumer's *update* stage therefore gets
 its `store` node in that stage alone, not in the pure stage
 ([examples/store_at_update_stage.cpp](examples/store_at_update_stage.cpp); and
@@ -765,7 +769,7 @@ the inner loop `x` (see [examples/store_at_compute_at.cpp](examples/store_at_com
 produce f:
   for y:
     store g:          # at the store level (f's y)
-      for x:          # host loop between store and compute level
+      for x:          # site-func loop between store and compute level
         produce g:    # at the compute level (f's x)
           for y:
             for x:
@@ -789,7 +793,7 @@ store g:              # outermost: storage for the whole pipeline body
           f(...) = ...
 ```
 
-When the host of the compute level is itself an intermediate Func, the `store`
+When the site func of the compute level is itself an intermediate Func, the `store`
 node still lands at the named store loop and wraps that Func's whole realization
 (its `produce` *and* `consume`); see
 [examples/store_root_chain.cpp](examples/store_root_chain.cpp). A `store_root`
@@ -889,7 +893,7 @@ dimension you don't name keeps its position. So `f(x, y)` (list `[x, y]`, loops
 
 `reorder` becomes observable only through a **topological consequence**: it
 changes *which loop a `compute_at` producer sits under*, and therefore how many
-host loops fall inside that producer's block.
+site-func loops fall inside that producer's block.
 [examples/reorder_topological.cpp](examples/reorder_topological.cpp) reorders a
 consumer's dimensions so the producer's `compute_at` site moves to the innermost
 loop; contrast [examples/reorder_baseline.cpp](examples/reorder_baseline.cpp),
@@ -915,8 +919,8 @@ xi:`. Net effect: **two extra `for` loops**, in tiled order. See
 ### Transformed dimensions are `compute_at` / `store_at` sites
 
 The dimensions these transforms produce are first-class loop levels. A producer
-filed at host dimension `d` is injected just inside `d`'s loop, with the host
-loops *inner* to `d` (those earlier in the list) falling inside the producer's
+filed at site-func dimension `d` is injected just inside `d`'s loop, with the
+site-func loops *inner* to `d` (those earlier in the list) falling inside the producer's
 `consume` — the same rule as §7, now applied to the *post-transform* list. In
 [examples/split_compute_at.cpp](examples/split_compute_at.cpp), a producer is
 `compute_at` the consumer's split *outer* loop and so lands between the outer
@@ -1463,7 +1467,7 @@ The whole loop nest follows from the rules above, assembled into one procedure:
    to a site:
      * `compute_root` Funcs and the output form the **top-level chain**, kept in
        realization order;
-     * a `compute_at(g, v)` Func is **filed under** host `g`'s loop over `v`. If
+     * a `compute_at(g, v)` Func is **filed under** site func `g`'s loop over `v`. If
        several Funcs are filed at the same `(g, v)`, they keep realization order;
      * a **non-pure inline** Func (§11) is filed at the innermost loop enclosing
        each of its uses — like a `compute_at` resolved independently per use site.
@@ -1471,7 +1475,7 @@ The whole loop nest follows from the rules above, assembled into one procedure:
        own — the whole group is filed once, at the **group parent's** site, and
        the others are interleaved there when it is emitted (step 4).
    Each realized Func also has a **store level** (§8), defaulting to its compute
-   level. The site `v` is a dimension of the host's **(possibly transformed)
+   level. The level var `v` is a dimension of the site func's **(possibly transformed)
    dimension list** for the relevant stage (§3, §9): `split`/`fuse`/`reorder`/
    `tile` have already rewritten that list before this step.
 
