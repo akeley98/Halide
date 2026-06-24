@@ -1127,7 +1127,8 @@ its own level), and repair the "two consumers force `f` to `root`" situation
 wrap `f` separately per consumer so each wrapper has a single consumer and can be
 computed inside it. Variants: `f.in(g)`, `f.in({g1, g2, …})` (one shared wrapper
 for several named consumers), and `f.in()` (a single **global** wrapper used by
-every consumer that has no custom wrapper of its own).
+every consumer that has no custom wrapper of its own, either defined before or
+after the `f.in()`).
 
 ### `f.clone_in(g)` — an independent *clone*
 
@@ -1158,11 +1159,39 @@ positional ids, so what matters is that it is one more distinct Func). They are
 *not* "the same Func appearing twice." Only the **named** consumers are
 redirected — and, transitively, the *direct callers* on each path down to `f`
 (so `f.in(h)` where `h` reaches `f` only through `g` actually redirects `g`); a
-global `f.in()` redirects every other consumer. Crucially, none of this mutates
-the consumer Funcs at the time you call `in`/`clone_in`: the wrapper is recorded
-on `f`, and the consumers' reads are rewritten as a *derived* step when the nest
-is built. [src_doc §13](src_doc/loop_nest_construction.md) documents the
+global `f.in()` redirects every other consumer.
+
+Redirecting a caller means that caller reads the wrapper/clone in place of `f`,
+so `f` keeps only the consumers that were *not* redirected. The two directives
+then differ in whether `f` survives:
+
+* an **`in` wrapper always keeps `f` realized** — the wrapper itself reads `f`,
+  so `f` still has a consumer;
+* a **clone reads `f`'s *inputs*, not `f`** (callees are shared, above), so if
+  *every* consumer of `f` ends up redirected to the clone, `f` has no remaining
+  reader, becomes unreachable from the output (§1), and **drops out of the nest
+  entirely** — the clone takes its place.
+
+So for the chain `h` → `g` → `f` with no other reader of `f`: `f.in(h)` (which
+redirects the direct caller `g`) prints `f` → `f_in_h` → `g` → `h` — `f` stays,
+now read by the wrapper — whereas `f.clone_in(h)` prints `f_clone_in_h` → `g` →
+`h` with `f` **absent**, because `g` now reads the clone and the clone reads
+`f`'s own inputs rather than `f`.
+
+### Implementation note
+
+Although the documentation, for simplicity, describes `f.in(g)` or
+`f.clone_in(g)` as modifying the consumer `g` to use the
+wrapped/cloned `f`, the actual Halide implementation does not mutate
+the consumer Funcs at the time you call `in`/`clone_in`: the wrapper
+is recorded on `f`, and the consumers' reads are rewritten as a
+derived step when the nest is built. Note in particular this
+greatly simplifies the interaction between the fallback `f.in()`
+wrapper, and other `f` wrappers.
+
+[src_doc §13](src_doc/loop_nest_construction.md) documents the
 identity model and that call-rewrite mechanism in detail.
+
 
 ---
 
