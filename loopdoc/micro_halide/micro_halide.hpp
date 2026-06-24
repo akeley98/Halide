@@ -320,24 +320,24 @@ struct FuncContents
     };
     Level level = Level::Inline;
 
-    std::shared_ptr<FuncContents> at_func; // host, for Level::At
-    std::string at_var;                    // host loop var name, for Level::At
+    std::shared_ptr<FuncContents> at_func; // site_func, for Level::At
+    std::string at_var;                    // site_func loop var name, for Level::At
 
     // Store level (where this Func's buffer is allocated; whole-Func), set by
     // store_at / store_root. Defaults to "same as the compute level"
     // (has_store_level == false), which prints no `store` node.
     bool has_store_level = false;          // a store level was explicitly set
     bool store_is_root = false;            // store_root() (else store_at)
-    std::shared_ptr<FuncContents> store_func; // host, for store_at
-    std::string store_var;                 // host loop var name, for store_at
+    std::shared_ptr<FuncContents> store_func; // site_func, for store_at
+    std::string store_var;                 // site_func loop var name, for store_at
 
     // Hoist-storage level (where the physical allocation is placed; whole-Func),
     // set by hoist_storage / hoist_storage_root. Has NO effect on
     // print_loop_nest output (loopdoc.md section 8); only legality.
     bool has_hoist_level = false;          // a hoist-storage level was set
     bool hoist_is_root = false;            // hoist_storage_root() (else hoist_storage)
-    std::shared_ptr<FuncContents> hoist_func; // host, for hoist_storage
-    std::string hoist_var;                 // host loop var name, for hoist_storage
+    std::shared_ptr<FuncContents> hoist_func; // site_func, for hoist_storage
+    std::string hoist_var;                 // site_func loop var name, for hoist_storage
 
     // in() / clone_in() wrappers (loopdoc.md section 13). The wrapper/clone is
     // recorded on the WRAPPED Func (this one), keyed by the redirected
@@ -1249,8 +1249,8 @@ struct LoopNestPrinter
 {
     std::ostream &out;
 
-    // A loop level inside a particular STAGE of a host: (host, stage, var-name).
-    // With update definitions (loopdoc.md section 10) a host emits one loop nest
+    // A loop level inside a particular STAGE of a site_func: (site_func, stage, var-name).
+    // With update definitions (loopdoc.md section 10) a site_func emits one loop nest
     // per stage inside a single `produce`, so an injection/store site is pinned
     // to a specific stage (an RVar loop, for instance, exists only in its own
     // stage).
@@ -1262,7 +1262,7 @@ struct LoopNestPrinter
     // funcs whose `store` node opens at a given stage-loop level (store_at with
     // a store level outer to the compute level), in realization order. A
     // `store f:` node here wraps everything emitted deeper at that level -- the
-    // host loops between the store and compute levels, and f's own
+    // site_func loops between the store and compute levels, and f's own
     // produce/consume at its compute level.
     std::map<SiteKey, std::vector<FuncContents *>> store_at_level;
 
@@ -1538,7 +1538,7 @@ struct LoopNestPrinter
         return -1;
     }
 
-    // The stage of host g whose dimension list contains `var`. compute_at/store_at
+    // The stage of site_func g whose dimension list contains `var`. compute_at/store_at
     // name a single loop var; with updates a name may appear in several stages
     // (e.g. a pure Var carried into an update). We pick the lowest-index stage
     // that has it; an RVar name is unique to one stage. Returns -1 if no stage
@@ -1556,7 +1556,7 @@ struct LoopNestPrinter
     }
 
     // Index of a Var name among a Func's pure (stage 0) dims (dim0 = innermost),
-    // or -1. (Used by store/hoist legality, whose hosts are pure Funcs.)
+    // or -1. (Used by store/hoist legality, whose site_funcs are pure Funcs.)
     static int dim_index(FuncContents *g, const std::string &var)
     {
         const std::vector<DimData> &a = g->stages[0].dims;
@@ -1626,7 +1626,7 @@ struct LoopNestPrinter
         return false;
     }
 
-    // Does the loop body at site (host, hs, var) USE f -- directly, or
+    // Does the loop body at site (site_func, hs, var) USE f -- directly, or
     // TRANSITIVELY through another producer realized inside that body
     // (loopdoc.md section 7, "Computing at an indirect consumer's loop")?
     //
@@ -1637,53 +1637,53 @@ struct LoopNestPrinter
     // so we recurse (g may read f only through a further intermediate placed in
     // the same body).
     //
-    // A producer g is "realized in the body at (host, hs, var)" iff g is computed
-    // at this host stage's `var` loop or an INNER one (g's body is then nested
-    // inside this loop). g at an OUTER loop of the host is NOT in this body --
+    // A producer g is "realized in the body at (site_func, hs, var)" iff g is computed
+    // at this site_func stage's `var` loop or an INNER one (g's body is then nested
+    // inside this loop). g at an OUTER loop of the site_func is NOT in this body --
     // this site lives in g's `consume`, after g (the neg_transitive_..._inner
     // case): such a g does not pull f in here.
-    // Guard against mutual recursion: two producers g, h both filed at (host, v)
-    // can each ask whether the other is present in host stage hs ("is g in this
+    // Guard against mutual recursion: two producers g, h both filed at (site_func, v)
+    // can each ask whether the other is present in site_func stage hs ("is g in this
     // body?" -> "is h in this body?" -> ...). The "is X present in this stage"
     // question is monotone, so treating an in-progress query as "not yet known to
     // be present" (false) is the correct fixpoint and breaks the cycle.
     std::set<std::tuple<FuncContents *, int, FuncContents *>> body_uses_active_;
 
-    bool body_uses(FuncContents *host, int hs, const std::string &var, FuncContents *f,
+    bool body_uses(FuncContents *site_func, int hs, const std::string &var, FuncContents *f,
                    const std::vector<FuncContents *> &order)
     {
-        if (stage_reads(host, hs, f))
+        if (stage_reads(site_func, hs, f))
         {
             return true;
         }
-        int ivar = stage_dim_index(host, hs, var);
+        int ivar = stage_dim_index(site_func, hs, var);
         if (ivar < 0)
         {
             return false;
         }
-        auto key = std::make_tuple(host, hs, f);
+        auto key = std::make_tuple(site_func, hs, f);
         if (!body_uses_active_.insert(key).second)
         {
-            // Already evaluating this exact (host, stage, f) query higher in the
+            // Already evaluating this exact (site_func, stage, f) query higher in the
             // recursion -- treat as not (yet) present to terminate the cycle.
             return false;
         }
         bool result = false;
         for (FuncContents *g : order)
         {
-            if (g == f || g == host || !is_realized(g) ||
-                g->level != FuncContents::Level::At || g->at_func.get() != host)
+            if (g == f || g == site_func || !is_realized(g) ||
+                g->level != FuncContents::Level::At || g->at_func.get() != site_func)
             {
                 continue;
             }
             // g must be realized in THIS stage's body, at var or an inner loop.
-            int ig = stage_dim_index(host, hs, g->at_var);
+            int ig = stage_dim_index(site_func, hs, g->at_var);
             if (ig < 0 || ig > ivar)
             {
                 continue;
             }
-            // ...AND g must actually be injected INTO this host stage. The level
-            // (host, g->at_var) names a g->at_var loop in EVERY stage of host, but
+            // ...AND g must actually be injected INTO this site_func stage. The level
+            // (site_func, g->at_var) names a g->at_var loop in EVERY stage of site_func, but
             // g lands only in the stages whose body uses g (loopdoc.md section 7:
             // "an intermediate g is realized in a stage's body only if THAT stage
             // actually uses g"). So the pull-in stacks per stage: f appears in
@@ -1691,13 +1691,13 @@ struct LoopNestPrinter
             // this check the rfactor intermediate's pure stage (which reads
             // neither g nor f) would wrongly pull f in just because it shares the
             // var loop with the reducing stage (rfactor_indirect_at_intm).
-            if (!body_uses(host, hs, g->at_var, g, order))
+            if (!body_uses(site_func, hs, g->at_var, g, order))
             {
                 continue;
             }
             // Does g (transitively) use f? g's body is its own loop nest; f's use
             // through g is wherever g reads f, which is enclosed by g's loops --
-            // and g is in this host body, so f's use is too.
+            // and g is in this site_func body, so f's use is too.
             if (g_uses_f(g, f, order))
             {
                 result = true;
@@ -1740,7 +1740,7 @@ struct LoopNestPrinter
     {
         if (h == g)
         {
-            // The host reads f within its own body, which runs inside this loop.
+            // The site_func reads f within its own body, which runs inside this loop.
             return true;
         }
         if (h->level == FuncContents::Level::At)
@@ -1760,7 +1760,7 @@ struct LoopNestPrinter
 
     // ---- Stage-aware enclosure (loopdoc.md sections 8 + 10) --------------
     //
-    // A "site" is a loop level (g, gs, gv): host g's stage gs, loop named gv. A
+    // A "site" is a loop level (g, gs, gv): site_func g's stage gs, loop named gv. A
     // producer computed there can only feed uses that this loop encloses.
 
     // Does loop (g, gs, gv) enclose (== is the same as, or outer to) loop
@@ -1784,13 +1784,13 @@ struct LoopNestPrinter
         // h is realized at its own compute level; follow it outward.
         if (h->level == FuncContents::Level::At)
         {
-            FuncContents *host = h->at_func.get();
-            int host_s = resolve_stage(host, h->at_var);
-            if (host_s < 0)
+            FuncContents *site_func = h->at_func.get();
+            int site_func_s = resolve_stage(site_func, h->at_var);
+            if (site_func_s < 0)
             {
                 return false;
             }
-            return site_encloses_loop(g, gs, gv, host, host_s, h->at_var);
+            return site_encloses_loop(g, gs, gv, site_func, site_func_s, h->at_var);
         }
         return false; // h at root and not g: not inside g's loop
     }
@@ -1813,15 +1813,15 @@ struct LoopNestPrinter
         }
         if (h->level == FuncContents::Level::At)
         {
-            FuncContents *host = h->at_func.get();
-            int host_s = resolve_stage(host, h->at_var);
-            if (host_s < 0)
+            FuncContents *site_func = h->at_func.get();
+            int site_func_s = resolve_stage(site_func, h->at_var);
+            if (site_func_s < 0)
             {
                 return false;
             }
-            // h's stage hs runs just inside h's compute loop (host, host_s,
+            // h's stage hs runs just inside h's compute loop (site_func, site_func_s,
             // at_var); enclosed iff the site is that loop or outer to it.
-            return site_encloses_loop(g, gs, gv, host, host_s, h->at_var);
+            return site_encloses_loop(g, gs, gv, site_func, site_func_s, h->at_var);
         }
         return false; // h at root and not g
     }
@@ -1852,11 +1852,11 @@ struct LoopNestPrinter
                     const std::string &sv = f->store_var;
                     if (!sg || !is_realized(sg))
                     {
-                        fail(f, "store_at host is inlined/undefined, so it has no loop");
+                        fail(f, "store_at site_func is inlined/undefined, so it has no loop");
                     }
                     if (dim_index(sg, sv) < 0)
                     {
-                        fail(f, "store_at loop variable does not exist in the host Func");
+                        fail(f, "store_at loop variable does not exist in the site_func Func");
                     }
                     // The store level must ENCLOSE the compute level: same loop
                     // or an outer one.
@@ -1866,13 +1866,13 @@ struct LoopNestPrinter
                         bool ok;
                         if (cg == sg)
                         {
-                            // Same host: store var must be the same loop or an
+                            // Same site_func: store var must be the same loop or an
                             // outer one (outer = higher dim index; arg0 = inner).
                             ok = dim_index(sg, sv) >= dim_index(cg, f->at_var);
                         }
                         else
                         {
-                            // Different host: the compute host's loop (cg, at_var)
+                            // Different site_func: the compute site_func's loop (cg, at_var)
                             // must itself sit inside the store loop (sg, sv).
                             ok = enclosed_by(cg, sg, sv);
                         }
@@ -1910,11 +1910,11 @@ struct LoopNestPrinter
                     const std::string &hv = f->hoist_var;
                     if (!hg || !is_realized(hg))
                     {
-                        fail(f, "hoist_storage host is inlined/undefined, so it has no loop");
+                        fail(f, "hoist_storage site_func is inlined/undefined, so it has no loop");
                     }
                     if (dim_index(hg, hv) < 0)
                     {
-                        fail(f, "hoist_storage loop variable does not exist in the host Func");
+                        fail(f, "hoist_storage loop variable does not exist in the site_func Func");
                     }
                     // The hoist-storage level must ENCLOSE the store level, which
                     // in turn encloses the compute level. The effective store
@@ -1922,23 +1922,23 @@ struct LoopNestPrinter
                     // level. We require the hoist loop to be the same loop or an
                     // outer one relative to that effective store level.
                     bool store_is_root = f->has_store_level && f->store_is_root;
-                    FuncContents *eff_host;
+                    FuncContents *eff_site_func;
                     std::string eff_var;
                     if (f->has_store_level && !f->store_is_root)
                     {
-                        eff_host = f->store_func.get();
+                        eff_site_func = f->store_func.get();
                         eff_var = f->store_var;
                     }
                     else if (f->level == FuncContents::Level::At)
                     {
-                        eff_host = f->at_func.get();
+                        eff_site_func = f->at_func.get();
                         eff_var = f->at_var;
                     }
                     else
                     {
                         // compute_root with no explicit store_at: effective store
                         // level is root, which only a root hoist level encloses.
-                        eff_host = nullptr;
+                        eff_site_func = nullptr;
                         eff_var.clear();
                         store_is_root = true;
                     }
@@ -1950,17 +1950,17 @@ struct LoopNestPrinter
                         // level (handled above); a named hoist loop is inside it.
                         ok = false;
                     }
-                    else if (eff_host == hg)
+                    else if (eff_site_func == hg)
                     {
-                        // Same host: hoist var must be the same loop or an outer
+                        // Same site_func: hoist var must be the same loop or an outer
                         // one (outer = higher dim index; arg0 = inner).
-                        ok = dim_index(hg, hv) >= dim_index(eff_host, eff_var);
+                        ok = dim_index(hg, hv) >= dim_index(eff_site_func, eff_var);
                     }
                     else
                     {
-                        // Different host: the store host's loop (eff_host, eff_var)
+                        // Different site_func: the store site_func's loop (eff_site_func, eff_var)
                         // must itself sit inside the hoist loop (hg, hv).
-                        ok = enclosed_by(eff_host, hg, hv);
+                        ok = enclosed_by(eff_site_func, hg, hv);
                     }
                     if (!ok)
                     {
@@ -1977,18 +1977,18 @@ struct LoopNestPrinter
             FuncContents *g = f->at_func.get();
             const std::string &v = f->at_var;
 
-            // The host must itself be computed (have a loop nest).
+            // The site_func must itself be computed (have a loop nest).
             if (!g || !is_realized(g))
             {
-                fail(f, "compute_at host is inlined/undefined, so it has no loop to compute at");
+                fail(f, "compute_at site_func is inlined/undefined, so it has no loop to compute at");
             }
-            // The named loop must exist as a dimension of SOME stage of the host
+            // The named loop must exist as a dimension of SOME stage of the site_func
             // (loopdoc.md section 10: an RVar loop lives only in its own stage,
             // but is still a valid compute_at site).
             int gs = resolve_stage(g, v);
             if (gs < 0)
             {
-                fail(f, "compute_at loop variable does not exist in the host Func");
+                fail(f, "compute_at loop variable does not exist in the site_func Func");
             }
             // Every use of f -- across EVERY stage of every realized reader
             // (loopdoc.md section 10) -- must be enclosed by the site (g, gs, v);
@@ -2028,7 +2028,7 @@ struct LoopNestPrinter
             // Differs from compute level unless compute is also root.
             return f->level != FuncContents::Level::Root;
         }
-        // store_at(g, v): equal to compute level iff same host and same var.
+        // store_at(g, v): equal to compute level iff same site_func and same var.
         if (f->level == FuncContents::Level::At && f->at_func.get() == f->store_func.get() &&
             f->at_var == f->store_var)
         {
@@ -2185,9 +2185,9 @@ struct LoopNestPrinter
             }
             else if (f->level == FuncContents::Level::At)
             {
-                // (host, var) denotes the `var` loop in EVERY stage of the host
+                // (site_func, var) denotes the `var` loop in EVERY stage of the site_func
                 // (loopdoc.md section 7): f is injected just inside that loop in
-                // each stage of the host whose body at that level USES f, and
+                // each stage of the site_func whose body at that level USES f, and
                 // stages that do not use f get nothing. "Uses" is transitive: the
                 // body uses f directly (the stage reads f) OR through another
                 // producer realized in that body that itself uses f (loopdoc.md
@@ -2196,13 +2196,13 @@ struct LoopNestPrinter
                 // an indirect producer lands wherever its consumer chain is
                 // realized. (For an RVar site only one stage has the loop, so this
                 // reduces to a single injection.)
-                FuncContents *host = f->at_func.get();
-                for (int hs = 0; hs < num_stages(host); hs++)
+                FuncContents *site_func = f->at_func.get();
+                for (int hs = 0; hs < num_stages(site_func); hs++)
                 {
-                    if (stage_dim_index(host, hs, f->at_var) >= 0 &&
-                        body_uses(host, hs, f->at_var, f, order))
+                    if (stage_dim_index(site_func, hs, f->at_var) >= 0 &&
+                        body_uses(site_func, hs, f->at_var, f, order))
                     {
-                        children_at[{host, hs, f->at_var}].push_back(f);
+                        children_at[{site_func, hs, f->at_var}].push_back(f);
                     }
                 }
             }
@@ -2258,10 +2258,10 @@ struct LoopNestPrinter
                 {
                     // The store node follows f PER HOST STAGE, just as the
                     // produce/consume does (loopdoc.md section 8). The level
-                    // (store_host, store_var) names a store_var loop in EVERY
-                    // stage of the host, but f is computed only in the host
+                    // (store_site_func, store_var) names a store_var loop in EVERY
+                    // stage of the site_func, but f is computed only in the site_func
                     // stages whose body USES f -- so the `store f:` node appears
-                    // at store_var in exactly those stages, never in a host stage
+                    // at store_var in exactly those stages, never in a site_func stage
                     // that merely has the loop but never computes f. This mirrors
                     // the per-stage compute-injection above (body_uses), instead
                     // of a single resolve_stage that would wrongly pin the store
