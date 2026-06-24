@@ -10,6 +10,7 @@ by agent run (agent_id) and reports, per run:
   * HARD integrity FLAGS -- things that invalidate the run if present:
       - reading Halide source (../src, src/) or src_doc/
       - any `git commit`
+      - peeking at main_agent_todo.md
   * INFO signals to eyeball (not necessarily wrong):
       - whether it read loopdoc.md (engagement -- a pass means nothing if not)
       - edits to loopdoc.md (allowed ONLY as <!-- --> comments)
@@ -36,6 +37,7 @@ FORBIDDEN = OrderedDict([
     ("Halide source (src/)", re.compile(r"(^|[/\s.])src/")),
     ("src_doc/", re.compile(r"src_doc\b")),
     ("git commit", re.compile(r"\bgit\s+commit\b")),
+    ("main agent todo", re.compile(r"main_agent_todo\.md\b")),
 ])
 
 INFO = OrderedDict([
