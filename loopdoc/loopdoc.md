@@ -626,21 +626,6 @@ into both — but still not the pure stage.
 
 ### When a `compute_at` is illegal
 
-<!-- Human: some problems that don't necessarily belong in this section, but need to be discussed:
-
-f.compute_at(...) being illegal because some other g.compute_with(f) exists and this breaks a consumer of g (that is not a consumer of f).
-This will surely interact is weird ways with update stages, and especially the rule of re-materializing consumers multiple times when used in multiple stages.
-
-How do g.compute_at(...) and g.compute_with(...) interact?
-Is it illegal, doing something different than g.compute_with(...) alone, ignoring g.compute_at(...), or something else entirely.
-
-I'm worried about the length of the document.
-If possible, compute_at legality should be described as a general rule or principle (precisely describing when producer/consumer relations break),
-rather than a huge list of deduction rules that will grow even longer with future milestones.
-However, if this generality is not possible to express real Halide behavior with full precision, fall back to the huge list of rules strategy.
-
--->
-
 `f.compute_at(g, v)` is not always legal. First, what a **level** is, because it
 is the crux: `(g, v)` is *not* a pointer to one loop. With the stage left
 unspecified (previous subsection) it denotes `g`'s `v` loop in **every** stage of
@@ -709,6 +694,16 @@ The last case is the fundamental one: `f` placed inside one host can only feed
 reads within that host. Feeding consumers that live at different, non-nested
 locations is exactly what the wrapper Funcs `in()` / `clone_in()` (a later
 milestone) enable; until then such a schedule is simply illegal.
+
+This single principle — *the level must enclose every read of `f`* — is the
+whole rule, and it does **not** grow with new features: later directives do not
+add compute_at-legality cases, they only **reshape the loop nest** the principle
+is evaluated against. `compute_with` (§14) is the example to keep in mind: fusing
+`g` into `f` moves `g`'s reads into `f`'s body, so a site that used to enclose
+every read of a producer can stop doing so (and a producer computed at a fused
+*child* is illegal because the child owns no such loop). Both are this same
+"enclose every read" check, re-evaluated on the post-fusion structure — not new
+rules.
 
 The illegal cases above are *negative* examples — both Halide and `micro_halide`
 must reject them (exit with an error) rather than print a loop nest — while the
@@ -1262,192 +1257,174 @@ identity model and that call-rewrite mechanism in detail.
 
 ---
 
-## 14. `compute_with`: fusing the loops of two stages
-
-<!-- Human: There needs to be brief clarification that the directive records state that guides future loop nest creation.
-This is part of why I wanted the scheduling state elucidated so badly (in §1)
-So e.g. the reader isn't confused why f.compute_with(a, ...) and f.compute_with(b, ...) isn't creating a fused group {f, a, b}.
--->
+## 14. `compute_with`: fusing stages into a shared loop nest
 
 Every directive so far gives one Func its *own* loop nest. `compute_with` is
-different: it takes two stages that would otherwise be computed in **separate**
-loop nests and **interleaves them into one shared nest**. It creates no new Func
-and changes no computed value — it only re-shapes loops.
+different: it takes two stages that would otherwise run in **separate** nests and
+**interleaves them into one shared nest**. It creates no Func and changes no
+value — it only reshapes loops.
 
-`b.compute_with(a, v)` fuses stage `b` into stage `a`, sharing the loops from
-the **outermost down to and including the level `v`**. The method is called *on*
-the stage being fused in and takes the stage to fuse *into* as its argument: `b`
-(the **receiver**) is the **child**, and `a` (the **argument**) is its
-**parent** — the stage `b` is fused into, whose loops the child's are merged
-into. The argument can be a Func (its initial stage) or a `Stage`
-(`a.update(j)`):
+### The directive, and the state it records
+
+`b.compute_with(a, v)` is called *on* the stage being fused in — `b` (the
+**receiver**) is the **child** — and takes the stage to fuse *into* as its
+argument — `a` (the **argument**) is the **parent** — at loop level `v`. The
+argument may be a Func (its initial stage) or a `Stage` (`a.update(j)`).
+`compute_with` is **per stage**:
 
 ```cpp
 g.compute_with(f, y);                       // fuse g's init stage into f's, at level y
-g.update().compute_with(f.update(), y);     // fuse the update stages too
+g.update().compute_with(f.update(), y);     // ... and the update stages
 ```
 
-### What it requires
+Like every directive, `compute_with` only **records state** — a per-stage *fuse
+level* (§1) on the child — and the nest is built from it later (§15). Because the
+state is one fuse level *per stage*, **calling `compute_with` again on the same
+stage overwrites** the previous one (Halide warns). So `f.compute_with(a, y)`
+then `f.compute_with(b, y)` fuses `f` with `b` *only* — it does **not** create a
+group `{f, a, b}`.
 
-* The two stages must have **matching loop nests from the outermost loop down to
-  the fused level `v`**. Concretely, what is checked is the *resulting* dimension
-  lists (§3) — not the scheduling provenance that produced them:
-    * `v` must name a loop present **by name** in both stages, else *"Invalid
-      compute_with: cannot find `v` in …"*
-      ([examples/neg_compute_with_mismatch.cpp](examples/neg_compute_with_mismatch.cpp));
-    * the two stages must have the **same number of loops** from the outermost
-      down to `v` (so `v` sits at the same depth in both), matched up positionally
-      by name, else *"Invalid compute_with: # of fused dims of … do not match"*
-      ([examples/neg_compute_with_dim_count.cpp](examples/neg_compute_with_dim_count.cpp)).
+### Fused groups are a per-stage relation
 
-  Their loops **below** `v`, and **all loop extents**, may differ freely — only
-  names and nesting down to `v` matter. So two `split`s with *different factors*
-  fuse fine (the inner extents simply differ), `tile`d stages fuse at a shared
-  tile var ([examples/compute_with_tile.cpp](examples/compute_with_tile.cpp)),
-  but a `reorder` that moves `v` to a different depth does not.
+Each `compute_with` adds a **fuse edge** from a child stage to a parent stage.
+The Funcs connected (directly or transitively) by these edges form one **fused
+group**, realized as a unit. Because edges join *stages*, one Func can sit on
+several edges:
 
-* The two Funcs must have **no producer/consumer dependency** between them — you
-  cannot fuse `a` and `b` if either reads the other. Halide errors *"Invalid
-  compute_with: there is dependency between …"*
-  ([examples/neg_compute_with_dependency.cpp](examples/neg_compute_with_dependency.cpp)).
-* It is **per stage**. `b.compute_with(a, v)` fuses only the initial stages; an
-  update stage is fused only by a separate `b.update(i).compute_with(a.update(j),
-  v)`. A stage that is *not* fused keeps its own ordinary, unfused loop nest.
+* a child can itself be the parent of a further `compute_with` — a **chain**,
+  still one group
+  ([examples/compute_with_chain.cpp](examples/compute_with_chain.cpp));
+* a Func's *different stages* can fuse into *different* parents — e.g.
+  `f.compute_with(g)` with `f.update().compute_with(h)` puts `f, g, h` in one
+  group while `f` has **two** parents
+  ([examples/compute_with_two_parents.cpp](examples/compute_with_two_parents.cpp)).
 
-### The fused group and its loop structure
+So **"parent" is a property of each edge** (the argument stage of that
+`compute_with`), not of the group: in general there is **no single group
+parent**. (When one member is the ancestor of all the rest — the common case:
+several children fused directly into one stage, or a chain — that member is
+loosely "the group parent", and statements below phrased as "the parent" refer to
+it.) All members of a group must share the **same compute level** (`compute_root`,
+or the same `compute_at` site); mismatched compute levels are an error.
 
-All stages tied together by `compute_with` form one **fused group** (the
-grouping is by *connected component*: `compute_with` can chain — a child may
-itself be the parent of a further `compute_with`, as in
-[examples/compute_with_chain.cpp](examples/compute_with_chain.cpp), and the whole
-chain is one group). One member of the group is its **group parent**: the member
-that is *nobody's child* — the root of the chain — and whose loops actually
-survive as the shared nest. When every child fuses directly into one stage (the
-common case, and all but one example here), that stage is the group parent. The
-unqualified word **"parent" below means the group parent**, which is what the
-ordering and placement rules turn on.
+### How the fused nest is built
 
-The group is realized as a unit at the **group parent's compute level** — note
-this is the parent's `compute_at`/`compute_root` *site*, a separate thing from
-the fuse level `v`. (`compute_root` → the group is at root; `compute_at(out, y)`
-→ the group sits inside `out`'s `y` loop.) Within the group:
+The group's loop nest grows one **stage** at a time. This mirrors how Halide
+actually assembles it ([src_doc §14](src_doc/loop_nest_construction.md); the
+`[loopdoc-trace]` lines in any fused example's `debug_1` log show it directly):
 
-<!-- Human: there isn't necessarily a single `v` for parents with multiple children? -->
-
-* From the outermost loop **down to and including the fuse level `v`** there is
-  **one shared loop nest** (one loop per level, *not* one per member). Halide
-  prints these loop vars with a `fused.` prefix; the canonicalizer drops loop
-  names, so they read as ordinary `for`.
-* **Below `v`**, each member keeps its **own** loops, emitted as **siblings**
-  inside the shared loop. If `v` is the innermost dimension there are no
-  per-member sub-loops — the members' leaves sit directly in the shared loop.
-
-**Loop ownership** is the key to the rest of this section. The shared loops
-(outermost down to `v`) belong to the **group parent**; each non-parent member
-owns only its loops *below* `v`. One concept, three consequences:
-
-* **Producers** computed at the fused level must name the parent
-  (`input.compute_at(parent, v)`); a non-parent member does not own that loop —
-  which is exactly why `input.compute_at(child, v)` is illegal (below).
-* **`micro_halide_collapses`** keys on the loop's owner: eliding a shared loop is
-  declared on the **parent** (a non-parent member's annotation for a shared-level
-  var hits *nothing*, because it owns no such loop); eliding a below-`v` loop is
-  declared on the **member** that owns it, and may differ between members.
-  [examples/compute_with_at.cpp](examples/compute_with_at.cpp) collapses the
-  shared `y` via the parent alone.
-* **Ordering** (next) is stated in terms of the parent vs. the other members.
-
-### Fusing update stages
-
-`compute_with` is per stage, so the update stages fuse only via their own
-`b.update(i).compute_with(a.update(j), v)` calls. This does **not** break the
-rule that *all stages of one Func share a single `produce`* (§3): each member
-still gets exactly one `produce` block (the group's blocks nest as below), and
-within it each **fused stage-pair** is one shared loop nest, with the successive
-stage-pairs appearing as **consecutive sibling nests** — just like an ordinary
-multi-stage Func's sibling stage nests (§3), except each is now fused.
-[examples/compute_with_update.cpp](examples/compute_with_update.cpp) fuses both
-the init and the update stages: two shared nests, side by side, inside the one
-pair of `produce` blocks. A stage left **unfused** simply emits its own ordinary
-(unfused) loop nest as a sibling in that same sequence.
-
-<!-- Human: please look into RealizationOrder.cpp, check_fused_stages_are_scheduled_in_order.
- 
-Concerned about full description of legal/illegal compute_with and interaction with other scheduling features.
-For example, what happens with
-
-g.compute_at(...)
-h.compute_at(...)  // Not same as g
-f.compute_with(g, ...)
-f.update().compute_with(h, ...)
-
-In general, the description of fused groups being a relation between stages (not functions) leaves open questions about interactions with loop generation steps that consider functions as a whole.
-
-Bonus, what if g and h actually have the same compute_at?
-
-Bonus 2, what if one of the f.compute_with or f.update().compute_with is omitted?
-e.g. if only the f.update() is compute_with'd, it seems f should still have its own place in realization order (assuming f is not inlined) ... but when f is realized, it's contradictory where the code for the f.update() stage should go (should it go into the `produce f:` block that includes the pure stage, because that's what "3. A single Func's loops and its stages" says, or does it get fused into h's loops?
-
--->
-
-### Member ordering — two distinct orders
-
-The members appear in **two different orders**, and both must be reproduced:
-
-* **Compute (body) order**, inside the fused loop: a **topological order of the
-  `compute_with` edges** — each parent stage before any child fused onto it, so
-  the group parent comes first — with the §6 tie-break ordering any members that
-  have no edge between them. (When all children fuse directly into the group
-  parent, this is just "parent first, then the children in §6 order".)
-* **`produce`/`consume` nesting**: the **parent's `produce` is outermost**; the
-  other members nest *inside* it, in the **reverse** of realization-tie-break
-  order (the member realized first is the innermost `produce`). The matching
-  `consume` blocks nest in the same order and wrap the downstream consumer.
-
-Underlying both is the group's **within-group realization order**: the non-parent
-members come first in the §6 tie-break, and **the parent is realized last**. This
-"parent last" is an override — it holds even when the parent's name would sort it
-first ([examples/compute_with_parent_alpha.cpp](examples/compute_with_parent_alpha.cpp)).
+1. **Order the stages.** Put all stages of all members in a topological order
+   respecting (a) each Func's own stage order (s0 before s1 …) and (b) every fuse
+   edge (a parent stage before the child fused onto it).
+2. **Inject each stage at its own fuse level.** A stage with **no** fuse level
+   (an *unfused* stage — including the roots' stages) starts its **own** loop
+   nest, appended as a sibling. A **fused** child stage is **spliced into its
+   parent stage's** already-built nest: the two **share the loops from the
+   outermost down to that edge's `v`**, and the child's loops **below `v`** become
+   **siblings** inside, after the parent's body. (If `v` is innermost there are no
+   sub-loops — the bodies sit directly in the shared loop.)
+3. **Wrap with `produce`/`consume`.** Wrap the finished body in a `produce` (and
+   a `consume`) block for **every** member, nested so the **last-realized member
+   is outermost** (next subsection).
 
 The basic case — `f`, `g` both `compute_root`, `x` split into `xo, xi`,
-`g.compute_with(f, xo)`, with `h(x,y) = f + g` — prints
+`g.compute_with(f, xo)`, `h = f + g` — has stage order `f.s0` (own nest), then
+`g.s0` (fused into `f.s0` at `xo`), giving
 ([examples/compute_with_split.cpp](examples/compute_with_split.cpp)):
 
 ```
-produce f:                 # parent, outermost produce
-  produce g:               # child nests inside
+produce f:                 # wrap: f (last realized) outermost, g inside
+  produce g:
     for fused.y:           # shared loops, outermost down to the fused level xo
       for fused.xo:
-        for xi:            # below the fused level: each member's own loop, as siblings
+        for xi:            # below v: each member's own loop, as siblings
           f(...) = ...     # parent body first
         for xi:
           g(...) = ...
 consume f:
   consume g:
-    produce h:
-      for y:
-        for x:
-          h(...) = ...
+    produce h: ...
 ```
 
-With three members the two orders visibly diverge: for `g.compute_with(f, y)`
-and `h.compute_with(f, y)`, the bodies run `f, g, h` (parent first, then §6
-order) while the produce blocks nest `f, h, g` (parent outermost, then §6 order
-*reversed*) — see [examples/compute_with_three.cpp](examples/compute_with_three.cpp).
+Because the procedure is per *stage*, a member's stages need **not** be
+consecutive: an unfused stage of one member can land between two stages of
+another. [examples/compute_with_update.cpp](examples/compute_with_update.cpp)
+fuses both the init and the update stages (two shared nests in a row); the
+two-parent example lands `f`'s two stages in different nests with `h`'s pure
+stage between them — yet all of `f`'s stages still live under the single
+`produce f`, so §3's "one `produce` per Func" holds even though "consecutive"
+does not.
 
-### Producers computed at the fused level
+### Member ordering
 
-By the ownership rule above, a producer you want computed at the fused level must
-name the **parent** (`input.compute_at(parent, v)`); computing it at a **child**
-is illegal because the child does not own that loop
-([examples/neg_compute_with_producer_at_child.cpp](examples/neg_compute_with_producer_at_child.cpp)).
-Below the fuse level a child *does* own its loops, but the ordinary rule still
-applies (§7): a producer's `compute_at` site must enclose **every** use of it,
-across all the fused bodies. [examples/compute_with_producer.cpp](examples/compute_with_producer.cpp)
-computes a shared producer at the parent's fused loop. Note its `input` keeps
-*both* its loops there — a fused loop's bounds are the union over the members, so
-a producer at a fused level can avoid a collapse it would suffer at a plain
-`compute_at`; as always, such elision is *declared* per example, not derived.
+Two orders, both observable, both falling out of the procedure:
+
+* **Body (compute) order** — the **stage order** of step 1: a parent stage before
+  its children, ties broken by §6. With all children fused directly into one
+  parent this is just "parent first, then children in §6 order".
+* **`produce`/`consume` nesting** — the **reverse of the group's realization
+  order**: the **last-realized** member is the outermost `produce`; `consume`
+  blocks mirror it and wrap the downstream consumer.
+
+The group's **within-group realization order** is the members in §6 tie-break
+order, but with the group's spine owner — the member that owns the outermost
+shared loop and is Halide's `produce`-nesting anchor — **last**. In a
+single-rooted group that owner is the root/parent, so "parent realized last /
+parent's `produce` outermost", and it is a genuine override: it holds even when
+the parent's name would sort it first
+([examples/compute_with_parent_alpha.cpp](examples/compute_with_parent_alpha.cpp)).
+With three members the two orders visibly diverge — `g.compute_with(f,y)`,
+`h.compute_with(f,y)` give bodies `f, g, h` but produce nesting `f, h, g`
+([examples/compute_with_three.cpp](examples/compute_with_three.cpp)).
+
+### Loop ownership: producers and elision
+
+The loops a fused pair shares belong to that pair's **parent** stage; the child
+owns only its loops below `v`. Two consequences:
+
+* A **producer** to be computed at a fused level must name the **owning (parent)**
+  Func — `input.compute_at(parent, v)`. Naming a child is illegal: it owns no loop
+  there ([examples/neg_compute_with_producer_at_child.cpp](examples/neg_compute_with_producer_at_child.cpp)).
+  [examples/compute_with_producer.cpp](examples/compute_with_producer.cpp)
+  computes a shared producer at the parent's fused loop. (A fused loop's bounds
+  are the union over the members, so a producer there can keep a loop it would
+  collapse at a plain `compute_at`; as always such elision is *declared*, not
+  derived.)
+* **`micro_halide_collapses`** keys on the loop's **owner**: collapse a shared
+  loop by annotating the **parent** (a child's annotation for a shared-level var
+  hits nothing — it owns no such loop), and a below-`v` loop on the **member**
+  that owns it (which may differ between members).
+  [examples/compute_with_at.cpp](examples/compute_with_at.cpp) collapses the
+  shared `y` via the parent alone.
+
+### Legality
+
+`compute_with` has its own **preconditions**, separate from the general
+compute_at rule:
+
+* The two fused stages must have **matching loop nests down to `v`** — checked on
+  the *resulting* dimension lists (§3), not the scheduling provenance: `v` must
+  exist **by name** in both
+  ([examples/neg_compute_with_mismatch.cpp](examples/neg_compute_with_mismatch.cpp)),
+  and the **count** of loops from the outermost down to `v` must match (so `v` is
+  at the same depth), paired up by name
+  ([examples/neg_compute_with_dim_count.cpp](examples/neg_compute_with_dim_count.cpp)).
+  Loops **below** `v` and **all extents** may differ — different `split` factors
+  or matching `tile`s fuse fine
+  ([examples/compute_with_tile.cpp](examples/compute_with_tile.cpp)), but a
+  `reorder` that moves `v`'s depth does not.
+* The fused Funcs must have **no producer/consumer dependency**
+  ([examples/neg_compute_with_dependency.cpp](examples/neg_compute_with_dependency.cpp)).
+* All group members share **one compute level** (above).
+* A Func's stages fused into a given parent must keep **increasing parent-stage
+  order** — you cannot fuse `f.s0` into `g.s1` and `f.s1` into `g.s0` (no
+  consistent stage order would exist; [src_doc §14](src_doc/loop_nest_construction.md)).
+
+A **producer's `compute_at` legality** inside a fused group needs **no new
+rule** — it is exactly §7's principle, *the site must enclose every use of the
+Func*, evaluated against the **post-fusion** loop structure. Both "computed at a
+child" and "computed at a loop that no longer spans a use fusion moved into
+another member's body" are just that one check failing.
 
 
 ### Out of scope (bounds-only, invisible here)
@@ -1522,35 +1499,14 @@ The whole loop nest follows from the rules above, assembled into one procedure:
    accordingly (§7). A Func scheduled `store_root()` is the special case where
    its `store` node opens at the very outermost level, wrapping the whole nest.
 
-  <!-- Human: I'm sorry this is frustrating not-too-actionable criticism,
-  but I find the description below and the long section 14 very hard to put together in my head into a clear loop nest structure for a realized fused group.
-  In general, it feels like the description in the compute_with section is a large set of "constraints" for what the output will look like, described as a set of cases for different features.
-  This makes it hard for me to deduce how all constraints are satisfied when lots of features interact.
-  I would prefer a clear exposition describing how the loop nest "grows" over time, if that makes sense.
-
-  My mental model is that we start by injecting produce/consume and a loop nest based on the parent alone.
-  This includes update stages of the parent.
-  After that, some additional produce/consume wrapping and "sibling" loop nests will be injected for each child.
-  This will be in some ordering.
-  This step maybe could lead to broken producer/consumer relationships, which is detected by some rules I don't understand.
-
-  Additionally, is my mental model (if not already functionally incorrect) also similar to how the actual Halide compiler injects the func stage realizations?
-  This is partially answered by Loop emission of the src_doc; a simplified-for-user-explanation version of this may form the basis for loopdoc.md as well.
-
-  Keep in mind the main_agent.md actually encourages you to modify the Halide compiler itself,
-  with `debug(1) << text` statements, to more confidently reverse-engineer Halide.
-  No main agent has done this so far; you may be the first.
-
-  -->
-
-   When the Func reached at a site is the parent of a **fused group** (§14), the
-   group emits as a unit in place of a lone `produce f`: the shared loops
-   (outermost down to the fuse level) are printed once; each member's own loops
-   below the fuse level become siblings inside, in compute order (parent first);
-   and the group's `produce`/`consume` blocks wrap the whole thing with the
-   parent outermost and the other members nested inside in reverse realization
-   order. Each fused stage-pair is one such shared nest, emitted as a sibling like
-   any other stage (§14).
+   When the site holds a **fused group** (§14) rather than a lone Func, the group
+   emits there as a unit: §14's growth procedure runs in place of this single
+   Func's `produce` — its member stages are injected in stage order, each at its
+   own fuse level, and the finished nest is wrapped in a `produce`/`consume` for
+   every member (last-realized outermost). The whole group occupies the one site
+   it was filed at (step 3). (This per-stage growth is exactly what the Halide
+   compiler does — verified against its `build_pipeline_group` and the
+   `[loopdoc-trace]` output; see §14 and [src_doc §14](src_doc/loop_nest_construction.md).)
 
 [examples/many_compute_root.cpp](examples/many_compute_root.cpp) puts the core
 pieces together: `f1`, `f2`, `f3` are `compute_root` and so form the top-level
