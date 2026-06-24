@@ -1,6 +1,6 @@
 # Source evidence: loop-nest construction (bootstrap subset)
 
-This file backs the claims in [../loopdoc.md](../loopdoc.md) §§2–14 with
+This file backs the claims in [../loopdoc.md](../loopdoc.md) §§2–15 with
 citations into the Halide compiler. Paths are relative to the Halide source
 root (`../src` from the loopdoc directory). Line numbers are approximate and
 may drift; the surrounding function names are the stable anchors.
@@ -21,7 +21,7 @@ lowering:
     }
 
 This is why the output never inlines and always appears as the outermost
-`produce` (loopdoc §5, §6, §14 step 1). In the real `realize`/`compile` path the
+`produce` (loopdoc §5, §6, §15 step 1). In the real `realize`/`compile` path the
 same effect comes from the output simply being the realized buffer.
 
 ## 2. The default schedule is "inlined"
@@ -52,7 +52,7 @@ The topological producers-before-consumers order is computed by
 `print_loop_nest` calls it (`auto [order, fused_groups] =
 realization_order(outputs, env);`) and `schedule_functions` injects each
 function's realization in that order. This backs loopdoc §6 ("realization
-order") and §14 step 2. Inlined Funcs remain in `env` and so still contribute
+order") and §15 step 2. Inlined Funcs remain in `env` and so still contribute
 edges to the ordering even though they get no realization.
 
 ### Sibling tie-break
@@ -156,7 +156,7 @@ producer's realization at that point. The matching is done by the
 
 The realization (`produce`/loops/`consume`) is spliced in as a prefix of that
 loop's body, with the remainder of the body becoming the `consume` content.
-This backs loopdoc §7's nesting picture and §14 steps 3–4.
+This backs loopdoc §7's nesting picture and §15 steps 3–4.
 
 ### Legality of a compute_at site
 
@@ -915,3 +915,108 @@ shared callee). Residual uncertainty: I did not line-by-line audit
 Function-creating path, but the empirical results rule out callee duplication
 along the `clone_in` path regardless, so any such path would not change the
 verdict for the behavior that matters here.
+
+## 14. compute_with: fused groups
+
+Backs loopdoc §14. `compute_with` interleaves two stages into one shared loop
+nest. It creates no Function; it records a fusion intent on the **child** stage's
+schedule, and the realization-order and schedule-injection passes turn that into
+the shared nest. Unlike everything above, the relevant state lives on the
+`StageSchedule`, and the structure is built in three cooperating places:
+`RealizationOrder.cpp` (grouping + within-group order), `Schedule.cpp`
+(the per-stage records), and `ScheduleFunctions.cpp` (the actual loop emission).
+
+### API entry points and recorded state
+
+`Stage::compute_with(LoopLevel, align)` (and the `Func` forwarders) is in
+`src/Func.cpp` ~2098. It writes a single field — the child stage's
+`StageSchedule::fuse_level()`, a `FuseLoopLevel{level, align}`
+(`src/Schedule.h` ~311). `level` is a `LoopLevel(parent_func, parent_stage,
+var)` naming where to fuse; `align` is the bounds-only alignment map. Default
+`fuse_level` is `inlined()`, meaning "not fused". So a `compute_with` is just
+"this child stage carries a `fuse_level` pointing at a parent stage + var."
+
+`FusedPair{func_1, stage_1, func_2, stage_2, var_name}` (`src/Schedule.h` ~536)
+is the materialized edge: *(parent stage) is fused with (child stage) at
+`var_name`, parent computed first.* `populate_fused_pairs_list`
+(`src/RealizationOrder.cpp` ~143) reads each definition's `fuse_level` and pushes
+a `FusedPair` onto the **parent** stage's `fused_pairs()` list (init stage if
+`stage_index==0`, else the matching update).
+
+### Grouping and within-group order (`RealizationOrder.cpp`)
+
+`realization_order` (~295) does the work behind loopdoc §14's ordering:
+
+* It builds an **undirected** `fuse_adjacency_list` (~127) connecting every
+  `func_1`↔`func_2`, then `find_fused_groups` (~38) runs a DFS over it so each
+  connected component becomes one **fused group** with a synthetic name.
+* `validate_fused_pair` (~88) enforces legality, including the producer/consumer
+  rule: it asserts the two funcs are **not** in each other's transitive call set
+  (`indirect_calls`), erroring *"Invalid compute_with: there is dependency
+  between …"* — this is loopdoc §14's "no dependency" requirement and
+  `neg_compute_with_dependency.cpp`.
+* The pipeline DAG is then computed with each group collapsed to a **single
+  dummy node** (~360): every member depends on the dummy, and the dummy depends
+  on all funcs the members call. So the whole group realizes as a unit, after
+  everything it reads. Sibling order in the DAG is decided by
+  `sort_funcs_by_name_and_counter` (~256) — the **same (prefix, visitation
+  counter, full name) tie-break** as loopdoc §6.
+* The members **within** a group are then ordered by their position in the
+  topological result `temp` (~403). The net effect — confirmed empirically —
+  is that the non-parent members come first in the §6 tie-break and the **group
+  parent is ordered last**; `funcs.back()` is treated as `group_parent` in the
+  emitter (below). This "parent last" holds even when the parent's name sorts
+  first.
+
+### Loop emission (`ScheduleFunctions.cpp`, `build_pipeline_group` ~1679)
+
+`InjectFunctionRealization` is constructed with the whole group as its `funcs`
+vector (in the within-group realization order). `build_pipeline_group` builds the
+shared nest:
+
+* **Body / compute order** is `stage_order` (~1755): a topological sort over the
+  stages' `fuse_level` edges, "exploiting that stages of a function form a linear
+  order." A child stage depends on its parent stage, so the parent's stages are
+  emitted first — hence loopdoc §14's "parent body first, then the others in §6
+  order." Each stage is injected by `inject_stmt` at its `fuse_level` (~1822), so
+  a child's loops are spliced into the parent's at the fuse level; below that
+  level each stays a sibling.
+* **produce/consume nesting** (~1865):
+
+      for (const auto &i : funcs)                 // produce: funcs[0] innermost,
+          producer = make_produce(i.name(), producer);   //  funcs.back() outermost
+      for (size_t i = 0; i < funcs.size(); i++)   // consume: same nesting
+          if (!is_output_list[i]) consumer = make_consume(funcs[i].name(), consumer);
+
+  Because each wrap goes *outside* the previous, wrapping in `funcs` order puts
+  `funcs.back()` (= the parent) **outermost** and the first-realized member
+  innermost — i.e. produce nesting is the **reverse** of the within-group
+  realization order. This is exactly loopdoc §14's "parent's produce outermost,
+  others nested inside in reverse realization order."
+
+* The shared (parent) loop is the one that survives; child fused loops are turned
+  into scheduling-only points whose bounds are replaced to refer to the parent
+  loop. `fused_name` (~1037) renames the parent loop var to insert a `.fused.`
+  token, which is why the loop prints as `for f.s0.fused.y` (the canonicalizer
+  drops the name). `substitute_fused_bounds` (~1046) and
+  `replace_parent_bound_with_union_bound` (~1601, using `funcs.back()` as the
+  parent) implement the union/bounds behavior — all bounds-only, invisible to the
+  canonicalized nest.
+
+### Producer at the fused level must name the parent
+
+Because the surviving shared loop belongs to `funcs.back()` (the parent), and the
+child fused loops are collapsed to points referring to it, a producer's
+`compute_at` site at the fused level only exists on the **parent**. Computing a
+producer at a child's fused-or-above loop fails the ordinary
+`ComputeLegalSchedules` enclosure check (§6 here / loopdoc §7): the child loop is
+not a real injection site enclosing the parent's use. This is loopdoc §14's
+producer rule and `neg_compute_with_producer_at_child.cpp`; the legal-locations
+diagnostic lists only `compute_at(parent, …)`.
+
+### Alignment and guards are bounds-only
+
+`compute_shift_factor` / `ShiftLoopNest` (~1835) apply the `LoopAlignStrategy`
+shifts, and the differing-extent guards become `IfThenElse` nodes. `PrintLoopNest`
+has **no** `visit(const IfThenElse*)` and never prints bounds expressions, so
+none of this appears — consistent with loopdoc §14 "out of scope (bounds-only)."

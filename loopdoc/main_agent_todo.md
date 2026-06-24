@@ -35,6 +35,14 @@ then prune). Add a one-line `why` so future-me knows the trigger.
       the same way the `in`/`clone_in` notes were trimmed: they still carry verbose
       "MODEL: ..." behavioral digests that are now mirrored in loopdoc/src_doc.
       Deferred because they are completed-milestone history; do when convenient.
+- [x] RESOLVED (human): illegal schedules killed example binaries via an UNCAUGHT
+      `CompileError` -> std::terminate -> SIGABRT, swallowing the real diagnostic
+      (only the generic libc++abi line survived). Established it was a clean
+      pre-print throw (no partial nest emitted), not an unclean mid-impl exit, and
+      the partial-nest worry is moot anyway (canonicalize.py only runs when BOTH
+      backends exit 0). Human added `micro_halide::CompileError` + changed the
+      example structure to a try/catch (README "Example structure change"); my
+      duplicate repro example was removed. Old examples need not be retrofitted.
 - [ ] Upstream (outside this repo, the user's call): the `Function::deep_copy`
       header comment in `../src/Function.h` ("recursively deep copies all called
       functions") is misleading for the member in isolation — the recursion is the

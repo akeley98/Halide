@@ -30,6 +30,7 @@ This repository contains:
 
 # Example Structure
 
+    #include <stdio.h>
     #ifdef USE_MICRO_HALIDE
     #include "micro_halide.hpp"
     using namespace micro_halide;
@@ -40,19 +41,46 @@ This repository contains:
     #endif
 
     int main() {
-        ImageParam ...
-        Func f = ...
+        // NOTE: older examples may omit the try/catch due to a harness rule change.
+        try {
+            ImageParam ...
+            Func f = ...
 
-        // Define and schedule f and any other functions.
-        // Do not conditionally compile based on USE_MICRO_HALIDE
+            // Define and schedule f and any other functions.
+            // Do not conditionally compile based on USE_MICRO_HALIDE
 
-        f.print_loop_nest();
+            f.print_loop_nest();
+        }
+        catch (const CompileError &e) {
+            fprintf(stderr, "CompileError: %s\n", e.what());  // Customize printing at your discretion.
+            return 1;
+        }
+        return 0;
     }
 
 The only `#ifdef USE_MICRO_HALIDE` permitted in an example is this header block.
 The non-micro branch also includes `halide_compat.h` (from `halide_compat/`),
 a small shim that provides do-nothing stubs for micro_halide-only annotations
 so the example compiles unchanged against real Halide.
+
+## Example structure change: catching `CompileError` (human-authorized)
+
+The `main()` body wrapped in `try { … } catch (const CompileError &e) { … return
+1; }` above is a **human-authorized** change to the required example structure
+(the main agent does not modify the harness or its conventions on its own). Its
+purpose is purely to make errors legible: an illegal schedule throws an exception
+at detection, and without a catch the example dies via `std::terminate`
+(SIGABRT), printing only a generic libc++abi line and **swallowing the real
+diagnostic**. Catching it and printing `e.what()`, then `return 1`, surfaces the
+message while still exiting nonzero (so the harness still classifies it as a
+negative example).
+
+`CompileError` resolves in whichever namespace the example uses: real Halide
+provides `Halide::CompileError`, and a matching `micro_halide::CompileError` (a
+`std::runtime_error` subclass) was added so the *same* `catch` works under both
+backends. This is an aid for reading new examples; **older examples may omit the
+try/catch** and are not required to be retrofitted — an uncaught error still
+exits nonzero and is still counted as a negative.
 
 ## The `micro_halide_collapses` annotation
 
