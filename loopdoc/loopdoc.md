@@ -1097,16 +1097,23 @@ two reduction vars of a 3-D `RDom` and reorders the intermediate's update loops)
 
 Both directives create a **new, separate Func** that a chosen set of consumers
 read *instead of* the original. They differ in what that new Func computes. In
-both cases the new Func is an ordinary realized Func — it gets a slot in the
-realization order and is scheduled like any other.
+both cases the new Func is an ordinary Func with the usual **default inline**
+schedule (§4–§5), and you schedule it like any other. Left at the default it is
+*non-realized*: a pure wrapper or a pure clone is substituted away exactly like
+any other inline pure Func (§5), so it has **no visible effect on the nest until
+you give it a compute level** (`compute_root`/`compute_at`); a *non-pure* clone
+left inline instead follows the non-pure inline default (§11). The example nests
+below therefore assume the new Func has been scheduled (e.g. `compute_root`).
 
 ### `f.in(g)` — an identity *wrapper*
 
 `f.in(g)` returns a new Func (printed `f_in_g`) whose definition is the pointwise
 identity `f_in_g(args) = f(args)`, and it makes `g` read `f_in_g` where it used
-to read `f`. The wrapper reads `f`; `f`'s *other* consumers are untouched. A new
-realized Func therefore sits between `f` and `g` (realization order
-`f` → `f_in_g` → `g`):
+to read `f`. The wrapper reads `f`; `f`'s *other* consumers are untouched. The
+wrapper is pure, so left at its default it inlines straight back (the nest is
+just `f` → `g`, as if the `in` were not there). Once you give it a compute level
+(here `f_in_g.compute_root()`) it becomes a distinct node between `f` and `g`
+(realization order `f` → `f_in_g` → `g`):
 
 ```
 produce f:
@@ -1165,8 +1172,9 @@ Redirecting a caller means that caller reads the wrapper/clone in place of `f`,
 so `f` keeps only the consumers that were *not* redirected. The two directives
 then differ in whether `f` survives:
 
-* an **`in` wrapper always keeps `f` realized** — the wrapper itself reads `f`,
-  so `f` still has a consumer;
+* an **`in` wrapper always keeps `f` in the pipeline** — the wrapper reads `f`,
+  so `f` still has a consumer (and is then realized or inlined per `f`'s own
+  schedule, as always);
 * a **clone reads `f`'s *inputs*, not `f`** (callees are shared, above), so if
   *every* consumer of `f` ends up redirected to the clone, `f` has no remaining
   reader, becomes unreachable from the output (§1), and **drops out of the nest
