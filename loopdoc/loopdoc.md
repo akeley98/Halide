@@ -1186,6 +1186,32 @@ now read by the wrapper — whereas `f.clone_in(h)` prints `f_clone_in_h` → `g
 `h` with `f` **absent**, because `g` now reads the clone and the clone reads
 `f`'s own inputs rather than `f`.
 
+### Examples
+
+* [in_basic.cpp](examples/in_basic.cpp) — `f.in(g)` scheduled `compute_root`
+  (`f` → `f_in_g` → `g`); [in_unscheduled.cpp](examples/in_unscheduled.cpp) — the
+  same wrapper left at its default inlines away (nest is just `f` → `g`).
+* [in_compute_at.cpp](examples/in_compute_at.cpp) — the wrapper computed inside
+  its consumer (`f_in_g.compute_at(g, y)`).
+* [in_multi.cpp](examples/in_multi.cpp) — `f.in({g1, g2})`, one shared wrapper
+  for two named consumers; [in_global.cpp](examples/in_global.cpp) — `f.in()`,
+  one global wrapper redirecting every consumer.
+* [in_two_consumers_fix.cpp](examples/in_two_consumers_fix.cpp) — the positive
+  fix for [neg_compute_at_two_consumers.cpp](examples/neg_compute_at_two_consumers.cpp):
+  a per-consumer wrapper can be computed inside its single consumer.
+* [clone_basic.cpp](examples/clone_basic.cpp) — `f.clone_in(g)` with `f` kept by
+  another consumer; the clone and `f` share the callee `p` (one `produce p`).
+  [neg_clone_shared_callee.cpp](examples/neg_clone_shared_callee.cpp) — the
+  shared-callee gotcha: `p.compute_at(f, x)` is illegal once the clone also reads
+  `p`.
+* [in_transitive.cpp](examples/in_transitive.cpp) vs
+  [clone_transitive.cpp](examples/clone_transitive.cpp) — `h` → `g` → `f`: the
+  `in` wrapper keeps `f`; the clone makes `f` drop out.
+* [tiebreak_visitation_order.cpp](examples/tiebreak_visitation_order.cpp) — two
+  same-prefix producers of one consumer, where the realization-order tie-break's
+  *visitation-order* secondary key (§6) decides — the case that arises once
+  several wrappers/clones share a name prefix.
+
 ### Implementation note
 
 Although the documentation, for simplicity, describes `f.in(g)` or
