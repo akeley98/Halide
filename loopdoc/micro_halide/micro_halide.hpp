@@ -30,6 +30,16 @@
 namespace micro_halide
 {
 
+// Added by human to support handwritten harness rule change.
+// Use this to report all exceptions.
+class CompileError: public std::runtime_error
+{
+  public:
+    CompileError(std::string what) : std::runtime_error(std::move(what))
+    {
+    }
+};
+
 // ---------------------------------------------------------------------------
 // Var: a pure loop variable / dimension name.
 // ---------------------------------------------------------------------------
@@ -367,8 +377,8 @@ inline void split(std::vector<DimData> &a, const std::string &owner,
     int pos = dim_pos(a, old_var.name());
     if (pos < 0)
     {
-        throw std::runtime_error("micro_halide: split: \"" + owner +
-                                 "\" has no dimension \"" + old_var.name() + "\"");
+        throw CompileError("micro_halide: split: \"" + owner +
+                           "\" has no dimension \"" + old_var.name() + "\"");
     }
     a.erase(a.begin() + pos);
     a.insert(a.begin() + pos, DimData(outer.name())); // outer goes to old's slot first ...
@@ -382,13 +392,13 @@ inline void fuse(std::vector<DimData> &a, const std::string &owner,
     int opos = dim_pos(a, outer.name());
     if (ipos < 0)
     {
-        throw std::runtime_error("micro_halide: fuse: \"" + owner +
-                                 "\" has no dimension \"" + inner.name() + "\"");
+        throw CompileError("micro_halide: fuse: \"" + owner +
+                           "\" has no dimension \"" + inner.name() + "\"");
     }
     if (opos < 0)
     {
-        throw std::runtime_error("micro_halide: fuse: \"" + owner +
-                                 "\" has no dimension \"" + outer.name() + "\"");
+        throw CompileError("micro_halide: fuse: \"" + owner +
+                           "\" has no dimension \"" + outer.name() + "\"");
     }
     int hi = std::max(ipos, opos);
     int lo = std::min(ipos, opos);
@@ -407,15 +417,15 @@ inline void reorder(std::vector<DimData> &a, const std::string &owner,
         int pos = dim_pos(a, n);
         if (pos < 0)
         {
-            throw std::runtime_error("micro_halide: reorder: \"" + owner +
-                                     "\" has no dimension \"" + n + "\"");
+            throw CompileError("micro_halide: reorder: \"" + owner +
+                               "\" has no dimension \"" + n + "\"");
         }
         for (int s : slots)
         {
             if (a[s].name() == n)
             {
-                throw std::runtime_error("micro_halide: reorder: dimension \"" + n +
-                                         "\" named more than once");
+                throw CompileError("micro_halide: reorder: dimension \"" + n +
+                                   "\" named more than once");
             }
         }
         slots.push_back(pos);
@@ -855,6 +865,15 @@ class Func: public FuncStageImpl<Func>
     Func clone_in(const Func &consumer);
     Func clone_in(const std::vector<Func> &consumers);
 
+    // compute_with (loopdoc.md section 14): fuse THIS Func's initial stage into
+    // `parent`'s initial stage, sharing the loops from the outermost down to
+    // `var`. This Func becomes the CHILD; `parent` is the fused group's parent.
+    // Creates no new Func; only re-shapes the loop nest. STUB provided by the
+    // main agent only so examples compile; recording the fusion intent, grouping
+    // the funcs, and emitting the shared nest is the micro-agent's task from
+    // loopdoc.md section 14. Throws until then.
+    Func &compute_with(const Func &parent, const Var &var);
+
     void print_loop_nest();
 };
 
@@ -883,6 +902,12 @@ class Stage: public FuncStageImpl<Stage>
         return rfactor(std::vector<std::pair<RVar, Var>>{{r, v}});
     }
     Func rfactor(const std::vector<std::pair<RVar, Var>> &preserved);
+
+    // compute_with (loopdoc.md section 14), per update stage: fuse THIS stage
+    // into `parent` (e.g. f.update(i).compute_with(g.update(j), var)). STUB
+    // provided by the main agent only so examples compile; the micro-agent
+    // implements the documented behavior from loopdoc.md section 14. Throws.
+    Stage &compute_with(const Stage &parent, const Var &var);
 };
 
 inline Stage Func::update(int i) const
@@ -1046,7 +1071,7 @@ inline Func Stage::rfactor(const std::vector<std::pair<RVar, Var>> &preserved)
 {
     if (stage_index == 0)
     {
-        throw std::runtime_error(
+        throw CompileError(
             "micro_halide: rfactor may only be called on an update stage, "
             "not the pure stage (loopdoc.md section 12)");
     }
@@ -1148,6 +1173,22 @@ inline Func Stage::rfactor(const std::vector<std::pair<RVar, Var>> &preserved)
     }
 
     return intm;
+}
+
+// compute_with stubs (loopdoc.md section 14). Compile-only, provided by the
+// main agent; the micro-agent implements the real fused-group behavior from the
+// docs. They throw so positive compute_with examples fail until implemented
+// (the established pre-delegation state, as with rfactor / in / clone_in).
+inline Func &Func::compute_with(const Func &, const Var &)
+{
+    throw CompileError(
+        "micro_halide: compute_with not yet implemented (loopdoc.md section 14)");
+}
+
+inline Stage &Stage::compute_with(const Stage &, const Var &)
+{
+    throw CompileError(
+        "micro_halide: compute_with not yet implemented (loopdoc.md section 14)");
 }
 
 // ---------------------------------------------------------------------------
@@ -1787,8 +1828,8 @@ struct LoopNestPrinter
 
     [[noreturn]] static void fail(FuncContents *f, const std::string &why)
     {
-        throw std::runtime_error("micro_halide: invalid schedule for Func \"" + f->name +
-                                 "\": " + why);
+        throw CompileError("micro_halide: invalid schedule for Func \"" + f->name +
+                           "\": " + why);
     }
 
     // Validate every compute_at in the pipeline. `funcs` is every reachable Func.

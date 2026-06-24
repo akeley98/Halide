@@ -350,7 +350,7 @@ Marking convention:
         in_custom_and_global (custom+global combo -- FAILED, exposed a loopdoc §13
         gap, see DISCOVERED DOC GAPS; §13 fixed, re-delegating that one fix).
 
-[ ] `compute_with` (this is where things get very confusing)
+[WIP] `compute_with` (this is where things get very confusing)
     NOTES:
 
 [ ] `compute_inline`
