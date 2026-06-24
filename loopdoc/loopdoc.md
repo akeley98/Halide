@@ -374,10 +374,13 @@ order they appear in the defining expression**:
 So in [examples/tiebreak_realization_order.cpp](examples/tiebreak_realization_order.cpp),
 even though the expression is written `b1d(x) + a2d(x, y)`, `a2d` is realized
 first because `"a2d" < "b1d"`. The left-to-right order of `+` is irrelevant. The
-first-visitation tie-break only matters when two prefixes are equal (e.g.
-auto-named Funcs sharing a prefix); examples here use distinct prefixes so the
-order is purely alphabetical. This same ordering decides the order of sibling
-producers filed at any single `compute_at` level, not just root (§7).
+first-visitation tie-break only matters when two prefixes are equal — e.g.
+auto-named or numbered Funcs sharing a prefix; in
+[examples/tiebreak_visitation_order.cpp](examples/tiebreak_visitation_order.cpp)
+two producers share the prefix `b`, and the one *visited* first is realized
+first even though it is alphabetically later. This same ordering decides the
+order of sibling producers filed at any single `compute_at` level, not just root
+(§7).
 
 ---
 
