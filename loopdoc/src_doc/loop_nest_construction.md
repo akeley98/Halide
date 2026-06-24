@@ -1042,3 +1042,28 @@ loopdoc §14's "matching loop nests down to `v`" framing:
 The producer/consumer-dependency rejection (loopdoc `neg_compute_with_dependency.cpp`)
 comes earlier, from `validate_fused_pair` in `RealizationOrder.cpp` (~88, the
 `indirect_calls` check) — see the grouping discussion above.
+
+Two more preconditions back loopdoc §14's "Legality" list:
+
+* **Same compute level for all group members.** `validate_fused_group_was_legal`
+  also asserts the members' `compute_level()`s match, erroring *"the compute
+  levels of f.s0 (…) and g.s0 (…) do not match"*. So a child's `compute_at` must
+  agree with the parent's; `compute_with` does not override it.
+* **Stage order must be consistent.** `check_fused_stages_are_scheduled_in_order`
+  (`RealizationOrder.cpp` ~210) walks one Func's stages and requires the parent
+  stage index it fuses into to be non-decreasing (with a consecutiveness rule for
+  ties). This rejects e.g. `f.compute_with(g.update(0))` together with
+  `f.update(0).compute_with(g)` — there is no stage order making both parent
+  stages precede their children.
+
+### Per-stage growth = `build_pipeline_group`'s `stage_order` loop
+
+loopdoc §14's "growth procedure" is a user-level paraphrase of `build_pipeline_group`
+(above): `stage_order` is the topological sort of all member stages, and the loop
+at ~1808 calls `inject_stmt(producer, stage_nest, fuse_level)` once per stage — a
+stage with an inlined/root fuse level starts its own sibling nest, a fused stage
+is spliced into the growing nest at its level. The `[loopdoc-trace]` debug(1)
+lines added to this function print `funcs` (with `funcs.back()` = the
+produce-nesting / bounds anchor) and the `stage_order` with each stage's fuse
+level; run any fused example's `debug_1` log to see it
+(`compute_with_two_parents` is the multi-parent case).
