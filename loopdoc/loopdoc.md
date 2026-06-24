@@ -56,6 +56,11 @@ add the **schedule** that places and reshapes those loops across the pipeline.
     * its **compute level** and **store level** — `inline` (the default),
       `root`, or `at(host, var)` — set by the schedule (§§5–8). These apply to
       the Func as a whole (all stages move together).
+    * a per-stage **fuse level**, set by `compute_with` (§14) and *empty* by
+      default. A stage with a fuse level is not computed in its own loop nest but
+      **interleaved into another stage's**, the two sharing their outer loops;
+      the connected set of stages so tied together forms a **fused group**.
+      Unlike the compute/store level, this is set *per stage*, not whole-Func.
 
 * **`ImageParam`** — an input buffer. It is a *leaf*: it is never computed and
   never appears in the loop nest. A Func that reads an `ImageParam` simply has
@@ -1264,10 +1269,23 @@ g.update().compute_with(f.update(), y);     // fuse the update stages too
 
 ### What it requires
 
-* The two stages must have the **same schedule from the outermost loop down to
-  the fused level `v`** — the same dimensions in the same order, with the same
-  `split`/`reorder`/… applied to that depth (their dimensions *below* `v`, and
-  their iteration sizes, may differ freely).
+* The two stages must have **matching loop nests from the outermost loop down to
+  the fused level `v`**. Concretely, what is checked is the *resulting* dimension
+  lists (§3) — not the scheduling provenance that produced them:
+    * `v` must name a loop present **by name** in both stages, else *"Invalid
+      compute_with: cannot find `v` in …"*
+      ([examples/neg_compute_with_mismatch.cpp](examples/neg_compute_with_mismatch.cpp));
+    * the two stages must have the **same number of loops** from the outermost
+      down to `v` (so `v` sits at the same depth in both), matched up positionally
+      by name, else *"Invalid compute_with: # of fused dims of … do not match"*
+      ([examples/neg_compute_with_dim_count.cpp](examples/neg_compute_with_dim_count.cpp)).
+
+  Their loops **below** `v`, and **all loop extents**, may differ freely — only
+  names and nesting down to `v` matter. So two `split`s with *different factors*
+  fuse fine (the inner extents simply differ), `tile`d stages fuse at a shared
+  tile var ([examples/compute_with_tile.cpp](examples/compute_with_tile.cpp)),
+  but a `reorder` that moves `v` to a different depth does not.
+
 * The two Funcs must have **no producer/consumer dependency** between them — you
   cannot fuse `a` and `b` if either reads the other. Halide errors *"Invalid
   compute_with: there is dependency between …"*
@@ -1289,16 +1307,47 @@ common case, and all but one example here), that stage is the group parent. The
 unqualified word **"parent" below means the group parent**, which is what the
 ordering and placement rules turn on.
 
-The group is realized as a unit at the **group parent's** compute level
-(`compute_root` → at root; `compute_at(out, y)` → inside `out`'s `y` loop).
-Within the group:
+The group is realized as a unit at the **group parent's compute level** — note
+this is the parent's `compute_at`/`compute_root` *site*, a separate thing from
+the fuse level `v`. (`compute_root` → the group is at root; `compute_at(out, y)`
+→ the group sits inside `out`'s `y` loop.) Within the group:
 
-* From the outermost loop **down to and including `v`** there is **one shared
-  loop nest**. (Halide prints these loop vars with a `fused.` prefix; the
-  canonicalizer drops loop names, so they read as ordinary `for`.)
+* From the outermost loop **down to and including the fuse level `v`** there is
+  **one shared loop nest** (one loop per level, *not* one per member). Halide
+  prints these loop vars with a `fused.` prefix; the canonicalizer drops loop
+  names, so they read as ordinary `for`.
 * **Below `v`**, each member keeps its **own** loops, emitted as **siblings**
   inside the shared loop. If `v` is the innermost dimension there are no
   per-member sub-loops — the members' leaves sit directly in the shared loop.
+
+**Loop ownership** is the key to the rest of this section. The shared loops
+(outermost down to `v`) belong to the **group parent**; each non-parent member
+owns only its loops *below* `v`. One concept, three consequences:
+
+* **Producers** computed at the fused level must name the parent
+  (`input.compute_at(parent, v)`); a non-parent member does not own that loop —
+  which is exactly why `input.compute_at(child, v)` is illegal (below).
+* **`micro_halide_collapses`** keys on the loop's owner: eliding a shared loop is
+  declared on the **parent** (a non-parent member's annotation for a shared-level
+  var hits *nothing*, because it owns no such loop); eliding a below-`v` loop is
+  declared on the **member** that owns it, and may differ between members.
+  [examples/compute_with_at.cpp](examples/compute_with_at.cpp) collapses the
+  shared `y` via the parent alone.
+* **Ordering** (next) is stated in terms of the parent vs. the other members.
+
+### Fusing update stages
+
+`compute_with` is per stage, so the update stages fuse only via their own
+`b.update(i).compute_with(a.update(j), v)` calls. This does **not** break the
+rule that *all stages of one Func share a single `produce`* (§3): each member
+still gets exactly one `produce` block (the group's blocks nest as below), and
+within it each **fused stage-pair** is one shared loop nest, with the successive
+stage-pairs appearing as **consecutive sibling nests** — just like an ordinary
+multi-stage Func's sibling stage nests (§3), except each is now fused.
+[examples/compute_with_update.cpp](examples/compute_with_update.cpp) fuses both
+the init and the update stages: two shared nests, side by side, inside the one
+pair of `produce` blocks. A stage left **unfused** simply emits its own ordinary
+(unfused) loop nest as a sibling in that same sequence.
 
 ### Member ordering — two distinct orders
 
@@ -1347,14 +1396,17 @@ order) while the produce blocks nest `f, h, g` (parent outermost, then §6 order
 
 ### Producers computed at the fused level
 
-Because the shared loops belong to the **parent**, a producer you want computed
-at the fused level must be computed at the **parent**: `input.compute_at(parent,
-v)`. Computing it at a **child** is illegal — the child does not own the fused
-loop ([examples/neg_compute_with_producer_at_child.cpp](examples/neg_compute_with_producer_at_child.cpp)).
+By the ownership rule above, a producer you want computed at the fused level must
+name the **parent** (`input.compute_at(parent, v)`); computing it at a **child**
+is illegal because the child does not own that loop
+([examples/neg_compute_with_producer_at_child.cpp](examples/neg_compute_with_producer_at_child.cpp)).
 Below the fuse level a child *does* own its loops, but the ordinary rule still
 applies (§7): a producer's `compute_at` site must enclose **every** use of it,
 across all the fused bodies. [examples/compute_with_producer.cpp](examples/compute_with_producer.cpp)
-computes a shared producer at the parent's fused loop.
+computes a shared producer at the parent's fused loop. Note its `input` keeps
+*both* its loops there — a fused loop's bounds are the union over the members, so
+a producer at a fused level can avoid a collapse it would suffer at a plain
+`compute_at`; as always, such elision is *declared* per example, not derived.
 
 ### Out of scope (bounds-only, invisible here)
 
@@ -1382,9 +1434,12 @@ The whole loop nest follows from the rules above, assembled into one procedure:
    inline Func *is* realized (§11) and keeps its slot. An `rfactor` intermediate
    (§12), and any `in`/`clone_in` wrapper or clone (§13), are likewise ordinary
    Funcs in this order — a wrapper/clone sits between the wrapped Func and the
-   consumers it was created for — with whatever schedule each was given.
+   consumers it was created for — with whatever schedule each was given. A
+   **fused group** (§14) is ordered as a *unit*: the sort places the group as one
+   node, and within it the members take consecutive slots with the **group parent
+   last** — so the whole group realizes as one block (§14).
 
-3. **Give every realized Func a site.** A *realized* Func is any Func that is
+3. **Give each realized Func a site.** A *realized* Func is any Func that is
    **not** a pure-inline Func — i.e. it gets its own `produce` block. Each goes
    to a site:
      * `compute_root` Funcs and the output form the **top-level chain**, kept in
@@ -1393,6 +1448,9 @@ The whole loop nest follows from the rules above, assembled into one procedure:
        several Funcs are filed at the same `(g, v)`, they keep realization order;
      * a **non-pure inline** Func (§11) is filed at the innermost loop enclosing
        each of its uses — like a `compute_at` resolved independently per use site.
+     * the non-parent members of a **fused group** (§14) take *no* site of their
+       own — the whole group is filed once, at the **group parent's** site, and
+       the others are interleaved there when it is emitted (step 4).
    Each realized Func also has a **store level** (§8), defaulting to its compute
    level. The site `v` is a dimension of the host's **(possibly transformed)
    dimension list** for the relevant stage (§3, §9): `split`/`fuse`/`reorder`/
@@ -1422,11 +1480,14 @@ The whole loop nest follows from the rules above, assembled into one procedure:
    accordingly (§7). A Func scheduled `store_root()` is the special case where
    its `store` node opens at the very outermost level, wrapping the whole nest.
 
-   A **fused group** (§14) is emitted as a unit at the parent's site: the shared
-   loops (outermost down to the fuse level) are printed once, each member's own
-   loops below the fuse level become siblings inside in compute order (parent
-   first), and the group's `produce`/`consume` blocks wrap it with the parent
-   outermost and the other members nested inside in reverse realization order.
+   When the Func reached at a site is the parent of a **fused group** (§14), the
+   group emits as a unit in place of a lone `produce f`: the shared loops
+   (outermost down to the fuse level) are printed once; each member's own loops
+   below the fuse level become siblings inside, in compute order (parent first);
+   and the group's `produce`/`consume` blocks wrap the whole thing with the
+   parent outermost and the other members nested inside in reverse realization
+   order. Each fused stage-pair is one such shared nest, emitted as a sibling like
+   any other stage (§14).
 
 [examples/many_compute_root.cpp](examples/many_compute_root.cpp) puts the core
 pieces together: `f1`, `f2`, `f3` are `compute_root` and so form the top-level
