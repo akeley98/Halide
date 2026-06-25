@@ -1187,7 +1187,7 @@ reports `p` "is used in" both `f` and `f_clone_in_g` and lists
 inputs you must clone those inputs too. (The `Func::clone_in` doc's phrase about
 "intermediate Funcs along the path" refers to the transitive *caller* chain
 between the consumers and `f`, **not** to `f`'s callees; the callees are shared.
-See [src_doc §13](src_doc/loop_nest_construction.md) for the verification.)
+See [src_doc: in/clone_in](src_doc/in_clone_in.md) for the verification.)
 
 ### Identity in the output, and which consumers are redirected
 
@@ -1255,7 +1255,7 @@ derived step when the nest is built. Note in particular this
 greatly simplifies the interaction between the fallback `f.in()`
 wrapper, and other `f` wrappers.
 
-[src_doc §13](src_doc/loop_nest_construction.md) documents the
+[src_doc: in/clone_in](src_doc/in_clone_in.md) documents the
 identity model and that call-rewrite mechanism in detail.
 
 
@@ -1314,7 +1314,7 @@ or the same `compute_at` site); mismatched compute levels are an error.
 ### How the fused nest is built
 
 The group's loop nest grows one **stage** at a time. This mirrors how Halide
-actually assembles it ([src_doc §14](src_doc/loop_nest_construction.md); the
+actually assembles it ([src_doc: compute_with](src_doc/compute_with.md); the
 `[loopdoc-trace]` lines in any fused example's `debug_1` log show it directly):
 
 1. **Order the stages.** Put all stages of all members in a topological order
@@ -1446,7 +1446,7 @@ compute_at rule:
   stage ordering stays **acyclic**: `f`'s stages are forced into order (`s0`
   before `s1`), so pinning `f.s0` to `g.s1` (later) but `f.s1` to `g.s0`
   (earlier) is a contradiction. Halide checks it per Func, per parent, up front
-  ([src_doc §14](src_doc/loop_nest_construction.md)).
+  ([src_doc: compute_with](src_doc/compute_with.md)).
 
 A **producer's `compute_at` legality** inside a fused group needs **no new
 rule** — it is exactly §7's principle, *the site must enclose every use of the
@@ -1534,7 +1534,7 @@ The whole loop nest follows from the rules above, assembled into one procedure:
    every member (last-realized outermost). The whole group occupies the one site
    it was filed at (step 3). (This per-stage growth is exactly what the Halide
    compiler does — verified against its `build_pipeline_group` and the
-   `[loopdoc-trace]` output; see §14 and [src_doc §14](src_doc/loop_nest_construction.md).)
+   `[loopdoc-trace]` output; see §14 and [src_doc: compute_with](src_doc/compute_with.md).)
 
 [examples/many_compute_root.cpp](examples/many_compute_root.cpp) puts the core
 pieces together: `f1`, `f2`, `f3` are `compute_root` and so form the top-level
@@ -1551,4 +1551,12 @@ level: a `store_root` Func, a `store_at`-at-an-outer-loop Func (distinct
 The compiler-level justification for the above — where outputs are forced to
 `compute_root`, where the produce/consume nodes and realization order come from,
 how update stages become sibling loop nests, and why extent-1 loops disappear —
-is in [src_doc/loop_nest_construction.md](src_doc/loop_nest_construction.md).
+is in the **`src_doc/`** set, organized by topic and indexed in
+[src_doc/README.md](src_doc/README.md):
+[overview](src_doc/overview.md) (root/inline defaults, realization order,
+produce/consume), [compute_at and loops](src_doc/compute_at_and_loops.md),
+[storage](src_doc/storage.md) (`store_at`/`hoist_storage`),
+[transforms](src_doc/transforms.md) (`split`/`fuse`/`reorder`/`tile`),
+[update definitions](src_doc/update_definitions.md),
+[rfactor](src_doc/rfactor.md), [in/clone_in](src_doc/in_clone_in.md), and
+[compute_with](src_doc/compute_with.md).
