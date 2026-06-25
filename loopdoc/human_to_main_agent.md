@@ -11,6 +11,13 @@ Grouped into sections; sections are meant to be done in stated order, with tasks
       * Then add a new `compute_with` for `RVar`. It seems the `Var` is just reduced to a string name so this should be easy to do without really adding any new logic.
 - [ ] The "Var or RVar"-ness may be part of the "matching loop nests down to `v`" criteria so the above may expose a real doc/`micro_halide` gap.
   Don't fix `micro_halide` if this is the case, but update the doc (will launch micro-agent later).
+- [ ] Task from commit message: Doc gap (RVar task 2): the "matching loop nests down to v" criterion also
+    requires each paired shared dim to agree in KIND (Var vs RVar; Halide compares
+    `dim_type/for_type/device_api`, ScheduleFunctions ~2496-2514). loopdoc §14 now
+    states this and that the fuse level itself may be a Var or RVar. Per human
+    instruction, `micro_halide` is NOT changed to enforce the kind check (it checks
+    name+count); recorded as an [open] DISCOVERED DOC GAP for a future micro-agent.
+    Hard to trigger (needs a Var/RVar name collision), so no negative example forces it.
 
 ## Copy Halide Tests
 
