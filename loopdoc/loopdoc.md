@@ -1419,6 +1419,12 @@ compute_at rule:
   and the **count** of loops from the outermost down to `v` must match (so `v` is
   at the same depth), paired up by name
   ([examples/neg_compute_with_dim_count.cpp](examples/neg_compute_with_dim_count.cpp)).
+  The paired-up shared loops must also agree in **kind** — a `Var` fuses with a
+  `Var`, an `RVar` with an `RVar` (the fuse level itself may be either: fusing two
+  update stages at a shared reduction var is fine,
+  [examples/compute_with_rvar.cpp](examples/compute_with_rvar.cpp)). In practice
+  the kind follows from the name, since two stages rarely give the same name to a
+  `Var` in one and an `RVar` in the other.
   Loops **below** `v` and **all extents** may differ — different `split` factors
   or matching `tile`s fuse fine
   ([examples/compute_with_tile.cpp](examples/compute_with_tile.cpp)), but a

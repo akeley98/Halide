@@ -752,6 +752,30 @@ class FuncStageImpl
         return static_cast<Derived&>(*this);
     }
 
+    // compute_with (loopdoc.md section 14): record a per-stage fuse edge from
+    // THIS (child) stage into `parent` at loop level `var`, sharing the loops
+    // from the outermost down to `var`. Records state only; the fused nest is
+    // built later (loopdoc.md sections 14 + 15), and re-calling on the same
+    // stage overwrites the edge (loopdoc.md section 14). Works on a Func (its
+    // pure stage) or a Stage (an update stage), with either kind as `parent`.
+    // The fuse level may be a Var or an RVar -- it is kept as a loop name, the
+    // same way the dimension list stores Vars and RVars (section 10).
+    template <typename ParentDerived>
+    Derived &compute_with(const FuncStageImpl<ParentDerived> &parent, const Var &var)
+    {
+        StageData &s = contents->stages[stage_index];
+        s.has_fuse = true;
+        s.fuse_parent = parent.contents;
+        s.fuse_parent_stage = parent.stage_index;
+        s.fuse_var = var.name();
+        return static_cast<Derived&>(*this);
+    }
+    template <typename ParentDerived>
+    Derived &compute_with(const FuncStageImpl<ParentDerived> &parent, const RVar &var)
+    {
+        return compute_with(parent, Var(var.name()));
+    }
+
     // This update stage's dimension list (loopdoc.md section 10): the same
     // ordered list the printer walks, so transforming it here rewrites only
     // THIS stage's loops. RVars sit in the list just like Vars.
@@ -877,14 +901,8 @@ class Func: public FuncStageImpl<Func>
     Func clone_in(const Func &consumer);
     Func clone_in(const std::vector<Func> &consumers);
 
-    // compute_with (loopdoc.md section 14): fuse THIS Func's initial stage into
-    // `parent`'s initial stage, sharing the loops from the outermost down to
-    // `var`. This Func becomes the CHILD; `parent` is the fused group's parent.
-    // Creates no new Func; only re-shapes the loop nest. STUB provided by the
-    // main agent only so examples compile; recording the fusion intent, grouping
-    // the funcs, and emitting the shared nest is the micro-agent's task from
-    // loopdoc.md section 14. Throws until then.
-    Func &compute_with(const Func &parent, const Var &var);
+    // compute_with is inherited from FuncStageImpl (works for Func and Stage,
+    // and accepts a Var or RVar fuse level).
 
     void print_loop_nest();
 };
@@ -915,11 +933,7 @@ class Stage: public FuncStageImpl<Stage>
     }
     Func rfactor(const std::vector<std::pair<RVar, Var>> &preserved);
 
-    // compute_with (loopdoc.md section 14), per update stage: fuse THIS stage
-    // into `parent` (e.g. f.update(i).compute_with(g.update(j), var)). STUB
-    // provided by the main agent only so examples compile; the micro-agent
-    // implements the documented behavior from loopdoc.md section 14. Throws.
-    Stage &compute_with(const Stage &parent, const Var &var);
+    // compute_with is inherited from FuncStageImpl (loopdoc.md section 14).
 };
 
 inline Stage Func::update(int i) const
@@ -1185,31 +1199,6 @@ inline Func Stage::rfactor(const std::vector<std::pair<RVar, Var>> &preserved)
     }
 
     return intm;
-}
-
-// compute_with (loopdoc.md section 14): record a per-stage fuse edge from THIS
-// (the child) stage to the argument (the parent) stage at loop level `var`.
-// Like every directive this only records state; the fused nest is built later
-// (loopdoc.md sections 14 + 15). Calling compute_with again on the same stage
-// overwrites the previous edge (loopdoc.md section 14).
-inline Func &Func::compute_with(const Func &parent, const Var &var)
-{
-    StageData &s = contents->stages[0];
-    s.has_fuse = true;
-    s.fuse_parent = parent.contents;
-    s.fuse_parent_stage = 0;
-    s.fuse_var = var.name();
-    return *this;
-}
-
-inline Stage &Stage::compute_with(const Stage &parent, const Var &var)
-{
-    StageData &s = contents->stages[stage_index];
-    s.has_fuse = true;
-    s.fuse_parent = parent.contents;
-    s.fuse_parent_stage = parent.stage_index;
-    s.fuse_var = var.name();
-    return *this;
 }
 
 // ---------------------------------------------------------------------------
