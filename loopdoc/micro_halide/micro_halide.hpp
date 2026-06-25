@@ -828,6 +828,13 @@ class FuncStageImpl
     {
         return contents->name;
     }
+
+    void unscheduled()
+    {
+        // no-op for Halide compatibility.
+        // Not in scope for micro_halide: replicating the rule:
+        // > This counts as a schedule, so calling this twice on the same Stage will fail the assertion.
+    }
 };
 
 // ---------------------------------------------------------------------------
