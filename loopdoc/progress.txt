@@ -28,125 +28,13 @@ Marking convention:
       * The `CHEATING` ifdef block is removed from every example (see README rule:
         examples must not branch on USE_MICRO_HALIDE at all; the only ifdef is the
         include/using block at the top of the file).                               [done: box_blur.cpp]
-    NOTES:
-      * box_blur.cpp may be too rich for a first example (ImageParam,
-        repeat_edge with auto-named _0/_1/_2 vars, cast, 4 stages).
-        For bootstrapping, you may want to start writing simpler examples first.
-        The box_blur.cpp should work correctly (no cheating) at the end of the bootstrap milestone.
-      * DONE. Passing examples: two_funcs_root, inline_default, compute_at,
-        diamond_root, box_blur, loop_elide_test/_x/_y/_both,
-        compute_at_elided_level, tiebreak_realization_order,
-        producers_diff_levels, producers_root_and_at. micro_halide builds the
-        nest from realization order + produce/consume nesting + per-Func loops;
-        loopdoc.md §§1-8 and src_doc/loop_nest_construction.md document/justify it.
-      * REALIZATION-ORDER TIE-BREAK: sibling producers of one consumer are
-        ordered by (name prefix, first-visitation order, full name) -- NOT by
-        left-to-right order in the defining expression. micro_halide now sorts
-        producers by this key (was RHS order, which only coincidentally matched).
-        loopdoc §4 + src_doc §3 document it; tiebreak_realization_order.cpp tests.
-      * MULTI-PRODUCER NESTING: produce/consume blocks of multiple producers of
-        one consumer NEST (each consume wraps later producers + the rest), and
-        the nesting depth follows each producer's compute level, not the
-        dependency graph. Same level -> nested chain in tie-break order; different
-        levels -> outer-level producer wraps inner-level producer; root+at mixes
-        the two mechanisms. loopdoc §2 (clarified) + §7 (new subsection);
-        examples producers_diff_levels.cpp, producers_root_and_at.cpp.
-      * NEGATIVE EXAMPLES (illegal compute_at; both Halide and micro_halide must
-        error -> harness "Negative example PASS"). Halide's rule: the compute_at
-        site must enclose EVERY use of the Func (intersection of the enclosing
-        loop stacks across all uses, + root; ComputeLegalSchedules). Three
-        structural failures, none bounds-dependent:
-          - neg_compute_at_bad_var.cpp: loop var not a dim of the host.
-          - neg_compute_at_nonconsumer.cpp: host (realized) does not read f.
-          - neg_compute_at_two_consumers.cpp: f used at two root sites, computed
-            inside one -> only root is legal. (THE producer/consumer break.)
-        micro_halide validates this in LoopNestPrinter::validate (host realized,
-        loop exists, every reader enclosed_by the site). loopdoc §7 "When a
-        compute_at is illegal" + src_doc §6 document/justify it.
-      * compute_at loop ELISION resolved via the design decision below: the loop
-        *structure* is derived from the schedule (validated), and point-loop
-        elision (extent-1 dims simplified away) is *declared* per example with
-        the `micro_halide_collapses(f, {vars})` annotation -- a no-op shim under
-        real Halide (halide_compat/halide_compat.h), honored by micro_halide.
-        loopdoc §7 documents the qualitative rule, the four loop_elide_* cases,
-        and that an elided loop is still a valid compute_at injection site
-        (compute_at_elided_level.cpp). README documents the structure-vs-declared
-        factoring. This is the standing policy for all future bounds-driven
-        elision (incl. RDom/update reduction loops).
 
 [✅] `store_at`, `store_root`
-    NOTES: These add "store <func>:" to loop nest output, and require reasoning about illegal store_at.
-      * DONE (first delegated milestone). Main agent wrote loopdoc §8, src_doc §8,
-        and examples; a logged micro-agent implemented the store-node emission +
-        legality in micro_halide from the docs ALONE and all examples passed on
-        the first run (integrity review clean: no Halide-source access, read
-        loopdoc.md, no commits). Encouraging signal that §8 is clear.
-      * Loop-nest effect: a `store f:` node prints only when store level !=
-        compute level; it sits at the store level and wraps down to the
-        compute-level produce/consume. store_root wraps the whole pipeline body.
-        Examples: store_at_compute_at, store_root_compute_at, store_root_chain,
-        store_eq_compute (no node), neg_store_inside_compute, neg_store_at_inlined.
-      * Sliding-window / storage-folding are value/bounds optimizations with NO
-        print_loop_nest structure change, so they are out of scope here (only the
-        store node and constant bounds, the latter normalized away, are visible).
-        If a later milestone needs to show them, it will be via different output.
 
 [✅] `hoist_storage`, `hoist_storage_root`
-    NOTES:
-      * FINDING: hoist_storage / hoist_storage_root do NOT change print_loop_nest
-        output at all (verified: legal cases print identically to the same
-        schedule without hoist). They move the physical allocation without
-        triggering sliding window. The ONLY observable effect is errors when
-        illegal: (a) hoist on an inlined Func; (b) hoist level inside the store
-        level (which must enclose compute). So this milestone is purely about
-        legality + a no-op regression guard.
-      * DONE (delegated). loopdoc §8 hoist subsection + src_doc §9; micro-agent
-        implemented the legality from the docs alone (integrity clean). Examples:
-        hoist_storage_noop (positive no-op), neg_hoist_at_inlined,
-        neg_hoist_inside_compute. Adversarial follow-ups (main agent) confirmed
-        the impl generalizes: store_compute_hoist_all3 (store/compute/hoist all
-        distinct, legal, store node + invisible hoist) and neg_hoist_inside_store
-        (hoist encloses compute but NOT the store_root level -> correctly
-        rejected). All 31 examples pass.
 
 [✅] `split`, `fuse`, `tile`, `reorder`
     NOTES:
-      * DONE (delegated). Main agent wrote loopdoc §6 (new) + a §5 rewrite that
-        introduces the mutable, innermost-first **dimension list**; src_doc §10;
-        and examples. A logged micro-agent implemented all four transforms in
-        micro_halide from the docs ALONE -- all examples passed on the first run,
-        integrity clean (no Halide-source/src_doc reads, read loopdoc.md, no
-        commits), and it reported NO doc gaps. Strong signal §5/§6 are clear.
-      * MODEL: each transform rewrites the dim list (which drives both loop
-        emission and the set of legal compute_at/store_at site names):
-          - split(old,outer,inner,f): replace old with [inner,outer], inner
-            innermost -> +1 loop; inner gets a constant bound (normalized away).
-          - fuse(inner,outer,fused): remove both, put fused at inner's slot -> -1.
-          - reorder(v_in..v_out): permute ONLY the named dims among the slots
-            they currently occupy; unnamed dims stay put. PARTIAL reorder (fewer
-            vars than dims) is a real, separately-tested code path.
-          - tile(x,y,xo,yo,xi,yi,xf,yf) = split(x..)+split(y..)+
-            reorder(xi,yi,xo,yo) -> +2 loops, list [xi,yi,xo,yo] innermost-first.
-      * VISIBILITY (confirmed): a pure-serial reorder, and the inner/outer order
-        of a split, are INVISIBLE to print_loop_nest -- tested only via a
-        TOPOLOGICAL CONSEQUENCE (reorder relocates a compute_at producer to a
-        different host loop: reorder_topological vs reorder_baseline). Will become
-        directly visible once loops carry distinct types (vectorize/parallel/
-        unroll), which the canonicalizer DOES keep -- a later milestone.
-      * Examples: split_basic, fuse_basic, tile_basic, reorder_baseline,
-        reorder_topological, split_compute_at; negatives neg_reorder_bad_var and
-        neg_compute_at_fused_away (compute_at at a fuse-consumed var -> only the
-        fused var is a legal site). Adversarial follow-ups (main agent, all pass,
-        confirm no overfit): reorder_partial, fuse_compute_at (positive: fused
-        var IS a legal site), split_twice (split a split-produced var). 42 total.
-      * Loop elision is handled by the `micro_halide_collapses` annotation (see bootstrap),
-        so this milestone does NOT need to make bounds inference predictable.
-        Keep declaring elision via `micro_halide_collapses`; do not try to derive it.
-      * split/fuse/reorder DO add/rename/merge loops the schedule controls
-        directly -- those are structural and must be derived (not declared).
-        Watch the interaction: a split introduces new Vars that can themselves
-        be compute_at sites and can be elided; `micro_halide_collapses` keys on Var name,
-        so annotate the post-split Var names.
       * GOTCHA (from canonicalize.py, important for designing reorder tests):
         the canonicalizer DROPS loop variable names and keeps only loop TYPE
         (for/parallel/...) + nesting. So a pure serial `reorder` of two plain
@@ -157,215 +45,74 @@ Marking convention:
         combine with a loop-type change (vectorize/parallel/unroll, a later
         milestone) that the canonicalizer DOES keep. Same caveat for the order
         of split's inner/outer loops when both are plain serial.
-      * split's inner loop is named like the split var; bounds become constant
-        (split factor) for the inner loop -- but canonicalize normalizes constant
-        bounds away, so only the *number* and nesting of loops is the signal.
-        micro_halide will need real Var objects for the new split/fuse vars
-        (Var x_outer, x_inner; f.split(x, x_outer, x_inner, factor)) so that
-        compute_at/store_at can later name them.
 
 [✅] Update definitions (see e.g. `../apps/hist`)
     NOTES:
-      * MODEL (explored, verified against Halide):
-        - A Func has an ordered list of STAGES: stage 0 = pure/initial def, then
-          one stage per update definition (definition order). All stages are
-          emitted inside ONE `produce f` block as consecutive SIBLING loop nests
-          (NOT separate produce/consume per stage). A consumer's `consume f`
-          wraps the whole produce (it reads the final, post-update value).
-        - Stage 0's loops = the Func's pure dimension list (as before, §5/§6).
-        - An update stage's loops = its OWN dimension list = the free Vars on its
-          LHS + the RVars of any RDom it uses. Default order (innermost-first):
-          RVars innermost, and WITHIN the RVars the first-declared (r.x) is the
-          INNERMOST (Var convention: first dim fastest -- CORRECTED; an earlier
-          note said r.x outer, which was wrong and hidden by name-dropping until
-          producer_at_2d_rvar pinned it down). Pure free vars sit outside the
-          RVars (first LHS arg innermost among the pures, per §5). A pure
-          dimension whose LHS slot holds an RVar/expr (e.g. f(x,r)=... or the
-          scatter hist(in(r))) does NOT loop in that stage.
-        - RVars print as `for r in [min,max]` -> canonicalize drops the bound, so
-          just another `for`. A k-dimensional RDom adds k nested reduction loops.
-        - Each stage is scheduled INDEPENDENTLY: `f` schedules stage 0; `f.update(i)`
-          returns a Stage handle for update i. split/fuse/reorder/tile (and later
-          loop types) apply PER STAGE, on that stage's dim list (which can include
-          RVars). E.g. f.update(0).split(x,..) leaves the init stage untouched.
-        - compute_at/store_at are per-FUNC: the whole `produce f` (all stages)
-          moves to the site. An RVar loop of ANY stage is a valid compute_at site
-          for a producer; the producer is injected into that stage's loop.
-        - LEGALITY: the §8 legal-site rule now intersects uses across ALL stages.
-          A producer computed at an RVar loop (which exists only in its own stage)
-          is illegal if the producer is also used in another stage; legal sites
-          are the loops common to every stage's use (+ root). Verified:
-          neg compute_at(f, r) when p is used in both s0 and s1.
-      * OUT OF SCOPE (like bounds inference): reordering RVars in a
-        non-associative/non-commutative reduction is illegal, but detecting this
-        needs SEMANTIC analysis of the update arithmetic, which micro_halide's
-        Expr deliberately discards (it tracks only deps). Document the rule
-        qualitatively; do NOT make it a micro_halide-checked test.
-      * SCAFFOLDING SPLIT: main agent imitates the API (RDom/RVar/Stage,
-        operator+=/*=, second operator= => update stage, Func::update(i)) and
-        captures each stage's raw data; micro-agent implements the loop-nest
-        EMISSION for stages from the docs. apps/hist uses .update().reorder(...)
-        and .rfactor(...) in the wild -- good citation.
-
-      * DONE (delegated; integrity-clean micro-agent run, no doc gaps reported).
-        loopdoc.md was reorganized "algorithm-first" and terminology-cleaned, and
-        a logged micro-agent implemented stage emission + multi-stage compute_at
-        + the non-pure inline default in micro_halide from the docs ALONE. All
-        59 examples pass. Final loopdoc order: 1 model, 2 reading, 3 single Func's
-        loops AND its stages (update defs = ALGORITHM), 4 TERMINOLOGY (pure/
-        non-pure, realized/non-realized, inline-as-level), 5 inlining (pure only),
-        6 compute_root, 7 compute_at, 8 store/hoist, 9 split/fuse/reorder/tile,
-        10 names, 11 INLINED NON-PURE Funcs (deferred default), 12 assembly.
-      * TERMINOLOGY (Halide's own wart, documented §4/§11 + src_doc): "inline" is
-        a compute LEVEL name (default), not a synonym for "non-realized". Only a
-        PURE inline Func is non-realized (substituted); a non-pure inline Func is
-        REALIZED at its innermost use (inline_to_provide). "level"/"site" = a
-        (Func,Var) pattern that, with stage unspecified, names a FAMILY of per-
-        stage loops; legality = the family covers every read of f (one global
-        intersection, not per-stage).
-      * NON-PURE INLINE DEFAULT (§11, tested incl. adversarial): equals
-        compute_at(consumer, innermost-use) only when all uses share a depth;
-        in general it is a per-use-site materialization at each use's innermost
-        loop, NOT expressible as one compute_at. Verified by
-        nonpure_inline_diff_depths (different depths across stages) and
-        nonpure_inline_two_consumers (two distinct consumers); both pass.
-      * Examples (all pass): hist_1d, sum_reduction, two_updates, update_2d_rdom,
-        update_stage_split, update_stage_reorder, producer_at_rvar,
-        func_update_compute_at, store_root_update, update_default_inline,
-        weird_histogram_sampling; negatives neg_compute_at_update_rvar; plus
-        adversarial producer_at_2d_rvar, cross_stage_compute_at_shared,
-        nonpure_inline_diff_depths, nonpure_inline_two_consumers,
-        update_split_compute_at. micro_halide: uniform StageData per stage,
-        per-stage micro_halide_collapses ((Func)->stage0, (f.update(N))->stage
-        N+1), RVar within-order (r.x innermost), use-gated multi-stage injection.
 
 [✅] `rfactor` (factor a reduction for parallelism)
     NOTES:
-      * Added as its own milestone (was missing from the original list). It
-        builds directly on Update definitions + RDom/RVar, so it must come AFTER
-        that milestone. rfactor splits an associative reduction into an
-        intermediate Func plus a final combine stage -- it CREATES a new Func and
-        new stages, so it has a real print_loop_nest effect (unlike pure reorder).
-        Do not attempt before update defs are documented and passing.
-      * Added by user: as before, Halide errors due to non-commutative or non-associative
-        reorderings are out of scope; don't write such negative examples as
-        micro_halide is not expected to reason about this.
-      * MODEL (explored against Halide; src/Func.cpp ~857 Stage::rfactor):
-        f.update(i).rfactor({{RVar,Var}...}) is a per-update-stage directive that
-        CREATES a new Func (auto-named "<orig>_intm") and REWRITES the chosen
-        update stage. The `preserved` RVars map to fresh pure Vars.
-        - INTERMEDIATE pure/init stage dims (innermost->outermost): original
-          Func's pure-stage args, then the new pure Vars in preserved order
-          (new Vars OUTERMOST).
-        - INTERMEDIATE update stage: a COPY of the original update stage's dim
-          list (incl. any prior split/reorder), with each preserved RVar
-          replaced in place by its new pure Var; non-preserved RVars stay as the
-          intermediate's reduction loops. Same loop order. Reads what the
-          original update read.
-        - ORIGINAL Func's chosen update stage is rewritten into the MERGE: keeps
-          free Vars + preserved RVars (still RVars), DROPS non-preserved RVars,
-          and now reads the intermediate -> intermediate becomes a producer of
-          the original Func (realization-order slot before it).
-        - The intermediate is an ordinary Func with its OWN default schedule:
-          non-pure inline (s11) unless compute_root/compute_at'd. Its two stages
-          schedule independently via intm and intm.update(0).
-      * DOC: new loopdoc s12 "rfactor: factoring an associative reduction into a
-        new Func" (inserted after s11 inlined-non-pure; assembly renumbered to
-        s13). src_doc new s12 cites Stage::rfactor line-by-line. Cross-refs in
-        src_doc remapped (loopdoc assembly s12->s13).
-      * EXAMPLES (all 4 match Halide canonical output; micro currently throws the
-        TODO stub, expected pre-delegation): rfactor_basic (2D sum, rfactor(r.y,u),
-        compute_root), rfactor_default_inline (no compute_root -> intermediate
-        realized at use in merge; collapses {x,u}), rfactor_compute_at (intm
-        compute_at(f,x); collapses {x}), rfactor_multivar (3-D RDom, preserve
-        r.y & r.z, reorder intermediate update).
-      * SCAFFOLDING: Stage::rfactor(RVar,Var) and (vector<pair<RVar,Var>>) added
-        to micro_halide as a throwing stub; the construction is the documented
-        behavior the micro-agent implements. RVar already has name().
-      * DEFERRED interaction (NOT in scope this milestone): factoring an RVar
-        that was first SPLIT (lesson-18 tiled histogram:
-        split(r.x,rxo,rxi).rfactor({{rxo,u}})). Needs (a) split/reorder/tile to
-        accept RVar (VarOrRVar) and (b) RVar-ness propagation through splits so
-        the merge-drop can recognise rxi as an RVar. rfactor_multivar uses a 3-D
-        RDom to get multi-var coverage WITHOUT splitting RVars. See DISCOVERED
-        DOC GAPS below.
-      * DONE (delegated; integrity-clean micro-agent run add700e5976729ba6, no
-        forbidden accesses, read loopdoc.md, no commits; reported NO doc gaps).
-        The micro-agent implemented Stage::rfactor from loopdoc s12 + s3 + s11
-        ALONE. Notable: it INDEPENDENTLY RE-INTRODUCED a per-stage RVar record
-        (StageData::rvars, std::set<string>) -- the same field the human had
-        just deleted as dead weight -- because the merge-drop must distinguish
-        non-preserved RVars (dropped) from free Vars (kept), and a 1-D RDom's
-        RVar is a bare name indistinguishable from a Var otherwise. So the
-        experiment confirmed s12+s3 convey that need without source access.
-        Impl: pure stage = orig pure dims + new vars (outermost); update = copy
-        of orig update dims with preserved RVar->Var, non-preserved stay RVars;
-        merge = drop non-preserved RVars, rewire producers (intm reads what the
-        update read; merge reads only intm; intm added to f's producer set).
-      * ADVERSARIAL follow-ups (main agent, all PASS with ZERO further micro
-        changes -> impl generalizes, no overfit): rfactor_func_producer (reduces
-        over a real compute_root Func, not an ImageParam -> tests producer
-        wiring + realization order g->intm->f), rfactor_preserve_inner (preserve
-        the FIRST-declared r.x and lift r.y, mirror of rfactor_basic -> guards
-        against hardcoded "drop r.x"), rfactor_second_update (rfactor update(1)
-        of a 2-update Func -> tests stage_index handling; trivial reorder on
-        update(0) suppresses Halide's all-or-nothing-scheduling warning). 81
-        examples total, all pass.
-      * VALIDATION SIDE-FIX (during the StageData discussion): added
-        update_rvar_decl_order.cpp -- the ONLY example where an RVar's textual
-        appearance order (r.y before r.x) differs from RDom declaration order.
-        Confirmed Halide orders reduction loops by DECLARATION (r.x innermost),
-        not appearance; micro_halide matches. Closes a latent unverified clause
-        in s3 ("first-declared innermost") that every prior example left
-        untested. s3 wording sharpened to call this out.
-
 
 [✅] `in` (wrapper functions) and `clone_in`
     NOTES:
-      * Behavior + model: loopdoc §13. Source internals (identity, the
-        wrappers()-on-wrapped-Func recording, wrap_func_calls, transitive-caller
-        normalization, the deep_copy/callee-sharing verdict): src_doc §13.
-      * Functionality-neutral STAGE-1 refactor landed: producer reads route
-        through LoopNestPrinter::func_producers / stage_producers -- the single
-        seam where in()/clone_in() consumer-redirection is to be resolved.
-        Rationale + plan: micro_halide/wrappers_refactor_proposal.md + the seam
-        comment.
-      * Func::in/clone_in are throwing stubs (compile-only) pending implementation.
-      * For the micro-agent spawn (settled): (1) implement transitive-caller
-        normalization -- f.in(h) reaching f only via g redirects the direct caller
-        g (loopdoc §13); (2) resolve the consumer->wrapper swap once up front, not
-        per accessor call (seam comment). The realization-order tie-break secondary
-        key is now covered by tiebreak_visitation_order and already passes.
-      * EXAMPLES WRITTEN + verified vs Halide (in/clone_in positives fail under
-        the stub until implemented, like rfactor pre-delegation; the negative
-        passes both-error; tiebreak_visitation_order passes now): in_basic,
-        in_unscheduled, in_compute_at, in_multi, in_global, in_two_consumers_fix,
-        clone_basic, neg_clone_shared_callee, in_transitive, clone_transitive,
-        tiebreak_visitation_order.
-      * DELEGATED: logged micro-agent implemented in/clone_in from loopdoc §13
-        alone (integrity clean; no doc gaps reported by it). Wrappers recorded on
-        the wrapped Func, transitive-caller normalization, one-time resolution at
-        the seam. 104 examples pass. Main-agent adversarial follow-ups: clone_nonpure
-        (clone of a non-pure Func copies both stages -- PASS) and
-        in_custom_and_global (custom+global combo -- FAILED, exposed a loopdoc §13
-        gap, see DISCOVERED DOC GAPS; §13 fixed, re-delegating that one fix).
 
-[✅] `compute_with` (this is where things get very confusing)
+[WIP] `compute_with` (this is where things get very confusing)
     NOTES:
       * Behavior + model: loopdoc §14 (the constructive "growth" account) + §15
-        step 4 (item-based emission). Source internals: src_doc/compute_with.md.
-      * DONE (delegated; integrity-clean micro-agent run a3f95deb6b246a5cc:
-        no ../src or src_doc/ access, read loopdoc.md only, no commits; reported
-        NO doc gaps). Implemented Func/Stage::compute_with from loopdoc §14/§15
-        ALONE -- fuse-edge state, union-find grouping, per-stage growth emission,
-        item-based injection, owner-keyed collapse, fusion-aware enclosure.
-        All examples pass (99 positive + 24 negative, 0 diffs), verified
-        independently by the main agent. No previously passing example regressed.
-      * Examples (all pass): compute_with_basic/_split/_innermost/_at/_three/
-        _parent_alpha/_update/_producer/_chain/_tile/_two_parents/_two_parents_at;
-        negatives neg_compute_with_dependency/_dim_count/_level_mismatch/_mismatch/
-        _producer_at_child. The two-parent + chain cases (no single group parent)
-        and the shared-compute-level requirement are the load-bearing ones.
+        step 4 (item-based emission). Source internals: src_doc/compute_with.md
+        (to be split into per-topic sub-files with specific control-flow
+        walk-throughs; see methodology note below).
+      * FIRST PASS DONE, NOT COMPLETE. A micro-agent implemented Func/Stage::
+        compute_with from loopdoc §14/§15 alone (integrity-clean) and the
+        original hand-written example set passed. But copying Halide's own
+        test/correctness/compute_with.cpp (via sub-agents) then exposed real gaps:
+        the harness is now INTENTIONALLY RED on 10 known-failing cwtest_* examples.
+      * KNOWN-FAILING (committed as regression tests; full detail in DISCOVERED
+        DOC GAPS below):
+          - OVERFITS (loopdoc correct, micro impl incomplete -> a future
+            micro-agent hardens micro): cwtest_nested_compute_with (post-fusion
+            producer enclosure), neg_cwtest_crossing_edges1/2 (acyclic stage-order
+            not enforced), cwtest_update_stage_rfactor (group not ordered as a unit
+            vs an external producer), cwtest_rvar_bounds (known RVar-kind-not-piped).
+          - DOC GAPS (loopdoc must be fixed FIRST, then re-delegate):
+            * MEMBER ORDERING within a group is the within-group *topological*
+              order over fuse edges (children before parents; chains deepest-first),
+              NOT the §6 name tie-break §14 currently states. Affects produce-nesting
+              for chains + free/unfused-stage order. (cwtest_mixed_tile_factor,
+              _overlapping_updates, _update_stage_diagonal, _child_var_dependent_bounds)
+            * §14's "compute_at naming a CHILD member is always illegal" is a DOC
+              ERROR. Verified (probe /tmp/cwverify.cpp vs real Halide, all 3 of
+              compute_at/store_at/hoist_storage): naming a child is the ordinary §7
+              enclose-every-use rule -- legal when the producer's uses are all within
+              that child, illegal otherwise. Main agent over-generalized earlier.
+              (cwtest_two_compute_at)
+      * UNDERSTOOD THIS PASS (member-site mechanism, evidenced by source + debug):
+        in a fused group, (parent,v) and (child,v) are DIFFERENT sites at different
+        positions, not the same loop. Each member-stage keeps its own
+        <member>.s<n>.fused.<v> loop; the parent's is the real loop, each
+        non-parent's is rewritten to an extent-1 "scheduling point" pinned to the
+        parent's (substitute_fused_bounds, ScheduleFunctions.cpp ~1046, comment
+        ~1069-1076). compute_at(member,v) matches that member's loop by name
+        (HL_DEBUG_CODEGEN=3: "Found compute level at child.s0.fused.y" vs
+        "parent.s0.fused.y"), so the producer lands at that member's position.
+      * METHODOLOGY (agreed with human): break src_doc/compute_with.md into
+        per-topic sub-files, each a control-flow walk-through with specific line
+        citations + (where useful) HL_DEBUG_CODEGEN/[loopdoc-trace] evidence;
+        loopdoc references the specific sub-file/section per rule (no bare "see
+        compute_with.md"); micro-agent still never reads src_doc.
+      * Passing examples (the verified core; still green): compute_with_basic/
+        _split/_innermost/_at/_three/_parent_alpha/_update/_producer/_chain/_tile/
+        _two_parents/_two_parents_at, compute_with_rvar; negatives
+        neg_compute_with_dependency/_dim_count/_level_mismatch/_mismatch/
+        _producer_at_child; cwtest_* that pass (different_arg_num_compute_at,
+        double_split_fuse, fuse, fuse_compute_at, mismatching_splits,
+        store_at_different_levels, multiple_fuse_group, update_stage/2/3,
+        update_stage_pairwise, vectorize_inlined).
+      * REMAINING TO CLOSE THE MILESTONE: (1) fix the two DOC GAPS in loopdoc §14
+        (member ordering; child-member compute_at legality) + correct the
+        neg_compute_with_producer_at_child rationale; (2) split src_doc per the
+        methodology and back each rule with a walk-through; (3) re-delegate ONE
+        micro-agent to harden micro against all 10 known-failing cwtest_* (incl.
+        the RVar-kind piping); (4) confirm the harness goes fully green again.
       * [loopdoc-trace] debug(1) instrumentation kept in src/ScheduleFunctions.cpp
         (build_pipeline_group) as a permanent research aid on this branch.
 
