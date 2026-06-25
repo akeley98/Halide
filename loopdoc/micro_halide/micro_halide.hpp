@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <functional>
 #include <initializer_list>
 #include <iostream>
 #include <map>
@@ -289,6 +290,17 @@ struct StageData
     // (loopdoc.md section 12) must know which dims are RVars to decide which to
     // drop in the merge stage. The pure stage has none.
     std::set<std::string> rvars;
+
+    // compute_with (loopdoc.md section 14): if this stage has been fused into a
+    // PARENT stage, this records the fuse edge -- the parent Func, the parent's
+    // stage index, and the shared loop level (the `v` named in compute_with).
+    // The state is per stage; calling compute_with again on the same stage
+    // OVERWRITES this (loopdoc.md section 14). has_fuse == false means this is an
+    // *unfused* stage (it starts its own loop nest).
+    bool has_fuse = false;
+    std::shared_ptr<FuncContents> fuse_parent;  // the argument stage's Func
+    int fuse_parent_stage = 0;                  // the argument stage index
+    std::string fuse_var;                       // shared loop level name `v`
 };
 
 // ---------------------------------------------------------------------------
@@ -1175,20 +1187,29 @@ inline Func Stage::rfactor(const std::vector<std::pair<RVar, Var>> &preserved)
     return intm;
 }
 
-// compute_with stubs (loopdoc.md section 14). Compile-only, provided by the
-// main agent; the micro-agent implements the real fused-group behavior from the
-// docs. They throw so positive compute_with examples fail until implemented
-// (the established pre-delegation state, as with rfactor / in / clone_in).
-inline Func &Func::compute_with(const Func &, const Var &)
+// compute_with (loopdoc.md section 14): record a per-stage fuse edge from THIS
+// (the child) stage to the argument (the parent) stage at loop level `var`.
+// Like every directive this only records state; the fused nest is built later
+// (loopdoc.md sections 14 + 15). Calling compute_with again on the same stage
+// overwrites the previous edge (loopdoc.md section 14).
+inline Func &Func::compute_with(const Func &parent, const Var &var)
 {
-    throw CompileError(
-        "micro_halide: compute_with not yet implemented (loopdoc.md section 14)");
+    StageData &s = contents->stages[0];
+    s.has_fuse = true;
+    s.fuse_parent = parent.contents;
+    s.fuse_parent_stage = 0;
+    s.fuse_var = var.name();
+    return *this;
 }
 
-inline Stage &Stage::compute_with(const Stage &, const Var &)
+inline Stage &Stage::compute_with(const Stage &parent, const Var &var)
 {
-    throw CompileError(
-        "micro_halide: compute_with not yet implemented (loopdoc.md section 14)");
+    StageData &s = contents->stages[stage_index];
+    s.has_fuse = true;
+    s.fuse_parent = parent.contents;
+    s.fuse_parent_stage = parent.stage_index;
+    s.fuse_var = var.name();
+    return *this;
 }
 
 // ---------------------------------------------------------------------------
@@ -1277,6 +1298,454 @@ struct LoopNestPrinter
 
     explicit LoopNestPrinter(std::ostream &o) : out(o)
     {
+    }
+
+    // ---- Fused groups (loopdoc.md section 14) ----------------------------
+    // A fused group is the connected component of Funcs joined by compute_with
+    // fuse edges (edges join stages, so one Func can sit on several edges). The
+    // whole group is realized as one unit at one compute level: it is emitted as
+    // a single interleaved sequence of stage nests, wrapped by a produce/consume
+    // for every member (loopdoc.md sections 14 + 15).
+    struct FuseGroup
+    {
+        std::vector<FuncContents *> members;       // all Funcs in the group
+        FuncContents *spine_owner = nullptr;       // group parent / produce anchor
+        std::vector<FuncContents *> realize_order; // within-group realization order
+        std::vector<FuncContents *> produce_order; // outermost produce first
+    };
+    // Map each Func that is in a (multi-member) fused group to its group.
+    std::map<FuncContents *, std::shared_ptr<FuseGroup>> group_of_;
+
+    // Does any stage of f have a fuse edge (so f is a child of some edge)?
+    static bool is_fuse_child(FuncContents *f)
+    {
+        for (const StageData &s : f->stages)
+        {
+            if (s.has_fuse)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // The group a Func belongs to, or nullptr if it is not fused at all.
+    std::shared_ptr<FuseGroup> group_of(FuncContents *f)
+    {
+        auto it = group_of_.find(f);
+        return it == group_of_.end() ? nullptr : it->second;
+    }
+
+    // Build the fused groups from the recorded fuse edges over `order` (every
+    // reachable Func). Union members connected by edges; for each multi-member
+    // group compute the spine owner, the within-group realization order, and the
+    // produce nesting order (loopdoc.md section 14 "Member ordering").
+    void build_groups(const std::vector<FuncContents *> &order)
+    {
+        // Union-find by Func pointer.
+        std::map<FuncContents *, FuncContents *> parent;
+        std::function<FuncContents *(FuncContents *)> find =
+            [&](FuncContents *x) -> FuncContents * {
+            while (parent[x] != x)
+            {
+                parent[x] = parent[parent[x]];
+                x = parent[x];
+            }
+            return x;
+        };
+        auto unite = [&](FuncContents *a, FuncContents *b) {
+            parent[find(a)] = find(b);
+        };
+        for (FuncContents *f : order)
+        {
+            if (parent.find(f) == parent.end())
+            {
+                parent[f] = f;
+            }
+        }
+        bool any_edge = false;
+        for (FuncContents *f : order)
+        {
+            for (const StageData &s : f->stages)
+            {
+                if (s.has_fuse && s.fuse_parent)
+                {
+                    FuncContents *p = s.fuse_parent.get();
+                    if (parent.find(p) == parent.end())
+                    {
+                        parent[p] = p;
+                    }
+                    unite(f, p);
+                    any_edge = true;
+                }
+            }
+        }
+        if (!any_edge)
+        {
+            return;
+        }
+        // Collect members per representative.
+        std::map<FuncContents *, std::vector<FuncContents *>> comp;
+        for (FuncContents *f : order)
+        {
+            comp[find(f)].push_back(f);
+        }
+        for (auto &kv : comp)
+        {
+            std::vector<FuncContents *> &members = kv.second;
+            if (members.size() < 2)
+            {
+                continue; // not actually fused
+            }
+            auto grp = std::make_shared<FuseGroup>();
+            grp->members = members;
+            // §6 tie-break order of the members.
+            std::sort(grp->members.begin(), grp->members.end(),
+                      [this](FuncContents *a, FuncContents *b) {
+                          return sort_key(a) < sort_key(b);
+                      });
+            // Spine owner: the group's produce-nesting anchor. It is a member
+            // that is NEVER a child of a fuse edge (a "root" of the fuse forest);
+            // if several roots exist, the one sorting LAST by the §6 tie-break
+            // (loopdoc.md section 14: spine owner realized last). In a
+            // single-rooted group this is the unique root / group parent.
+            std::vector<FuncContents *> roots;
+            for (FuncContents *m : grp->members)
+            {
+                if (!is_fuse_child(m))
+                {
+                    roots.push_back(m);
+                }
+            }
+            grp->spine_owner = roots.empty() ? grp->members.back() : roots.back();
+            // Within-group realization order: members in §6 tie-break order, but
+            // with the spine owner moved to LAST.
+            for (FuncContents *m : grp->members)
+            {
+                if (m != grp->spine_owner)
+                {
+                    grp->realize_order.push_back(m);
+                }
+            }
+            grp->realize_order.push_back(grp->spine_owner);
+            // produce nesting = reverse of realization order (last-realized
+            // outermost).
+            grp->produce_order.assign(grp->realize_order.rbegin(),
+                                      grp->realize_order.rend());
+            for (FuncContents *m : grp->members)
+            {
+                group_of_[m] = grp;
+            }
+        }
+    }
+
+    // The single compute level shared by all members of a group (loopdoc.md
+    // section 14: all members share one compute level). We read it off the spine
+    // owner (validated equal across members in validate_groups).
+    FuncContents *group_at_func(FuseGroup *grp)
+    {
+        return grp->spine_owner->at_func.get();
+    }
+
+    // ---- Group legality (loopdoc.md section 14 "Legality") ---------------
+    // Validate each fused group's preconditions, separate from §7's compute_at
+    // rule. Called from validate().
+    void validate_groups(const std::vector<FuncContents *> &order)
+    {
+        for (FuncContents *f : order)
+        {
+            for (int cs = 0; cs < num_stages(f); cs++)
+            {
+                const StageData &child = f->stages[cs];
+                if (!child.has_fuse || !child.fuse_parent)
+                {
+                    continue;
+                }
+                FuncContents *p = child.fuse_parent.get();
+                int ps = child.fuse_parent_stage;
+                const std::string &v = child.fuse_var;
+
+                // No producer/consumer dependency between the fused Funcs.
+                if (reaches(f, p) || reaches(p, f))
+                {
+                    fail(f, "compute_with: there is a producer/consumer dependency "
+                            "between the fused Funcs");
+                }
+
+                // `v` must exist by name in BOTH fused stages.
+                int ci = stage_dim_index(f, cs, v);
+                int pi = stage_dim_index(p, ps, v);
+                if (pi < 0)
+                {
+                    fail(f, "compute_with: the fuse level does not name a loop of the "
+                            "parent stage");
+                }
+                if (ci < 0)
+                {
+                    fail(f, "compute_with: the fuse level does not name a loop of the "
+                            "child stage");
+                }
+                // The number of loops from the outermost down to `v` must match
+                // (so `v` sits at the same depth). dims[0] is innermost; the count
+                // of loops at/above `v` is (size - index).
+                int child_above = (int)stage_dims(f, cs).size() - ci;
+                int parent_above = (int)stage_dims(p, ps).size() - pi;
+                if (child_above != parent_above)
+                {
+                    fail(f, "compute_with: the number of fused dimensions (loops down "
+                            "to the fuse level) of the two stages do not match");
+                }
+
+                // All group members must share ONE compute level.
+                if (!same_compute_level(f, p))
+                {
+                    fail(f, "compute_with: the compute levels of the fused Funcs do "
+                            "not match");
+                }
+            }
+        }
+        // Cross-member compute-level agreement for the whole group (covers chains
+        // and multi-parent groups, where the spine owner may not be on every
+        // edge).
+        for (auto &kv : group_of_)
+        {
+            FuseGroup *grp = kv.second.get();
+            for (FuncContents *m : grp->members)
+            {
+                if (!same_compute_level(m, grp->spine_owner))
+                {
+                    fail(m, "compute_with: all members of a fused group must share one "
+                            "compute level");
+                }
+            }
+        }
+    }
+
+    // Do the two Funcs have the SAME compute level (loopdoc.md section 14)?
+    static bool same_compute_level(FuncContents *a, FuncContents *b)
+    {
+        if (a->level != b->level)
+        {
+            return false;
+        }
+        if (a->level == FuncContents::Level::At)
+        {
+            return a->at_func.get() == b->at_func.get() && a->at_var == b->at_var;
+        }
+        return true; // both Root, or both Inline
+    }
+
+    // Does `a` (transitively) read `b` (a producer/consumer dependency)?
+    bool reaches(FuncContents *a, FuncContents *b)
+    {
+        std::set<FuncContents *> seen;
+        return reaches_rec(a, b, seen);
+    }
+    bool reaches_rec(FuncContents *a, FuncContents *b, std::set<FuncContents *> &seen)
+    {
+        if (a == b)
+        {
+            return true;
+        }
+        if (!seen.insert(a).second)
+        {
+            return false;
+        }
+        for (auto &p : func_producers(a))
+        {
+            if (reaches_rec(p.get(), b, seen))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // ---- Group stage ordering + emission (loopdoc.md sections 14 + 15) ----
+
+    // A stage identified by (Func, stage index).
+    using StageId = std::pair<FuncContents *, int>;
+
+    // Topologically order all stages of a group's members (loopdoc.md section 14
+    // step 1): respect each Func's own stage order (s0 before s1 ...) and each
+    // fuse edge (the parent stage before the child fused onto it), breaking ties
+    // by §6 (Func name tie-break, then stage index). Returns the stage order.
+    std::vector<StageId> group_stage_order(FuseGroup *grp)
+    {
+        std::vector<StageId> all;
+        for (FuncContents *m : grp->members)
+        {
+            for (int s = 0; s < num_stages(m); s++)
+            {
+                all.emplace_back(m, s);
+            }
+        }
+        std::set<StageId> done;
+        std::vector<StageId> result;
+        // Kahn-style: repeatedly pick the smallest available stage by
+        // (sort_key(func), stage index).
+        while (result.size() < all.size())
+        {
+            StageId best{nullptr, 0};
+            bool have = false;
+            for (const StageId &s : all)
+            {
+                if (done.count(s))
+                {
+                    continue;
+                }
+                // available iff own predecessor stage done and (if fused) the
+                // parent stage done.
+                if (s.second > 0 && !done.count({s.first, s.second - 1}))
+                {
+                    continue;
+                }
+                const StageData &sd = s.first->stages[s.second];
+                if (sd.has_fuse && sd.fuse_parent &&
+                    !done.count({sd.fuse_parent.get(), sd.fuse_parent_stage}))
+                {
+                    continue;
+                }
+                if (!have || stage_less(s, best))
+                {
+                    best = s;
+                    have = true;
+                }
+            }
+            // Should always find one for a well-formed (acyclic) group.
+            result.push_back(best);
+            done.insert(best);
+        }
+        return result;
+    }
+
+    bool stage_less(const StageId &a, const StageId &b)
+    {
+        auto ka = sort_key(a.first);
+        auto kb = sort_key(b.first);
+        if (ka != kb)
+        {
+            return ka < kb;
+        }
+        return a.second < b.second;
+    }
+
+    // Emit a fused group's interleaved body at `indent` (loopdoc.md section 14
+    // step 2). The body is the sequence of TOP-LEVEL nests -- one per *unfused*
+    // stage -- in stage order; each fused child stage is spliced into its
+    // parent's nest (shared loops down to the fuse level, child's below-level
+    // loops as siblings). The produce/consume wrapper is added by the caller.
+    void emit_group_body(FuseGroup *grp, int indent)
+    {
+        std::vector<StageId> order = group_stage_order(grp);
+        // Children of each (parent) stage, in stage order.
+        std::map<StageId, std::vector<StageId>> children;
+        for (const StageId &s : order)
+        {
+            const StageData &sd = s.first->stages[s.second];
+            if (sd.has_fuse && sd.fuse_parent)
+            {
+                children[{sd.fuse_parent.get(), sd.fuse_parent_stage}].push_back(s);
+            }
+        }
+        // Emit one nest per unfused stage, in stage order.
+        for (const StageId &s : order)
+        {
+            const StageData &sd = s.first->stages[s.second];
+            if (sd.has_fuse)
+            {
+                continue; // spliced into its parent's nest
+            }
+            emit_fused_stage(s, (int)stage_dims(s.first, s.second).size() - 1, indent,
+                             children);
+        }
+    }
+
+    // Emit one fused nest rooted at stage `node`, walking `node`'s dimension
+    // list from `dim` inward. At the fuse level of a spliced child, the child's
+    // below-level loops are emitted as siblings after this node's body.
+    void emit_fused_stage(StageId node, int dim, int indent,
+                          std::map<StageId, std::vector<StageId>> &children)
+    {
+        FuncContents *f = node.first;
+        int stage = node.second;
+
+        if (dim < 0)
+        {
+            // Innermost point: just this node's leaf. (Children are spliced at
+            // their fuse var's level, handled below when we reach that level.)
+            out << pad(indent) << f->name << "(...) = ...\n";
+            return;
+        }
+
+        const std::string &var = stage_dims(f, stage)[dim].name();
+        bool elided = stage_collapsed(f, stage).count(var) != 0;
+        int body_indent = indent;
+        if (!elided)
+        {
+            out << pad(indent) << "for " << var << ":\n";
+            body_indent = indent + 2;
+        }
+
+        // Collect ALL stages whose below-`var` loops are siblings inside this
+        // shared loop. A child fused at `var` shares loops down to `var` with
+        // this node, so its below-`var` loops branch here; and that child's OWN
+        // children fused at `var` (a chain) likewise share `var` transitively and
+        // branch at this same shared loop (loopdoc.md section 14: a chain is one
+        // group sharing the loop). Gather them in stage order.
+        std::vector<StageId> spliced;
+        std::function<void(const StageId &)> gather = [&](const StageId &n) {
+            auto cit = children.find(n);
+            if (cit == children.end())
+            {
+                return;
+            }
+            for (const StageId &c : cit->second)
+            {
+                if (c.first->stages[c.second].fuse_var == var)
+                {
+                    spliced.push_back(c);
+                    gather(c); // its children fused at `var` are siblings too
+                }
+            }
+        };
+        gather(node);
+
+        // Producers (compute_at) and store nodes filed at this shared loop level
+        // belong to the OWNER (this node's Func) -- loopdoc.md section 14 "Loop
+        // ownership". Emit them wrapping the whole shared-loop body.
+        SiteKey key{f, stage, var};
+        auto kit = children_at.find(key);
+        std::vector<FuncContents *> empty;
+        const std::vector<FuncContents *> &kids =
+            (kit == children_at.end()) ? empty : kit->second;
+
+        auto body = [this, dim, node, &spliced, &children](int ind) {
+            // This node's own continuation down the spine, then each spliced
+            // member's below-`var` loops as siblings (in stage order).
+            emit_fused_stage(node, dim - 1, ind, children);
+            for (const StageId &c : spliced)
+            {
+                int cdim = stage_dim_index(c.first, c.second,
+                                           c.first->stages[c.second].fuse_var);
+                emit_fused_stage(c, cdim - 1, ind, children);
+            }
+        };
+
+        // compute_at producers filed here wrap the body (their consume around
+        // it); then store nodes; mirrors emit_dim.
+        auto inject = [this, &kids, &body](int ind) {
+            emit_realizations(kids, 0, ind, body, /*has_cont=*/true);
+        };
+        auto sit = store_at_level.find(key);
+        if (sit != store_at_level.end())
+        {
+            emit_store_nodes(sit->second, body_indent, inject);
+        }
+        else
+        {
+            inject(body_indent);
+        }
     }
 
     static std::string pad(int indent)
@@ -1792,6 +2261,16 @@ struct LoopNestPrinter
             }
             return site_encloses_loop(g, gs, gv, site_func, site_func_s, h->at_var);
         }
+        // h's stage hs is FUSED into a parent stage (loopdoc.md section 14):
+        // h shares the parent's loops from outermost down to the fuse var, so
+        // h's loops at/above the fuse level ARE the parent's loops. (g, gv)
+        // encloses (h, hs, hv) iff it encloses the parent's fuse loop (or outer).
+        if (hs < num_stages(h) && h->stages[hs].has_fuse && h->stages[hs].fuse_parent)
+        {
+            const StageData &sd = h->stages[hs];
+            return site_encloses_loop(g, gs, gv, sd.fuse_parent.get(),
+                                      sd.fuse_parent_stage, sd.fuse_var);
+        }
         return false; // h at root and not g: not inside g's loop
     }
 
@@ -1822,6 +2301,15 @@ struct LoopNestPrinter
             // h's stage hs runs just inside h's compute loop (site_func, site_func_s,
             // at_var); enclosed iff the site is that loop or outer to it.
             return site_encloses_loop(g, gs, gv, site_func, site_func_s, h->at_var);
+        }
+        // h's stage hs is FUSED into a parent stage (loopdoc.md section 14):
+        // its body runs inside the parent's shared loops down to the fuse var.
+        // The use is enclosed by (g, gv) iff (g, gv) encloses that fuse loop.
+        if (hs < num_stages(h) && h->stages[hs].has_fuse && h->stages[hs].fuse_parent)
+        {
+            const StageData &sd = h->stages[hs];
+            return site_encloses_loop(g, gs, gv, sd.fuse_parent.get(),
+                                      sd.fuse_parent_stage, sd.fuse_var);
         }
         return false; // h at root and not g
     }
@@ -2037,14 +2525,54 @@ struct LoopNestPrinter
         return true;
     }
 
-    // Emit the realizations in `funcs` as a chain of produce/consume blocks.
-    // `cont` (if non-null) is the continuation that follows the last func and
-    // is wrapped by its consume block.
-    template <typename Cont>
-    void emit_realizations(const std::vector<FuncContents *> &funcs, size_t i,
-                           int indent, const Cont &cont, bool has_cont)
+    // A realized ITEM (loopdoc.md section 15): a single Func, or a whole fused
+    // group emitted as one unit. The list machinery below operates on items so a
+    // group's members get one shared interleaved body wrapped by every member's
+    // produce/consume.
+    struct Item
     {
-        if (i >= funcs.size())
+        FuncContents *single = nullptr; // non-null for a lone Func
+        FuseGroup *group = nullptr;     // non-null for a fused group
+    };
+
+    // Collapse a realization-order list of Funcs into a list of items: each
+    // fused group appears once (at the position of its first member in `funcs`),
+    // all other group members dropped; lone Funcs pass through (loopdoc.md
+    // section 15 step 2 + 4).
+    std::vector<Item> collapse_to_items(const std::vector<FuncContents *> &funcs)
+    {
+        std::vector<Item> items;
+        std::set<FuseGroup *> emitted;
+        for (FuncContents *f : funcs)
+        {
+            std::shared_ptr<FuseGroup> grp = group_of(f);
+            if (grp)
+            {
+                if (emitted.insert(grp.get()).second)
+                {
+                    Item it;
+                    it.group = grp.get();
+                    items.push_back(it);
+                }
+            }
+            else
+            {
+                Item it;
+                it.single = f;
+                items.push_back(it);
+            }
+        }
+        return items;
+    }
+
+    // Emit the items in `items` as a chain of produce/consume blocks. `cont` (if
+    // present) is the continuation that follows the last item and is wrapped by
+    // its consume block(s).
+    template <typename Cont>
+    void emit_items(const std::vector<Item> &items, size_t i, int indent,
+                    const Cont &cont, bool has_cont)
+    {
+        if (i >= items.size())
         {
             if (has_cont)
             {
@@ -2052,16 +2580,57 @@ struct LoopNestPrinter
             }
             return;
         }
-        FuncContents *f = funcs[i];
-        out << pad(indent) << "produce " << f->name << ":\n";
-        emit_func_loops(f, indent + 2);
-
-        bool more = (i + 1 < funcs.size()) || has_cont;
-        if (more)
+        bool more = (i + 1 < items.size()) || has_cont;
+        auto rest = [this, &items, i, &cont, has_cont](int ind) {
+            emit_items(items, i + 1, ind, cont, has_cont);
+        };
+        const Item &it = items[i];
+        if (it.group)
         {
-            out << pad(indent) << "consume " << f->name << ":\n";
-            emit_realizations(funcs, i + 1, indent + 2, cont, has_cont);
+            // produce for every member (last-realized / spine owner outermost),
+            // then the interleaved group body, then a mirrored consume stack
+            // wrapping the rest (loopdoc.md section 14).
+            const std::vector<FuncContents *> &po = it.group->produce_order;
+            int ind = indent;
+            for (FuncContents *m : po)
+            {
+                out << pad(ind) << "produce " << m->name << ":\n";
+                ind += 2;
+            }
+            emit_group_body(it.group, ind);
+            if (more)
+            {
+                int cind = indent;
+                for (FuncContents *m : po)
+                {
+                    out << pad(cind) << "consume " << m->name << ":\n";
+                    cind += 2;
+                }
+                rest(cind);
+            }
         }
+        else
+        {
+            FuncContents *f = it.single;
+            out << pad(indent) << "produce " << f->name << ":\n";
+            emit_func_loops(f, indent + 2);
+            if (more)
+            {
+                out << pad(indent) << "consume " << f->name << ":\n";
+                rest(indent + 2);
+            }
+        }
+    }
+
+    // Backward-compatible shim: emit a list of Funcs (collapsing any fused
+    // groups into single items) as a produce/consume chain.
+    template <typename Cont>
+    void emit_realizations(const std::vector<FuncContents *> &funcs, size_t i,
+                           int indent, const Cont &cont, bool has_cont)
+    {
+        // `i` is always 0 at the call sites; collapse then emit.
+        std::vector<Item> items = collapse_to_items(funcs);
+        emit_items(items, i, indent, cont, has_cont);
     }
 
     // Emit f's loop nests. A Func with update definitions (loopdoc.md section
@@ -2173,7 +2742,12 @@ struct LoopNestPrinter
         std::vector<FuncContents *> order;
         realization_order(output, visited, order);
 
+        // Build fused groups (loopdoc.md section 14) before validation/emission:
+        // a group is realized as one item.
+        build_groups(order);
+
         // Reject illegal schedules before emitting (mirrors Halide aborting).
+        validate_groups(order);
         validate(order);
 
         std::vector<FuncContents *> root_list;

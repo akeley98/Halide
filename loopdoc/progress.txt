@@ -350,8 +350,24 @@ Marking convention:
         in_custom_and_global (custom+global combo -- FAILED, exposed a loopdoc §13
         gap, see DISCOVERED DOC GAPS; §13 fixed, re-delegating that one fix).
 
-[WIP] `compute_with` (this is where things get very confusing)
+[✅] `compute_with` (this is where things get very confusing)
     NOTES:
+      * Behavior + model: loopdoc §14 (the constructive "growth" account) + §15
+        step 4 (item-based emission). Source internals: src_doc/compute_with.md.
+      * DONE (delegated; integrity-clean micro-agent run a3f95deb6b246a5cc:
+        no ../src or src_doc/ access, read loopdoc.md only, no commits; reported
+        NO doc gaps). Implemented Func/Stage::compute_with from loopdoc §14/§15
+        ALONE -- fuse-edge state, union-find grouping, per-stage growth emission,
+        item-based injection, owner-keyed collapse, fusion-aware enclosure.
+        All examples pass (99 positive + 24 negative, 0 diffs), verified
+        independently by the main agent. No previously passing example regressed.
+      * Examples (all pass): compute_with_basic/_split/_innermost/_at/_three/
+        _parent_alpha/_update/_producer/_chain/_tile/_two_parents/_two_parents_at;
+        negatives neg_compute_with_dependency/_dim_count/_level_mismatch/_mismatch/
+        _producer_at_child. The two-parent + chain cases (no single group parent)
+        and the shared-compute-level requirement are the load-bearing ones.
+      * [loopdoc-trace] debug(1) instrumentation kept in src/ScheduleFunctions.cpp
+        (build_pipeline_group) as a permanent research aid on this branch.
 
 [ ] `compute_inline`
     NOTES:
