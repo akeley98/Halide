@@ -1503,38 +1503,42 @@ The whole loop nest follows from the rules above, assembled into one procedure:
    dimension list** for the relevant stage (§3, §9): `split`/`fuse`/`reorder`/
    `tile` have already rewritten that list before this step.
 
-4. **Emit from the outside in.** Walk the top-level chain (§6): for each Func
-   print `produce f`, then `f`'s loop nest(s), then — for every Func but the
-   last — `consume f` wrapping everything that follows. A Func with update
-   definitions (§3) emits **one loop nest per stage**, in stage order, all
-   inside that single `produce f` (no `consume` between stages). Printing a
-   *stage's* loop nest (§3) means working through *that stage's* dimension list
-   (after its own §9 transforms; an update stage's list also contains its
-   `RVar`s) from its outermost dimension inward, and at each dimension:
-     * if that dimension was declared elided (§7), skip its `for` line but still
-       treat the level as a valid injection site;
-     * if this `(f, stage, dim)` level is the **store level** of some Func `h`
-       whose compute level is deeper (§8), open an `h`'s `store h:` node here
-       first; everything emitted below at this level falls inside that
-       `store h:`;
-     * inject the Funcs filed at this `(f, stage, dim)` level (from step 3) —
-       each as a `produce`/`consume` pair whose `consume` wraps the rest of the
-       stage's body;
-     * descend to the next-inner dimension, bottoming out at the leaf
-       `f(...) = ...`.
-   Injection is recursive: an injected Func's own loop nest is emitted the same
-   way, so a Func filed inside a Func that is itself filed inside a third nests
-   accordingly (§7). A Func scheduled `store_root()` is the special case where
-   its `store` node opens at the very outermost level, wrapping the whole nest.
+4. **Emit outside-in.** A *realized item* is a single Func **or** a whole fused
+   group (§14) — realization order (step 2) and the placements of step 3 are over
+   these items, a lone Func being a one-member group. Begin at the **top-level
+   chain** (the `compute_root` items and the output, in realization order) and
+   emit each item; emitting an item recurses, so the nest grows inward.
 
-   When the site holds a **fused group** (§14) rather than a lone Func, the group
-   emits there as a unit: §14's growth procedure runs in place of this single
-   Func's `produce` — its member stages are injected in stage order, each at its
-   own fuse level, and the finished nest is wrapped in a `produce`/`consume` for
-   every member (last-realized outermost). The whole group occupies the one site
-   it was filed at (step 3). (This per-stage growth is exactly what the Halide
-   compiler does — verified against its `build_pipeline_group` and the
-   `[loopdoc-trace]` output; see §14 and [src_doc: compute_with](src_doc/compute_with.md).)
+   **Emitting an item** writes its `produce`/`consume` wrapper around its loop
+   nest(s):
+     * a **single Func** `f`: `produce f`, then `f`'s loop nest(s), then
+       `consume f` wrapping everything that follows. A Func with update
+       definitions (§3) emits **one loop nest per stage**, in stage order, all
+       inside that single `produce f` (no `consume` between stages).
+     * a **fused group**: §14's growth procedure — the members' stages injected in
+       stage order into one shared nest, the whole wrapped by a `produce`/`consume`
+       for **every** member (last-realized outermost). (Verified against Halide's
+       `build_pipeline_group`; see §14 and
+       [src_doc: compute_with](src_doc/compute_with.md).)
+
+   **A stage's loop nest** is built by walking that stage's dimension list (after
+   its §9 transforms; an update stage's list also carries its `RVar`s) from the
+   outermost dimension inward. At each dimension:
+     * if the dimension was declared **elided** (§7), skip its `for` line but keep
+       the level as a valid injection site;
+     * **open a `store h:` node** for any item `h` whose store level is this level
+       while its compute level is deeper (§8); everything below falls inside it.
+       This is *per item*: in a fused group each member whose store level is outer
+       gets its own `store` node here, and the common default — store level equal
+       to the (shared) compute level — prints **none**;
+     * **inject** the items filed at this `(f, stage, dim)` level (step 3), each
+       emitted by *this same procedure* (the recursion), its `consume` wrapping
+       the rest of the body;
+     * descend inward, bottoming out at the leaf `f(...) = ...`.
+
+   "Inject an item" is the single recursive step, so an item filed inside an item
+   filed inside a third nests accordingly. `store_root()` is the case where an
+   item's `store` node opens at the very outermost level, around the whole nest.
 
 [examples/many_compute_root.cpp](examples/many_compute_root.cpp) puts the core
 pieces together: `f1`, `f2`, `f3` are `compute_root` and so form the top-level
