@@ -86,6 +86,14 @@ def test_all():
 
     any_cpp_fail = False
     any_diff_fail = False
+
+    # Try to compile all C++ in parallel.
+    # This will save a lot of time over the older harness.
+    # C++ build fails will be reported per-example below when we try to compile again in the serial loop.
+    # (which will quickly exit for successful builds).
+    all_bins = " ".join([e.halide_bin for e in example_paths] + [e.micro_halide_bin for e in example_paths])
+    os.system(f"ninja " + all_bins)
+
     for e in example_paths:
         halide_cpp_fail = 0 != os.system(f"ninja {e.halide_bin}")
         micro_halide_cpp_fail = 0 != os.system(f"ninja {e.micro_halide_bin}")
