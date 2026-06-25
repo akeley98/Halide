@@ -6,10 +6,13 @@ using namespace micro_halide;
 #include "halide_compat.h"
 using namespace Halide;
 #endif
-// NEGATIVE: a producer at the fused level must be computed at the PARENT. The
-// shared loop belongs to f (the parent); g (the child) does not own a fused
-// loop, so input.compute_at(g, y) is illegal -- the legal site is
-// input.compute_at(f, y).
+// NEGATIVE: the ordinary compute_at rule (enclose EVERY use) applied to a fused
+// group. `input` is read by BOTH f and g. Computing it at the CHILD g's slot of
+// the shared y loop (input.compute_at(g, y)) does not enclose f's use of input,
+// so it is illegal -- the legal sites are input.compute_at(f, ...).
+// (Naming the child is NOT categorically illegal: it would be legal if input
+// were used only within g -- the child's (g, y) is a real site at g's slot.
+// See src_doc/compute_with/member_sites.md.)
 int main() {
     try {
         Var x("x"), y("y");
@@ -22,7 +25,7 @@ int main() {
         f.compute_root();
         g.compute_root();
         g.compute_with(f, y);
-        input.compute_at(g, y);   // illegal: g is the child, not the parent
+        input.compute_at(g, y);   // illegal: g's slot doesn't enclose f's use of input
         h.print_loop_nest();
     }
     catch (const CompileError &e) {

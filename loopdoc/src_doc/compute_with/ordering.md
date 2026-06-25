@@ -27,27 +27,32 @@ stages in order (`s0` before `s1` …), and each parent stage before the child
 stage fused onto it. Unfused (free) stages and the fused parent stages are
 placed by this same sort.
 
-## OPEN DOC GAP — the precise tie-break is NOT §6 name order
+## The precise rule (confirmed) — NOT §6 name order
 
-loopdoc §14 currently states the member/stage ordering tie-break as the §6
-name order. That is **wrong in two topologies**, confirmed by failing copied
-tests:
+The within-group order is **the topological order over the fuse-edge structure:
+each child before its parent ⇒ the spine owner (root) last**, with the §6
+tie-break breaking ties **only** among members/stages the fuse edges leave
+unordered (e.g. several direct children of one parent). It is *not* a §6-name
+order with the owner moved last; that only coincides when names happen to match
+the fuse order. (loopdoc §14's member-ordering subsection was corrected to match;
+this resolved the doc-gap. micro_halide still implements the old §6-name version
+— an overfit awaiting a hardening micro-agent.)
 
-* **Chains.** `g.compute_with(f)`, `h.compute_with(g)` — the realization order
-  follows the *chain* (the topological order over fuse edges), not §6 name order
-  among the non-direct-children. §14's "§6 tie-break with spine owner last" gives
-  the wrong produce nesting here. (`cwtest_mixed_tile_factor`.)
-* **Free/unfused stages within a group.** Their relative order follows the
-  within-group realization order (i.e. the `temp` topological position above —
-  spine owner last), not §6 name order. (`cwtest_overlapping_updates`,
-  `cwtest_update_stage_diagonal`, `cwtest_child_var_dependent_bounds`.)
+Evidence (`[loopdoc-trace]` against real Halide):
 
-So the real rule is: **the within-group order is the topological order over the
-fuse-edge structure** (children before parents ⇒ spine owner last; chains
-deepest-first), with the §6 tie-break breaking ties only among members/stages
-that the fuse edges leave unordered. The precise, fully-traced statement is still
-to be written (this is the active doc-gap; see `progress.txt` DISCOVERED DOC
-GAPS), at which point loopdoc §14's member-ordering subsection and this file
-should be tightened together. `compute_with_chain.cpp` passes only because its
-names happen to make §6 order coincide with the chain order — it does not
-discriminate the rule.
+* **Chain** `g.compute_with(f)`, `h.compute_with(g)` → `funcs = [h, g, f]`
+  (deepest-child-first), produce nesting `f, g, h`; micro gives `f, h, g` (§6
+  name). `cwtest_mixed_tile_factor`. (`compute_with_chain.cpp` *passes* only
+  because its names make §6 order coincide with the chain order — it does not
+  discriminate the rule.)
+* **Free/unfused stages** — `g.update().compute_with(f.update())` with `f`,`g`
+  each having an unfused pure stage → `funcs = [g, f]`; the body emits the free
+  pure stages `g.s0, f.s0` (realization order, child-before-parent), *not* `f, g`
+  (§6 name). `stage_order` from the trace: `g.s0` (own), `f.s0` (own), `f.s1`
+  (own), `g.s1` (fused into `f.s1`). `cwtest_overlapping_updates`,
+  `cwtest_update_stage_diagonal`, `cwtest_child_var_dependent_bounds`.
+
+Body/compute order is the greedy emission: walk members in realization (`funcs`)
+order emitting each member's *ready* stages — a free stage emits at its member's
+slot; a fused child stage defers until its parent stage is emitted, then is
+spliced in (`build_pipeline_group`'s `stage_order` loop, ~1755).

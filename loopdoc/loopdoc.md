@@ -1361,49 +1361,73 @@ does not.
 
 ### Member ordering
 
-Two orders, both observable, both falling out of the procedure:
+Both observable orders derive from the group's **within-group realization
+order**, so define that first. It is the **topological order of the fuse edges in
+which each child realizes before its parent** — so the group's spine owner (the
+member that is nobody's child; Halide's `funcs.back()` and the `produce`-nesting
+anchor) realizes **last**. The §6 tie-break (name, then visitation) orders *only*
+members that the fuse edges leave unordered — e.g. several **direct** children of
+one common parent. It is **not** a plain §6-name order with the owner moved last;
+that only coincides when names happen to match the fuse order. For a **chain**
+`g.compute_with(f)`, `h.compute_with(g)`, the order is deepest-child-first
+`h, g, f` ([examples/cwtest_mixed_tile_factor.cpp](examples/cwtest_mixed_tile_factor.cpp);
+verified via `[loopdoc-trace]`). Source walk-through:
+[src_doc: compute_with/ordering](src_doc/compute_with/ordering.md).
 
-* **Body (compute) order** — the **stage order** of step 1. Just two hard
-  constraints — each Func's own stages in order (`s0` before `s1` …) and each
-  parent stage before the children fused onto it — with §6 breaking ties among
-  stages that neither constraint orders; there is no further rule. With all
-  children fused directly into one parent this is just "parent first, then
-  children in §6 order".
-* **`produce`/`consume` nesting** — the **reverse of the group's realization
-  order**: the **last-realized** member is the outermost `produce`; `consume`
-  blocks mirror it and wrap the downstream consumer.
+* **`produce`/`consume` nesting** — the **reverse** of the realization order: the
+  last-realized member (the spine owner) is the **outermost** `produce`; the
+  `consume` blocks mirror it and wrap the downstream consumer. With one common
+  parent that reads as "parent outermost", and it holds even when the parent's
+  name would sort it first
+  ([examples/compute_with_parent_alpha.cpp](examples/compute_with_parent_alpha.cpp)).
+* **Body (compute) order** — stages are emitted by walking the members in
+  **realization order** and emitting each member's stages as they become *ready*:
+  a **free** (unfused) stage emits at its member's realization slot; a **fused**
+  child stage waits until its parent stage has been emitted, then is spliced in.
+  Two hard constraints underlie this — each Func's own stages in order (`s0`
+  before `s1` …), and each parent stage before the children fused onto it. With
+  all children fused directly into one parent this reads as "parent's stages
+  first, then the children in §6 order"; but **free/unfused stages follow the
+  realization order (child-before-parent), not §6 name** — two unfused pure
+  stages of a fused pair emit child-then-parent
+  ([examples/cwtest_overlapping_updates.cpp](examples/cwtest_overlapping_updates.cpp)).
 
-The group's **within-group realization order** is the members in §6 tie-break
-order, but with the group's spine owner — the member that owns the outermost
-shared loop and is Halide's `produce`-nesting anchor — **last**. In a
-single-rooted group that owner is the root/parent, so "parent realized last /
-parent's `produce` outermost", and it is a genuine override: it holds even when
-the parent's name would sort it first
-([examples/compute_with_parent_alpha.cpp](examples/compute_with_parent_alpha.cpp)).
-With three members the two orders visibly diverge — `g.compute_with(f,y)`,
-`h.compute_with(f,y)` give bodies `f, g, h` but produce nesting `f, h, g`
+The two orders genuinely diverge: with `g.compute_with(f,y)`, `h.compute_with(f,y)`
+the bodies run `f, g, h` (parent first, then the §6-ordered children) while the
+produce blocks nest `f, h, g` (parent outermost, then the children reversed)
 ([examples/compute_with_three.cpp](examples/compute_with_three.cpp)).
 
 ### Loop ownership: producers and elision
 
-The loops a fused pair shares belong to that pair's **parent** stage; the child
-owns only its loops below `v`. Two consequences:
+Each member keeps its **own** copy of the shared loops, *at its own position* in
+the body: the **parent's** are the real loops, and each **non-parent's** shared
+loop is an extent-1 *scheduling point* pinned to the parent's, sitting at that
+member's slot. So `(member, v)` is a real **site** for *every* member, not just
+the parent — `(parent, v)` is the top of the shared loop, `(child, v)` is the
+child's slot (just before the child's body). They name the same iteration values
+but are *different injection points*. (Why, with source + trace:
+[src_doc: compute_with/member_sites](src_doc/compute_with/member_sites.md).) Two
+consequences:
 
-* A shared loop is a valid **site** only under the **parent**. This is the
-  general rule for *any* directive that names a loop level: `compute_at`,
-  `store_at`, `hoist_storage` must all name the parent, never the child — the
-  child owns no loop there, so naming it is illegal (verified for all three;
+* A producer computed at `(member, v)` lands at **that member's** slot, and its
+  legality is the **ordinary §7 rule** — the site must enclose *every* use of the
+  producer; there is no special "name the parent" requirement. So naming a
+  **child** is **legal when the producer is used only within that child**
+  ([examples/compute_with_producer.cpp](examples/compute_with_producer.cpp)
+  computes a shared producer at the parent; a child site is equally fine when its
+  body encloses every use), and **illegal when a use lies outside it** — e.g. when
+  the producer is read by another member, as in
   [examples/neg_compute_with_producer_at_child.cpp](examples/neg_compute_with_producer_at_child.cpp)
-  is the `compute_at` case, and `store_at`/`hoist_storage` on a child fail
-  identically). [examples/compute_with_producer.cpp](examples/compute_with_producer.cpp)
-  computes a shared producer at the parent's fused loop. (A fused loop's bounds
-  are the union over the members, so a producer there can keep a loop it would
-  collapse at a plain `compute_at`; as always such elision is *declared*, not
-  derived.)
+  (its `input` is read by **both** `f` and `g`, so the child's site doesn't
+  enclose `f`'s use). This holds identically for `compute_at`, `store_at`, and
+  `hoist_storage`. (A fused loop's bounds are the union over the members, so a
+  producer there can keep a loop it would collapse at a plain `compute_at`; as
+  always such elision is *declared*, not derived.)
 * **`micro_halide_collapses`** keys on the loop's **owner**: collapse a shared
-  loop by annotating the **parent** (a child's annotation for a shared-level var
-  hits nothing — it owns no such loop), and a below-`v` loop on the **member**
-  that owns it (which may differ between members).
+  loop by annotating the **parent** (a non-parent member's shared loop is already
+  an extent-1 scheduling point — not a printed `for` — so annotating *it* changes
+  nothing), and a below-`v` loop on the **member** that owns it (which may differ
+  between members).
   [examples/compute_with_at.cpp](examples/compute_with_at.cpp) collapses the
   shared `y` via the parent alone.
 
