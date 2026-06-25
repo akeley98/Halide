@@ -19,7 +19,12 @@ then walks the resulting IR `Stmt` with a small `IRVisitor`.
 - **§11** — [Update (reduction) definitions: stages](update_definitions.md)
 - **§12** — [rfactor](rfactor.md)
 - **§13** — [in() / clone_in(): wrappers and clones](in_clone_in.md)
-- **§14** — [compute_with: fused groups](compute_with.md)
+- **§14** — compute_with: fused groups (split by topic):
+  [fused_groups](compute_with/fused_groups.md) ·
+  [growth](compute_with/growth.md) ·
+  [member_sites](compute_with/member_sites.md) ·
+  [ordering](compute_with/ordering.md) ·
+  [legality](compute_with/legality.md)
 
 Sections are globally numbered §1–§14 across these files (stable IDs). A cross-file reference like "§7" points to the file whose range covers 7 (here, [compute_at_and_loops.md](compute_at_and_loops.md)).
 

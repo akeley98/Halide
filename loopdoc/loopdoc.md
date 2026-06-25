@@ -1314,7 +1314,7 @@ or the same `compute_at` site); mismatched compute levels are an error.
 ### How the fused nest is built
 
 The group's loop nest grows one **stage** at a time. This mirrors how Halide
-actually assembles it ([src_doc: compute_with](src_doc/compute_with.md); the
+actually assembles it ([src_doc: compute_with/growth](src_doc/compute_with/growth.md); the
 `[loopdoc-trace]` lines in any fused example's `debug_1` log show it directly):
 
 1. **Order the stages.** Put all stages of all members in a topological order
@@ -1452,7 +1452,7 @@ compute_at rule:
   stage ordering stays **acyclic**: `f`'s stages are forced into order (`s0`
   before `s1`), so pinning `f.s0` to `g.s1` (later) but `f.s1` to `g.s0`
   (earlier) is a contradiction. Halide checks it per Func, per parent, up front
-  ([src_doc: compute_with](src_doc/compute_with.md)).
+  ([src_doc: compute_with/legality](src_doc/compute_with/legality.md)).
 
 A **producer's `compute_at` legality** inside a fused group needs **no new
 rule** — it is exactly §7's principle, *the site must enclose every use of the
@@ -1525,7 +1525,7 @@ The whole loop nest follows from the rules above, assembled into one procedure:
        stage order into one shared nest, the whole wrapped by a `produce`/`consume`
        for **every** member (last-realized outermost). (Verified against Halide's
        `build_pipeline_group`; see §14 and
-       [src_doc: compute_with](src_doc/compute_with.md).)
+       [src_doc: compute_with/growth](src_doc/compute_with/growth.md).)
 
    **A stage's loop nest** is built by walking that stage's dimension list (after
    its §9 transforms; an update stage's list also carries its `RVar`s) from the
@@ -1574,4 +1574,8 @@ produce/consume), [compute_at and loops](src_doc/compute_at_and_loops.md),
 [transforms](src_doc/transforms.md) (`split`/`fuse`/`reorder`/`tile`),
 [update definitions](src_doc/update_definitions.md),
 [rfactor](src_doc/rfactor.md), [in/clone_in](src_doc/in_clone_in.md), and
-[compute_with](src_doc/compute_with.md).
+**compute_with** (split by topic: [fused_groups](src_doc/compute_with/fused_groups.md),
+[growth](src_doc/compute_with/growth.md),
+[member_sites](src_doc/compute_with/member_sites.md),
+[ordering](src_doc/compute_with/ordering.md),
+[legality](src_doc/compute_with/legality.md)).
