@@ -1290,9 +1290,6 @@ group `{f, a, b}`.
 
 ### Fused groups are a per-stage relation
 
-<!-- Human: "adds" replaced with "results in" to avoid the misconception just
-clarified above ("records state") -->
-
 Each `compute_with` results in a **fuse edge** from a child stage to a parent stage.
 The Funcs connected (directly or transitively) by these edges form one **fused
 group**, realized as a unit. Because edges join *stages*, one Func can sit on
@@ -1366,11 +1363,12 @@ does not.
 
 Two orders, both observable, both falling out of the procedure:
 
-<!-- Human: is "ties broken by §6" just adding the "tie-break by name" rule to the "parent before child, and stage N of f before stage N + 1 of f" rules, or is there more nuance I missed? -->
-
-* **Body (compute) order** — the **stage order** of step 1: a parent stage before
-  its children, ties broken by §6. With all children fused directly into one
-  parent this is just "parent first, then children in §6 order".
+* **Body (compute) order** — the **stage order** of step 1. Just two hard
+  constraints — each Func's own stages in order (`s0` before `s1` …) and each
+  parent stage before the children fused onto it — with §6 breaking ties among
+  stages that neither constraint orders; there is no further rule. With all
+  children fused directly into one parent this is just "parent first, then
+  children in §6 order".
 * **`produce`/`consume` nesting** — the **reverse of the group's realization
   order**: the **last-realized** member is the outermost `produce`; `consume`
   blocks mirror it and wrap the downstream consumer.
@@ -1391,13 +1389,13 @@ With three members the two orders visibly diverge — `g.compute_with(f,y)`,
 The loops a fused pair shares belong to that pair's **parent** stage; the child
 owns only its loops below `v`. Two consequences:
 
-<!-- Human: first bullet point is really stating a general rule whenever a site is being named, correct?
-If some site (b, f) is fused with (a, f), with a being the parent of b, then (b, f) is invalid as arguments to compute_at, store_at, hoist_storage, etc., correct? (Assuming the invalid state wasn't overwritten before loop nest generation) -->
-
-* A **producer** to be computed at a fused level must name the **owning (parent)**
-  Func — `input.compute_at(parent, v)`. Naming a child is illegal: it owns no loop
-  there ([examples/neg_compute_with_producer_at_child.cpp](examples/neg_compute_with_producer_at_child.cpp)).
-  [examples/compute_with_producer.cpp](examples/compute_with_producer.cpp)
+* A shared loop is a valid **site** only under the **parent**. This is the
+  general rule for *any* directive that names a loop level: `compute_at`,
+  `store_at`, `hoist_storage` must all name the parent, never the child — the
+  child owns no loop there, so naming it is illegal (verified for all three;
+  [examples/neg_compute_with_producer_at_child.cpp](examples/neg_compute_with_producer_at_child.cpp)
+  is the `compute_at` case, and `store_at`/`hoist_storage` on a child fail
+  identically). [examples/compute_with_producer.cpp](examples/compute_with_producer.cpp)
   computes a shared producer at the parent's fused loop. (A fused loop's bounds
   are the union over the members, so a producer there can keep a loop it would
   collapse at a plain `compute_at`; as always such elision is *declared*, not
@@ -1442,10 +1440,13 @@ compute_at rule:
   is the legal cross-parent case at a shared `compute_at(out, y)`. Note the rule
   is *exactly* compute-level equality — members may still have **different store
   levels**.
-* A Func's stages fused into a given parent must keep **increasing parent-stage
-  order** — you cannot fuse `f.s0` into `g.s1` and `f.s1` into `g.s0` (no
-  consistent stage order would exist; [src_doc §14](src_doc/loop_nest_construction.md)).
-<!-- Human: is this a natural consequence of topological sort? i.e. the graph to sort is cyclic in this case? -->
+* A Func's stages fused into a given parent must target **non-decreasing
+  parent-stage indices** as the Func's own stages advance — you cannot fuse
+  `f.s0` into `g.s1` and `f.s1` into `g.s0`. This is exactly a guard that the
+  stage ordering stays **acyclic**: `f`'s stages are forced into order (`s0`
+  before `s1`), so pinning `f.s0` to `g.s1` (later) but `f.s1` to `g.s0`
+  (earlier) is a contradiction. Halide checks it per Func, per parent, up front
+  ([src_doc §14](src_doc/loop_nest_construction.md)).
 
 A **producer's `compute_at` legality** inside a fused group needs **no new
 rule** — it is exactly §7's principle, *the site must enclose every use of the
