@@ -185,6 +185,7 @@ inline Expr::Expr(const RVar &r)
     rvars.push_back(r.name());
 }
 
+
 // ---------------------------------------------------------------------------
 // RDom: a reduction domain. Declares one or more RVars. Bounds are irrelevant
 // to the loop structure (the harness drops constant bounds), so only the
@@ -230,9 +231,37 @@ class RDom
     std::string _name;
 };
 
+
+class VarOrRVar
+{
+    std::string _name;
+
+  public:
+    // Public because we need to be source compatible with Halide.
+    // Yes, it's `v.name()`, but `v.is_rvar` alone without `()`...
+    bool is_rvar;
+
+    VarOrRVar(const Var &v): _name(v.name()), is_rvar(false)
+    {
+    }
+    VarOrRVar(const RVar &v): _name(v.name()), is_rvar(true)
+    {
+    }
+    VarOrRVar(const RDom &v): _name(v.name()), is_rvar(true)
+    {
+    }
+
+    const std::string &name() const
+    {
+        return _name;
+    }
+};
+
+
 struct DimData
 {
     std::string _name;
+    // HUMAN: hint for micro-agent: probably need to propagate is_rvar here.
 
     DimData(std::string n) : _name(std::move(n))
     {
@@ -383,9 +412,24 @@ inline int dim_pos(const std::vector<DimData> &a, const std::string &name)
     return -1;
 }
 
-inline void split(std::vector<DimData> &a, const std::string &owner,
-                  const Var &old_var, const Var &outer, const Var &inner)
+inline void require_rvar_match(const VarOrRVar &old, const VarOrRVar &_new, const char* verb)
 {
+    if (old.is_rvar != _new.is_rvar) {
+        auto _format = [] (const VarOrRVar &v)
+        {
+            return v.name() + ":" + (v.is_rvar ? "RVar" : "Var");
+        };
+        throw CompileError(
+            "micro_halide::dimlist::require_rvar_match: cannot "
+            + std::string(verb) + " " + _format(old) + " into " + _format(_new));
+    }
+}
+
+inline void split(std::vector<DimData> &a, const std::string &owner,
+                  const VarOrRVar &old_var, const VarOrRVar &outer, const VarOrRVar &inner)
+{
+    require_rvar_match(old_var, outer, "split");
+    require_rvar_match(old_var, inner, "split");
     int pos = dim_pos(a, old_var.name());
     if (pos < 0)
     {
@@ -398,8 +442,10 @@ inline void split(std::vector<DimData> &a, const std::string &owner,
 }
 
 inline void fuse(std::vector<DimData> &a, const std::string &owner,
-                 const Var &inner, const Var &outer, const Var &fused)
+                 const VarOrRVar &inner, const VarOrRVar &outer, const VarOrRVar &fused)
 {
+    require_rvar_match(inner, fused, "fuse");
+    require_rvar_match(outer, fused, "fuse");
     int ipos = dim_pos(a, inner.name());
     int opos = dim_pos(a, outer.name());
     if (ipos < 0)
@@ -709,7 +755,7 @@ class FuncStageImpl
     // split(old, outer, inner, factor): replace `old` with two dimensions --
     // `inner` (innermost, at old's former slot) and `outer` just outside it.
     // [x, y] under split(x, xo, xi, 8) -> [xi, xo, y]. One extra `for`.
-    Derived &split(const Var &old_var, const Var &outer, const Var &inner, int factor)
+    Derived &split(const VarOrRVar &old_var, const VarOrRVar &outer, const VarOrRVar &inner, int factor)
     {
         (void)factor; // bound is normalized away by the harness
         dimlist::split(dims(), owner(), old_var, outer, inner);
@@ -719,7 +765,7 @@ class FuncStageImpl
     // fuse(inner, outer, fused): remove `inner` and `outer`, place a single
     // `fused` dimension at inner's former position. [x, y] under fuse(x, y, xy)
     // -> [xy]. One fewer `for`.
-    Derived &fuse(const Var &inner, const Var &outer, const Var &fused)
+    Derived &fuse(const VarOrRVar &inner, const VarOrRVar &outer, const VarOrRVar &fused)
     {
         dimlist::fuse(dims(), owner(), inner, outer, fused);
         return static_cast<Derived&>(*this);
@@ -727,9 +773,9 @@ class FuncStageImpl
 
     // tile(x, y, xo, yo, xi, yi, xf, yf): split(x,xo,xi,xf); split(y,yo,yi,yf);
     // reorder(xi, yi, xo, yo). [x, y] -> [xi, yi, xo, yo]. Two extra `for`s.
-    Derived &tile(const Var &x, const Var &y,
-                  const Var &xo, const Var &yo,
-                  const Var &xi, const Var &yi,
+    Derived &tile(const VarOrRVar &x, const VarOrRVar &y,
+                  const VarOrRVar &xo, const VarOrRVar &yo,
+                  const VarOrRVar &xi, const VarOrRVar &yi,
                   int xfactor, int yfactor)
     {
         (void)xfactor; (void)yfactor;
@@ -761,7 +807,7 @@ class FuncStageImpl
     // The fuse level may be a Var or an RVar -- it is kept as a loop name, the
     // same way the dimension list stores Vars and RVars (section 10).
     template <typename ParentDerived>
-    Derived &compute_with(const FuncStageImpl<ParentDerived> &parent, const Var &var)
+    Derived &compute_with(const FuncStageImpl<ParentDerived> &parent, const VarOrRVar &var)
     {
         StageData &s = contents->stages[stage_index];
         s.has_fuse = true;
@@ -769,11 +815,6 @@ class FuncStageImpl
         s.fuse_parent_stage = parent.stage_index;
         s.fuse_var = var.name();
         return static_cast<Derived&>(*this);
-    }
-    template <typename ParentDerived>
-    Derived &compute_with(const FuncStageImpl<ParentDerived> &parent, const RVar &var)
-    {
-        return compute_with(parent, Var(var.name()));
     }
 
     // This update stage's dimension list (loopdoc.md section 10): the same
@@ -825,28 +866,21 @@ class Func: public FuncStageImpl<Func>
         return *this;
     }
 
-    Func &compute_at(const Func &f, const Var &var)
+    // (Func, Var) names a "site", a.k.a. a loop at which we can inject the realization of this function.
+    // A reduction variable / 1-D RDom names a loop too, so it can be a
+    // compute_at site (loopdoc.md section 10). Both can convert to VarOrRVar, which exposes .name()
+    Func &compute_at(const Func &f, const VarOrRVar &var)
     {
         contents->level = FuncContents::Level::At;
         contents->at_func = f.contents;
         contents->at_var = var.name();
         return *this;
     }
-    // A reduction variable / 1-D RDom names a loop too, so it can be a
-    // compute_at site (loopdoc.md section 10). Both expose .name().
-    Func &compute_at(const Func &f, const RVar &r)
-    {
-        return compute_at(f, Var(r.name()));
-    }
-    Func &compute_at(const Func &f, const RDom &r)
-    {
-        return compute_at(f, Var(r.name()));
-    }
 
     // store_at / store_root: record the store level. See the note on
     // FuncContents -- the loop-nest effect (the `store` node) and legality are
     // for the micro-agent to implement from loopdoc.md section 8.
-    Func &store_at(const Func &f, const Var &var)
+    Func &store_at(const Func &f, const VarOrRVar &var)
     {
         contents->has_store_level = true;
         contents->store_is_root = false;
@@ -867,7 +901,7 @@ class Func: public FuncStageImpl<Func>
     // hoist_storage / hoist_storage_root: record the hoist-storage level. This
     // has NO effect on the printed nest; only legality (for the micro-agent to
     // implement from loopdoc.md section 8) depends on it.
-    Func &hoist_storage(const Func &f, const Var &var)
+    Func &hoist_storage(const Func &f, const VarOrRVar &var)
     {
         contents->has_hoist_level = true;
         contents->hoist_is_root = false;
