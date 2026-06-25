@@ -1530,7 +1530,12 @@ The whole loop nest follows from the rules above, assembled into one procedure:
        while its compute level is deeper (§8); everything below falls inside it.
        This is *per item*: in a fused group each member whose store level is outer
        gets its own `store` node here, and the common default — store level equal
-       to the (shared) compute level — prints **none**;
+       to the (shared) compute level — doesn't print anything. When several items
+       open a `store` node at this same level they **nest** (not siblings), in the
+       same order as their `produce` blocks — so the order *does* depend on whether
+       they share a fused group: ordinary items nest in realization order
+       (first-realized outermost, §6 tie-break by name), while members of one fused
+       group nest in the group's order (last-realized / parent outermost, §14);
      * **inject** the items filed at this `(f, stage, dim)` level (step 3), each
        emitted by *this same procedure* (the recursion), its `consume` wrapping
        the rest of the body;
