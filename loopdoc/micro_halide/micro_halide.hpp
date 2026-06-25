@@ -2523,7 +2523,14 @@ struct LoopNestPrinter
                 {
                     if (stage_reads(h, hs, f) && !site_encloses_use(g, gs, v, h, hs))
                     {
-                        fail(f, "it is read by a Func (or update stage) that is not "
+                        std::string stage_name = h->name;
+                        if (hs > 0) {
+                            stage_name += ".update(";
+                            stage_name += std::to_string(hs);
+                            stage_name += ")";
+                        }
+                        // Human: I added h and hs to the message.
+                        fail(f, "it is read by stage " + stage_name + " that is not "
                                 "computed inside the compute_at loop (the "
                                 "producer/consumer relationship is broken)");
                     }
