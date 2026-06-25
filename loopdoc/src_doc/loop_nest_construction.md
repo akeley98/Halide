@@ -1065,12 +1065,35 @@ Two more preconditions back loopdoc §14's "Legality" list:
   specializations**, neither stage is scheduled **inline**, and neither Func has
   an **extern definition** — all separate `user_assert`s, distinct from the
   compute-level equality.
-* **Stage order must be consistent.** `check_fused_stages_are_scheduled_in_order`
-  (`RealizationOrder.cpp` ~210) walks one Func's stages and requires the parent
-  stage index it fuses into to be non-decreasing (with a consecutiveness rule for
-  ties). This rejects e.g. `f.compute_with(g.update(0))` together with
-  `f.update(0).compute_with(g)` — there is no stage order making both parent
-  stages precede their children.
+* **Stage order must be consistent** — and yes, this is precisely an
+  acyclicity guard for the stage ordering, checked early.
+  `check_fused_stages_are_scheduled_in_order` (`RealizationOrder.cpp` ~210)
+  walks **one** Func `f`'s stages in order and, for each parent it fuses into,
+  keeps `max_stage_for_parent[parent] = {f-stage, parent-stage}`. As `f`'s stages
+  advance, the parent-stage index it targets must satisfy (~221):
+
+      is_correct = (fuse_level.stage_index() > max.parent_stage)
+                || (fuse_level.stage_index() == max.parent_stage && are_stages_consecutive);
+
+  i.e. **non-decreasing** parent-stage indices, with *equal* allowed only when the
+  `f`-stages are **consecutive** (`are_stages_consecutive` resets to false at any
+  non-fused stage). The reason is the hard, unavoidable order of `f`'s own stages
+  (`s0` before `s1` …): pinning an earlier `f`-stage to a *later* parent stage
+  than a later `f`-stage targets is a contradiction — a cycle in the combined
+  order — so it is rejected with *"impossible to establish correct stage order"*.
+  This is the source basis for loopdoc §14's "non-decreasing parent-stage indices"
+  rule (`f.s0`→`g.s1` with `f.s1`→`g.s0` fails). Note it is **per Func, per
+  parent** (the map is keyed by parent name), which is exactly why splitting one
+  Func's stages across *different* parents (`compute_with_two_parents`) is fine —
+  the targets `g.s0` and `h.s1` are in different map entries.
+
+  It is one of **three** cooperating ordering guards, not the whole sort:
+  `check_no_cyclic_compute_with` (~181) rejects cross-Func cycles (`f` fused into
+  `g` and `g` into `f`); this function rejects the per-Func-vs-one-parent
+  contradiction above with a clear early message; and `build_pipeline_group`'s
+  `stage_order` loop (~1755) is the actual topological sort, with its own
+  fallback cycle detection (*"There is a cycle inside of the fused group"*) for
+  anything the first two miss.
 
 ### Per-stage growth = `build_pipeline_group`'s `stage_order` loop
 
