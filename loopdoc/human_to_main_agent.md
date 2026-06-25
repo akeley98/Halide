@@ -1,5 +1,5 @@
 ## Human-added Tasks
 
-In no particular order, or all at once as one update:
-
-- [ ] Address `Human:` comments in loopdoc.md
+- [ ] Adversarial cases of interaction between `store_at` and fused groups causing the site func argument to `store_at` to be wrong (a fused away child)
+- [ ] Adversarial cases of indirect producer/consumer relations potentially making some `compute_with` not valid
+- [ ] Adversarial cases of `store:` being printed for multiple functions with the same site for `store_at`, with interaction with fused groups.

@@ -117,9 +117,14 @@ When writing the spawn prompt:
 
 * DO NOT paste anything derived from the Halide source. The whole experiment
   rests on the micro-agent reconstructing structure from `loopdoc.md` alone;
+
 * Remind it that its canonical instructions are `loopdoc/micro_agent.md`.
-* Stop putting clarifications, hints, sketched implementations and so on in the prompt for the micro-agent, except for extenuating circumstances approved by the human.
-  If some information needed, it's supposed to go into `loopdoc.md`, which means the info actually becomes part of the final artifact of this experiment instead of vanishing into the void.
+
+* Stop putting clarifications of Halide behavior, or hints/sketches of how to implement micro_halide,
+  in the prompt for the micro-agent, except for extenuating circumstances approved by the human.
+  If some information is needed, it's supposed to go into `loopdoc.md`,
+  which means the info actually becomes part of the final artifact of this experiment,
+  instead of into a temporary prompt that is difficult to audit or reproduce.
 
 After the micro-agent returns, BEFORE trusting its results:
 
