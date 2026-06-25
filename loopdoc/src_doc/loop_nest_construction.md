@@ -1045,10 +1045,26 @@ comes earlier, from `validate_fused_pair` in `RealizationOrder.cpp` (~88, the
 
 Two more preconditions back loopdoc §14's "Legality" list:
 
-* **Same compute level for all group members.** `validate_fused_group_was_legal`
-  also asserts the members' `compute_level()`s match, erroring *"the compute
+* **Same compute level for all group members.** The check is a single
+  `user_assert(func_1.schedule().compute_level() == func_2.schedule().compute_level())`
+  per fused pair (`src/ScheduleFunctions.cpp` ~2477), erroring *"the compute
   levels of f.s0 (…) and g.s0 (…) do not match"*. So a child's `compute_at` must
-  agree with the parent's; `compute_with` does not override it.
+  agree with the parent's; `compute_with` does not override it. Because it is
+  pairwise on a `LoopLevel` `==`, it transitively forces *every* member of a
+  connected group to one compute level — which is why the group injects as a
+  single nest at one level (`InjectFunctionRealization` is built with
+  `compute_level(funcs[0].schedule().compute_level())`, ~1190, and only ever
+  matches *that* level). Backs loopdoc §14's "single injection point" rationale
+  and `neg_compute_with_level_mismatch.cpp` / `compute_with_two_parents_at.cpp`.
+
+  **Is it exactly this strict? Yes — and it constrains *only* the compute level.**
+  It does *not* compare `store_level()`, so two fused members may have different
+  store levels (verified: `f.compute_at(out,y).store_root()` fused with
+  `g.compute_at(out,y)` is legal and just prints a `store f:` node at root). The
+  same site (~2455–2474) also requires: the child (`func_2`) has **no
+  specializations**, neither stage is scheduled **inline**, and neither Func has
+  an **extern definition** — all separate `user_assert`s, distinct from the
+  compute-level equality.
 * **Stage order must be consistent.** `check_fused_stages_are_scheduled_in_order`
   (`RealizationOrder.cpp` ~210) walks one Func's stages and requires the parent
   stage index it fuses into to be non-decreasing (with a consecutiveness rule for
