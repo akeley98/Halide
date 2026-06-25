@@ -30,7 +30,7 @@ As such, the implementation must be based only on the information provided by th
     * Append a one-line entry to the `DISCOVERED DOC GAPS` section at the bottom of
       `progress.txt`, in the format documented there:
         - [open] <feature/milestone> | <the specific question the doc couldn't answer> | <example file, if any>
-      State a concrete unanswered question ("does compute_at on an update stage move
+      If possible, state a concrete unanswered question ("does compute_at on an update stage move
       the pure stage too?"), not a vague "this section is confusing". Do not clear or
       edit existing entries; only append.
   This gap list is the primary product the main agent uses to improve the docs, so a
