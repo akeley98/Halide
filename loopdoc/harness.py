@@ -1,7 +1,7 @@
 import sys, os
 from dataclasses import dataclass
 from enum import Enum
-from signal import SIGSEGV, SIGBUS, raise_signal
+from signal import SIGSEGV, SIGBUS, SIGQUIT, SIGINT, raise_signal
 
 @dataclass
 class ExamplePath:
@@ -85,6 +85,9 @@ def my_system(cmd):
     status = os.system(cmd)
     sig = os.WTERMSIG(status)
     if sig not in (0, SIGSEGV, SIGBUS):
+        if sig == SIGQUIT:
+            # Work around the fact that MacOS devs are dumber than a box of rocks.
+            sig = SIGINT
         raise_signal(sig)
     return status
 
