@@ -1,6 +1,7 @@
 import sys, os
 from dataclasses import dataclass
 from enum import Enum
+from signal import SIGSEGV, SIGBUS, raise_signal
 
 @dataclass
 class ExamplePath:
@@ -76,6 +77,18 @@ build {e.micro_halide_log}: run_debug_0 {e.micro_halide_bin}
     out.close()
 
 
+def my_system(cmd):
+    """Passes through status code of os.system, except passes through signals other than SIGSEGV or SIGBUS
+    Fixes the issue where the harness was unkillable.
+
+    """
+    status = os.system(cmd)
+    sig = os.WTERMSIG(status)
+    if sig not in (0, SIGSEGV, SIGBUS):
+        raise_signal(sig)
+    return status
+
+
 def test_all():
     harness_log_fname = "harness_log.txt"
     harness_log = open(harness_log_fname, "w")
@@ -92,21 +105,21 @@ def test_all():
     # C++ build fails will be reported per-example below when we try to compile again in the serial loop.
     # (which will quickly exit for successful builds).
     all_bins = " ".join([e.halide_bin for e in example_paths] + [e.micro_halide_bin for e in example_paths])
-    os.system(f"ninja " + all_bins)
+    my_system(f"ninja " + all_bins)
 
     for e in example_paths:
-        halide_cpp_fail = 0 != os.system(f"ninja {e.halide_bin}")
-        micro_halide_cpp_fail = 0 != os.system(f"ninja {e.micro_halide_bin}")
+        halide_cpp_fail = 0 != my_system(f"ninja {e.halide_bin}")
+        micro_halide_cpp_fail = 0 != my_system(f"ninja {e.micro_halide_bin}")
         any_cpp_fail |= halide_cpp_fail | micro_halide_cpp_fail
         if halide_cpp_fail:
             print_log(f"Failed to compile C++: `ninja {e.halide_bin}` failed")
         if micro_halide_cpp_fail:
             print_log(f"Failed to compile C++: `ninja {e.micro_halide_bin}` failed")
         if not halide_cpp_fail and not micro_halide_cpp_fail:
-            os.system(f"ninja {e.halide_debug_2_log}")
-            os.system(f"ninja {e.halide_debug_1_log}")
-            halide_runtime_fail = 0 != os.system(f"ninja {e.halide_debug_0_log}")
-            micro_halide_runtime_fail = 0 != os.system(f"ninja {e.micro_halide_log}")
+            my_system(f"ninja {e.halide_debug_2_log}")
+            my_system(f"ninja {e.halide_debug_1_log}")
+            halide_runtime_fail = 0 != my_system(f"ninja {e.halide_debug_0_log}")
+            micro_halide_runtime_fail = 0 != my_system(f"ninja {e.micro_halide_log}")
 
             if halide_runtime_fail and not micro_halide_runtime_fail:
                 any_diff_fail = True
@@ -118,7 +131,7 @@ def test_all():
                 print_log(f"Negative example PASS: {e.cpp}")
             if not halide_runtime_fail and not micro_halide_runtime_fail:
                 diff_cmd = f"python3 canonicalize.py --diff {e.halide_debug_0_log} {e.micro_halide_log}"
-                diff_code = os.system(diff_cmd) >> 8
+                diff_code = my_system(diff_cmd) >> 8
                 if diff_code == 0:
                     print_log(f"Positive example PASS: {e.cpp}")
                 elif diff_code == 1:
