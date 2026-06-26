@@ -20,9 +20,9 @@ int main() {
         ImageParam in(type_of<uint8_t>(), 2, "in");
         Func f("f"), g("g"), out("out");
         f(x, y) = in(x, y);
-        f(x, y) += 1;
+        f(x, y) += in(x, y);
         g(x, y) = in(x, y);
-        g(x, y) += 1;
+        g(x, y) += in(x, y);
         out(x, y) = f(x, y) + g(x, y);
         f.compute_root();
         g.compute_root();
