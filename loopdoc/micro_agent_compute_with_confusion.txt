@@ -1,0 +1,73 @@
+Halide canonical body (from earlier):
+
+def F2  (f.s0)
+def F2  (f.s1)
+def F1  (g.s0)
+def F0; def F1; def F2  (fused block)
+def F0  (h.s1)
+def F0  (h.s2)
+def F1  (g.s2)
+Micro produces last three as: F1, F0, F0 — wait the diff showed micro has at the end: F1, F0, F0 vs halide F0, F0, F1. So micro emits g.s2 too early and h.s1/h.s2 wrong order? Let me look at the micro stage order. The free stages after the fused block: h.s1, h.s2, g.s2. Realization rank: f=0, g=1, h=2. So tie-break by realize_rank would pick g before h. That gives g.s2 before h.s1 — wrong. Halide gives h.s1, h.s2, then g.s2.
+
+So realize_rank tie-break is wrong here. Let me think about what Halide actually does. The order is h.s1, h.s2, g.s2. These are all "ready" after the fused block. h.s1 depends on h.s0 (done). g.s2 depends on g.s1 (done, in fused block). h.s1 < h.s2 (own order).
+
+Why does h come before g here? In realization order h is LAST (h=rank 2, g=rank 1). So this is NOT realization order. This looks like... the emission isn't a global Kahn with a single tie-break.
+
+Let me reconsider the doc: "stages are emitted by walking the members in realization order and emitting each member's stages as they become ready." Hmm, but realization order is f, g, h. That would emit f's stages first, then g's, then h's. But the actual order interleaves.
+
+Actually maybe Halide's algorithm is different: it builds the nest by growth — process stages in stage-order, and when a stage is spliced/emitted, the produce-anchor matters. Let me reconsider by looking at the "growth" model: order stages topologically, inject each. Let me figure out the topological stage order that produces this body.
+
+Halide body sequence: f.s0, f.s1, g.s0, h.s0(+g.s1+f.s2), h.s1, h.s2, g.s2.
+
+This is a specific topological order. Constraints: own order per func; parent before child (h.s0 before g.s1 before f.s2). Let me see what tie-break gives exactly this.
+
+Stages and their "ready" gating:
+
+f.s0 (ready immediately)
+f.s1 needs f.s0
+f.s2 needs f.s1 AND g.s1 (fused parent)
+g.s0 ready
+g.s1 needs g.s0 AND h.s0 (fused parent)
+g.s2 needs g.s1
+h.s0 ready
+h.s1 needs h.s0
+h.s2 needs h.s1
+The emitted order: f.s0, f.s1, g.s0, h.s0, [g.s1, f.s2 spliced under h.s0], h.s1, h.s2, g.s2.
+
+Note: the fused stages g.s1, f.s2 are spliced into h.s0's nest, so in the top-level body sequence they're not separate items. The top-level unfused stages emitted: f.s0, f.s1, g.s0, h.s0, h.s1, h.s2, g.s2.
+
+So the question is the ordering of the UNFUSED stages: f.s0, f.s1, g.s0, h.s0, h.s1, h.s2, g.s2.
+
+Let me figure out the tie-break. After f.s0, f.s1, g.s0 all emitted, the ready unfused stages are h.s0 (and g.s2 not ready since g.s1 not yet emitted — g.s1 is fused, emitted when h.s0 emitted). Emit h.s0 → triggers g.s1, f.s2 splice. Now g.s2 ready (g.s1 done) and h.s1 ready. Halide picks h.s1, h.s2, then g.s2.
+
+So initially: ready = {f.s0, g.s0, h.s0}. Halide picks f.s0 first. f=rank0(realize), g=rank1, h=rank2. So realize_rank picks f first. Good. Then f.s1 ready (and g.s0, h.s0). Picks f.s1 (f rank 0 still lowest). Then ready={g.s0, h.s0}: picks g.s0 (g rank1 < h rank2). Then ready={h.s0}: picks h.s0. After h.s0 → g.s1, f.s2 spliced. Now ready (unfused)={h.s1, g.s2}. Realize_rank: g=1 < h=2 → picks g.s2. But Halide picks h.s1!
+
+So realize_rank fails at this last step. Halide picks h.s1 over g.s2. Why?
+
+Hmm. The difference: after emitting h.s0, Halide continues with h's own subsequent stages (h.s1, h.s2) before going back to g.s2. This looks like once you "enter" a member you finish... no. Actually it picked f.s0 then f.s1 (consecutive f stages) — finishing f before moving to g. Then g.s0. Then h.s0, h.s1, h.s2 (finishing h). Then g.s2.
+
+So the pattern: it's processing in order f, then g, then h... but g.s2 comes last (after h)! Because g.s2 wasn't ready when g's other stages were processed (g.s1 fused, blocking g.s2 until h.s0 emitted).
+
+So it's: walk members in realization order (f, g, h), emit each member's currently-ready stages; a stage not ready is skipped and revisited. Let me model: this is like a stable scheduler that prefers the LOWEST realize_rank among ready, but with a twist... Actually let me reconsider: realize order f, g, h.
+
+Round: try f: emit f.s0, f.s1 (both become ready in sequence), f.s2 blocked (needs g.s1). try g: emit g.s0, g.s1 blocked (needs h.s0). try h: emit h.s0 → now g.s1 ready (spliced), f.s2 ready (spliced under g.s1). Continue h: h.s1, h.s2. Then loop again: f: f.s2 — but f.s2 is fused, spliced. g: g.s2 ready, emit.
+
+Hmm, this is getting complex. The fused stages get spliced automatically. Let me think about what determines the TOP-LEVEL sequence (unfused stages only): f.s0, f.s1, g.s0, h.s0, h.s1, h.s2, g.s2.
+
+This is exactly: sort unfused stages by (realize_rank, stage_index) BUT respecting the readiness constraint that an unfused stage S of member M can't be emitted until all fused stages that must precede it are emitted. g.s2 needs g.s1 (fused) emitted, and g.s1 needs h.s0. So g.s2 effectively depends on h.s0.
+
+So a pure realize_rank+stage_index sort would give: f.s0, f.s1, g.s0, g.s2, h.s0, h.s1, h.s2 — but g.s2 must come after h.s0 (transitively). With the readiness constraint, g.s2 gets bumped past h.s0, h.s1, h.s2.
+
+So the algorithm is: Kahn's where among ready stages, pick lowest (realize_rank, stage_index), BUT once g.s2 is delayed, where does it land? After h.s0 is emitted, g.s2 becomes ready. At that point ready = {g.s2, h.s1}. realize_rank g=1 < h=2, so it'd pick g.s2 — but Halide picks h.s1.
+
+So the global "pick lowest realize_rank" is wrong. The actual behavior is more like: emit in (realize_rank, stage) order, but a blocked stage is deferred and inserted at the point it becomes ready, AND when it becomes ready it goes AFTER stages already committed. Once we've moved on to h (rank 2), we don't go back to g until h is exhausted of ready stages.
+
+This is the classic Halide schedule_functions behavior: it iterates over the realization order of FUNCS, and for each func emits all its stages in order, but fused stages are injected at the parent. Let me think of it as: process members in realization order f, g, h. For each member, emit its stages in order. When emitting a stage that is a fuse PARENT, the children spliced in are emitted at that point. A stage that is a fuse CHILD is NOT emitted in its own member's pass (it's emitted when its parent is).
+
+Let me test this model:
+
+Member f (rank 0): f.s0 (unfused, emit), f.s1 (unfused, emit), f.s2 (fused child → skip, emitted at parent g.s1).
+Member g (rank 1): g.s0 (unfused, emit), g.s1 (fused child → skip, emitted at parent h.s0), g.s2 (unfused, emit?).
+But wait — if we emit g.s2 now (during g's pass), that's wrong because g.s2 must come after h.s0 (g.s1 must be emitted first, and g.s1 is at h.s0). So g.s2 emitted during g's pass would violate ordering.
+
+Hmm, but the output shows g.s2 LAST, after h. So g's pass does NOT emit g.s2 immediately. There must be a constraint: g.s2 can only emit after g.s1 emitted. g.s1 is fused at h.s0. So g.s2 is blocked during g's pass.
