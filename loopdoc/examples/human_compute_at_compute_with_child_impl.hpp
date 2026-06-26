@@ -16,15 +16,16 @@ using namespace Halide;
 // output to print.
 [[nodiscard]] int main_impl(bool compute_at_child) {
     try {
-        Var x("x"), y("y");
-        ImageParam in(type_of<uint8_t>(), 2, "in");
-        ImageParam in2(type_of<uint8_t>(), 2, "in");
-        Func parent("parent"), child("child"), g("g"), out("out");
+        Var x("x"), y("y"), z("z");
+        ImageParam in(type_of<uint8_t>(), 3, "in");
+        ImageParam in2(type_of<uint8_t>(), 3, "in");
+        Func parent("parent"), child("child"), h("h"), g("g"), out("out");
 
-        parent(x, y) = in(x, y);
-        g(x, y) = in2(x, y);
-        child(x, y) = in(x, y) + g(x, y) + g(x + 1, y) + g(x, y + 1);
-        out(x, y) = parent(x, y) + child(x, y);
+        parent(x, y, z) = in(x, y, z);
+        g(x, y, z) = in2(x, y, z);
+        h(x, y, z) = g(x, y, z);
+        child(x, y, z) = in(x, y, z) + h(x, y, z) + h(x + 1, y, z) + h(x, y + 1, z) + h(x, y, z + 1);
+        out(x, y, z) = parent(x, y, z) + child(x, y, z);
 
         parent.compute_root();
         child.compute_root();
@@ -32,10 +33,10 @@ using namespace Halide;
 
         child.compute_with(parent, y);
         if (compute_at_child) {
-            g.compute_at(child, y);
+            g.compute_at(child, z);
         }
         else {
-            g.compute_at(parent, y);
+            g.compute_at(parent, z);
         }
 
         g.store_root();
