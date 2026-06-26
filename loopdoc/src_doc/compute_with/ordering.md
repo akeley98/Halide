@@ -11,13 +11,20 @@ drives produce/consume nesting), and the **stage order** of the interleaved body
 
 ## Within-group realization order (`RealizationOrder.cpp`)
 
-After the group is collapsed to a dummy node (see [fused_groups](fused_groups.md)),
-sibling order in the DAG is decided by `sort_funcs_by_name_and_counter` (~256) —
-the (prefix, visitation counter, full name) tie-break, same as loopdoc §6. The
-members **within** a group are then ordered by their position in the topological
-result `temp` (~403), and `funcs.back()` is treated as the `group_parent` /
-spine owner by the emitter. Produce/consume nesting is the **reverse** of this
-order (`funcs.back()` outermost — see [growth](growth.md)).
+The child-before-parent constraint is a real graph edge: `collect_fused_pairs`
+(~127) does `graph[parent].push_back(child)` (~139) for every fuse pair, i.e. the
+child is treated as an ordering dependency of the parent (realized first) even
+though there is no value dependency. The whole group is then collapsed to a dummy
+node and the pipeline topologically sorted into `temp`; sibling order at each DAG
+node is the `sort_funcs_by_name_and_counter` (~256) tie-break (prefix, visitation
+counter, full name — loopdoc §6). The members **within** a group are then ordered
+by their position in `temp` (~403–409), so the order is: child before parent (the
+fuse edges), §6 tie-break for whatever the edges leave unordered. `funcs.back()`
+(the last member) is the `group_parent` / spine owner used by the emitter, and
+the produce/consume nesting is the **reverse** of this order (`funcs.back()`
+outermost — see [growth](growth.md)). Note this is a *second*, independent
+topological sort from the pipeline-wide realization order — the members have no
+producer/consumer edge to order them, only fuse edges.
 
 ## Stage order of the body (`build_pipeline_group`)
 
