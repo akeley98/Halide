@@ -82,6 +82,16 @@ sits *after* parent's body and wraps only child; at the parent it sits at the
 * `(member, v)` for any group member is a real scheduling site, located at that
   member's position in the interleaved body. `(parent, v)` is the top of the
   shared loop; `(child, v)` is the child's spot (after the members before it).
+* This holds for **every** shared loop, not only the fuse level: a non-parent's
+  loops from the outermost down to the fuse level are *all* pinned to extent 1
+  (step 3 rewrites each loop in `replacements` whose `min==max`), and they all sit
+  at the child's one spot at the fuse point. So `(child, v')` for a `v'` **above**
+  the fuse level resolves to that same spot — *not* to `v'`'s natural depth, and
+  *not* the same place as `(parent, v')`. Verified: with `child.compute_with(parent, y)`
+  (loops `z` outer, `y`, `x`), `g.compute_at(child, z)` lands `g` inside `fused.y`
+  at the child's spot (per-`y`), whereas `g.compute_at(parent, z)` lands it under
+  the real `fused.z`, above `fused.y` (per-`z`) —
+  `examples/human_compute_at_compute_with_child.cpp` / `_no.cpp`.
 * Computing a producer at `(child, v)` is therefore **legal exactly when the §7
   enclose-every-use rule holds** — i.e. when every use of the producer lies
   within that child's region (see [legality](legality.md)). When the producer is

@@ -1321,13 +1321,19 @@ so build it first. This mirrors Halide's `build_pipeline_group`
 `[loopdoc-trace]` lines in any fused example's `debug_1` log print the member
 order and the stage order directly):
 
-1. **Order the members, child before parent.** Each child precedes the parent it
-   fuses into, so the **spine owner** — Halide's `funcs.back()`, a member nothing
-   fuses into — comes **last**. Fuse edges that leave two members
-   unordered (e.g. several **direct** children of one parent) break by §6 (name,
-   then visitation); for a **chain** `g.compute_with(f)`, `h.compute_with(g)` the
-   order is deepest-child-first `h, g, f`. This is the group's within-group
-   realization order ([src_doc: compute_with/ordering](src_doc/compute_with/ordering.md)).
+1. **Order the members.** Topologically sort the members with **each child before
+   the parent it fuses into**, breaking any order the fuse edges leave (several
+   **direct** children of one parent, or one child's two parents) by the §6
+   realization order (name, then visitation). The members have no
+   producer/consumer dependency among themselves (a precondition), so the fuse
+   edges are the *only* ordering constraint. For a **chain** `g.compute_with(f)`,
+   `h.compute_with(g)` this is deepest-child-first `h, g, f`. The **last** member
+   in the order is the **spine owner**: it anchors the produce nesting (step 4)
+   and is the one member that keeps **real** shared loops (Loop ownership, below).
+   In the common case where one member is an ancestor of all the rest — children
+   fused into one parent, or a chain — that is "the parent". This is the group's
+   within-group realization order
+   ([src_doc: compute_with/ordering](src_doc/compute_with/ordering.md)).
 2. **Build the stage order, by a repeated sweep.** Walk the members in that order;
    for each, emit as many of its not-yet-placed stages as are **ready**, in stage
    order (`s0`, `s1`, …), then move to the next member; repeat the sweep until
@@ -1411,15 +1417,28 @@ verified via `[loopdoc-trace]`).
 
 ### Loop ownership: producers and elision
 
-Each member keeps its **own** copy of the shared loops, *at its own position* in
-the body: the **parent's** are the real loops, and each **non-parent's** shared
-loop is an extent-1 *scheduling point* pinned to the parent's, sitting at that
-member's slot. So `(member, v)` is a real **site** for *every* member, not just
-the parent — `(parent, v)` is the top of the shared loop, `(child, v)` is the
-child's slot (just before the child's body). They name the same iteration values
-but are *different injection points*. (Why, with source + trace:
-[src_doc: compute_with/member_sites](src_doc/compute_with/member_sites.md).) Two
-consequences:
+Only the **spine owner** (step 1) keeps **real** shared loops, at their natural
+depths. Every **other** member's shared loops — **all of them, from the
+outermost down to the fuse level `v`** — are collapsed to extent-1 *scheduling
+points* that all sit at **one place: that member's slot at the fuse point** (just
+before its body inside the shared `v` loop). They print no `for` line; they only
+mark injection sites. So a non-parent has **no loop at its natural depth** above
+`v` — its whole loop structure begins at the fuse point.
+
+This makes `(member, v')` a real **site** for *every* member and *every* shared
+`v'` at or above the fuse level — but the sites are at **different places**.
+`(spine-owner, v')` is the real `v'` loop, at `v'`'s depth. `(non-parent, v')` is
+that member's one slot **at the fuse point**, *regardless of which shared loop
+`v'` names* — so it does **not** match `(spine-owner, v')` even though the two
+loops were "fused together". [examples/human_compute_at_compute_with_child.cpp](examples/human_compute_at_compute_with_child.cpp)
+makes this concrete: `parent`/`child` fuse at `y` (loops `z` outer, `y`, `x`), and
+`g.compute_at(child, z)` realizes `g` **inside `fused.y`** at `child`'s slot
+(per-`y`), whereas
+[examples/human_compute_at_compute_with_child_no.cpp](examples/human_compute_at_compute_with_child_no.cpp)'s
+`g.compute_at(parent, z)` realizes `g` under the real `fused.z` loop, **above**
+`fused.y` (per-`z`). Same named loop `z`, different sites. (Why, with source +
+trace: [src_doc: compute_with/member_sites](src_doc/compute_with/member_sites.md).)
+Two consequences:
 
 * A producer computed at `(member, v)` lands at **that member's** slot, and its
   legality is the **ordinary §7 rule** — the site must enclose *every* use of the
@@ -1436,10 +1455,10 @@ consequences:
   producer there can keep a loop it would collapse at a plain `compute_at`; as
   always such elision is *declared*, not derived.)
 * **`micro_halide_collapses`** keys on the loop's **owner**: collapse a shared
-  loop by annotating the **parent** (a non-parent member's shared loop is already
-  an extent-1 scheduling point — not a printed `for` — so annotating *it* changes
-  nothing), and a below-`v` loop on the **member** that owns it (which may differ
-  between members).
+  loop by annotating the **spine owner** (any other member's shared loop is
+  already an extent-1 scheduling point — not a printed `for` — so annotating *it*
+  changes nothing), and a below-`v` loop on the **member** that owns it (which may
+  differ between members).
   [examples/compute_with_at.cpp](examples/compute_with_at.cpp) collapses the
   shared `y` via the parent alone.
 
@@ -1531,9 +1550,13 @@ The whole loop nest follows from the rules above, assembled into one procedure:
    (§12), and any `in`/`clone_in` wrapper or clone (§13), are likewise ordinary
    Funcs in this order — a wrapper/clone sits between the wrapped Func and the
    consumers it was created for — with whatever schedule each was given. A
-   **fused group** (§14) is ordered as a *unit*: the sort places the group as one
-   node, and within it the members take consecutive slots with the **group parent
-   last** — so the whole group realizes as one block (§14).
+   **fused group** (§14) is ordered as a *unit*: the sort treats the group as one
+   node (placed by the realization order of the whole group), and **within** the
+   group the members take consecutive slots in §14's within-group order — a
+   *second* topological sort, over the group's **fuse edges** (each child before
+   the parent it fuses into, §6 tie-break), since the members have no
+   producer/consumer dependency to order them. The whole group realizes as one
+   block (§14).
 
 3. **Give each realized Func a site.** A *realized* Func is any Func that is
    **not** a pure-inline Func — i.e. it gets its own `produce` block. Each goes
@@ -1544,9 +1567,10 @@ The whole loop nest follows from the rules above, assembled into one procedure:
        several Funcs are filed at the same `(g, v)`, they keep realization order;
      * a **non-pure inline** Func (§11) is filed at the innermost loop enclosing
        each of its uses — like a `compute_at` resolved independently per use site.
-     * the non-parent members of a **fused group** (§14) take *no* site of their
-       own — the whole group is filed once, at the **group parent's** site, and
-       the others are interleaved there when it is emitted (step 4).
+     * a **fused group** (§14) is filed *once*, as a unit, at the **one compute
+       level its members all share** (§14 requires they match); the individual
+       members take no site of their own and are interleaved there when the group
+       is emitted (step 4).
    Each realized Func also has a **store level** (§8), defaulting to its compute
    level. The level var `v` is a dimension of the site func's **(possibly transformed)
    dimension list** for the relevant stage (§3, §9): `split`/`fuse`/`reorder`/
