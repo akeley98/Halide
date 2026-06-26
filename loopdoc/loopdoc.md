@@ -1313,27 +1313,45 @@ or the same `compute_at` site); mismatched compute levels are an error.
 
 ### How the fused nest is built
 
-The group's loop nest grows one **stage** at a time. This mirrors how Halide
-actually assembles it ([src_doc: compute_with/growth](src_doc/compute_with/growth.md); the
-`[loopdoc-trace]` lines in any fused example's `debug_1` log show it directly):
+The whole group is assembled from **one stage order**: a single sequence listing
+every stage of every member, each spliced at its own fuse level. The body order,
+the produce nesting, and the legality rule below all fall out of this one order —
+so build it first. This mirrors Halide's `build_pipeline_group`
+([src_doc: compute_with/growth](src_doc/compute_with/growth.md); the
+`[loopdoc-trace]` lines in any fused example's `debug_1` log print the member
+order and the stage order directly):
 
-1. **Order the stages.** Put all stages of all members in a topological order
-   respecting (a) each Func's own stage order (s0 before s1 …) and (b) every fuse
-   edge (a parent stage before the child fused onto it).
-2. **Inject each stage at its own fuse level.** A stage with **no** fuse level
-   (an *unfused* stage — including the roots' stages) starts its **own** loop
-   nest, appended as a sibling. A **fused** child stage is **spliced into its
-   parent stage's** already-built nest: the two **share the loops from the
-   outermost down to that edge's `v`**, and the child's loops **below `v`** become
-   **siblings** inside, after the parent's body. (If `v` is innermost there are no
-   sub-loops — the bodies sit directly in the shared loop.)
-3. **Wrap with `produce`/`consume`.** Wrap the finished body in a `produce` (and
-   a `consume`) block for **every** member, nested so the **last-realized member
-   is outermost** (next subsection).
+1. **Order the members, child before parent.** Each child precedes the parent it
+   fuses into, so the **spine owner** — Halide's `funcs.back()`, a member nothing
+   fuses into — comes **last**. Fuse edges that leave two members
+   unordered (e.g. several **direct** children of one parent) break by §6 (name,
+   then visitation); for a **chain** `g.compute_with(f)`, `h.compute_with(g)` the
+   order is deepest-child-first `h, g, f`. This is the group's within-group
+   realization order ([src_doc: compute_with/ordering](src_doc/compute_with/ordering.md)).
+2. **Build the stage order, by a repeated sweep.** Walk the members in that order;
+   for each, emit as many of its not-yet-placed stages as are **ready**, in stage
+   order (`s0`, `s1`, …), then move to the next member; repeat the sweep until
+   every stage is placed. A stage is **ready** when all earlier stages of its own
+   Func are placed *and* — if it is fused — its parent stage is placed. So when a
+   member's next stage is blocked, that member is **skipped this sweep and
+   revisited later**, and its blocked stage can land *after* stages of members
+   that come later in the order. This sequence **is** the body/compute order.
+3. **Inject each stage at its fuse level.** An **unfused** stage (no fuse level —
+   including every spine-owner / root stage) starts its **own** loop nest,
+   appended as a sibling. A **fused** stage is **spliced into its parent stage's**
+   already-built nest: the two **share the loops from the outermost down to that
+   edge's `v`**, and the child's loops **below `v`** become **siblings** inside,
+   after the parent's body. (If `v` is innermost there are no sub-loops — the
+   bodies sit directly in the shared loop.)
+4. **Wrap with `produce`/`consume`.** Wrap the finished body in a `produce` (and a
+   `consume`) block for **every** member, nested in the **reverse** of the member
+   order — so the spine owner (last realized) is the **outermost** `produce`, and
+   the `consume` blocks mirror it and wrap the downstream consumer.
 
 The basic case — `f`, `g` both `compute_root`, `x` split into `xo, xi`,
-`g.compute_with(f, xo)`, `h = f + g` — has stage order `f.s0` (own nest), then
-`g.s0` (fused into `f.s0` at `xo`), giving
+`g.compute_with(f, xo)`, `h = f + g` — has members `g, f` (the spine owner `f`
+last) and stage order `f.s0` (own nest; `g.s0` was blocked when `g`'s turn came),
+then `g.s0` (spliced into `f.s0` at `xo`), giving
 ([examples/compute_with_split.cpp](examples/compute_with_split.cpp)):
 
 ```
@@ -1359,43 +1377,37 @@ stage between them — yet all of `f`'s stages still live under the single
 `produce f`, so §3's "one `produce` per Func" holds even though "consecutive"
 does not.
 
-### Member ordering
+### The two observable orders
 
-Both observable orders derive from the group's **within-group realization
-order**, so define that first. It is the **topological order of the fuse edges in
-which each child realizes before its parent** — so the group's spine owner (the
-member that is nobody's child; Halide's `funcs.back()` and the `produce`-nesting
-anchor) realizes **last**. The §6 tie-break (name, then visitation) orders *only*
-members that the fuse edges leave unordered — e.g. several **direct** children of
-one common parent. It is **not** a plain §6-name order with the owner moved last;
-that only coincides when names happen to match the fuse order. For a **chain**
-`g.compute_with(f)`, `h.compute_with(g)`, the order is deepest-child-first
-`h, g, f` ([examples/cwtest_mixed_tile_factor.cpp](examples/cwtest_mixed_tile_factor.cpp);
-verified via `[loopdoc-trace]`). Source walk-through:
-[src_doc: compute_with/ordering](src_doc/compute_with/ordering.md).
+The member order (step 1) and the stage order (step 2) give two orders that
+genuinely **diverge**. With `g.compute_with(f,y)`, `h.compute_with(f,y)` the
+produce blocks nest `f, h, g` (spine owner `f` outermost, the two children
+reversed) while the bodies run `f, g, h` (`f`'s stage first, then the children in
+§6 order) ([examples/compute_with_three.cpp](examples/compute_with_three.cpp)).
+The reverse-nesting holds even when the parent's name would sort it first
+([examples/compute_with_parent_alpha.cpp](examples/compute_with_parent_alpha.cpp)),
+and for a chain the member order is deepest-child-first, not §6 name
+([examples/cwtest_mixed_tile_factor.cpp](examples/cwtest_mixed_tile_factor.cpp)).
 
-* **`produce`/`consume` nesting** — the **reverse** of the realization order: the
-  last-realized member (the spine owner) is the **outermost** `produce`; the
-  `consume` blocks mirror it and wrap the downstream consumer. With one common
-  parent that reads as "parent outermost", and it holds even when the parent's
-  name would sort it first
-  ([examples/compute_with_parent_alpha.cpp](examples/compute_with_parent_alpha.cpp)).
-* **Body (compute) order** — stages are emitted by walking the members in
-  **realization order** and emitting each member's stages as they become *ready*:
-  a **free** (unfused) stage emits at its member's realization slot; a **fused**
-  child stage waits until its parent stage has been emitted, then is spliced in.
-  Two hard constraints underlie this — each Func's own stages in order (`s0`
-  before `s1` …), and each parent stage before the children fused onto it. With
-  all children fused directly into one parent this reads as "parent's stages
-  first, then the children in §6 order"; but **free/unfused stages follow the
-  realization order (child-before-parent), not §6 name** — two unfused pure
-  stages of a fused pair emit child-then-parent
-  ([examples/cwtest_overlapping_updates.cpp](examples/cwtest_overlapping_updates.cpp)).
+The **sweep** in step 2 is what makes the body order more than "each member's
+stages at its slot": it matters whenever a member's next stage is **blocked**. In
+[examples/cwtest_update_stage_diagonal.cpp](examples/cwtest_update_stage_diagonal.cpp)
+the members order `f, g, h` (`f.s2` fuses into `g.s1`, `g.s1` into `h.s0`) and
+`f.s1`, `g.s2` are unfused. Sweeping `f, g, h`:
 
-The two orders genuinely diverge: with `g.compute_with(f,y)`, `h.compute_with(f,y)`
-the bodies run `f, g, h` (parent first, then the §6-ordered children) while the
-produce blocks nest `f, h, g` (parent outermost, then the children reversed)
-([examples/compute_with_three.cpp](examples/compute_with_three.cpp)).
+* **`f`** emits `s0`, `s1`; `s2` blocks (its parent `g.s1` isn't placed yet).
+* **`g`** emits `s0`; `s1` blocks (parent `h.s0` not placed), stalling `g` — `s2`
+  is stuck behind it.
+* **`h`** emits `s0`, `s1`, `s2` (all unfused); placing `h.s0` unblocks `g.s1`.
+* second sweep — **`g`** emits `s1` (now ready; spliced into `h.s0`) then the free
+  `s2`; **`f`** emits `s2` (spliced into `g.s1`).
+
+Only the **unfused** stages start their own sibling nests, so the top-level body
+runs `f.s0, f.s1, g.s0, h.s0`(with `g.s1, f.s2` spliced in)`, h.s1, h.s2, g.s2`.
+The free `g.s2` lands **last**, after all of `h` — *not* "at `g`'s slot" — because
+`g` stalled in the first sweep behind its fused `s1` and was not revisited until
+`h.s0` freed it ([src_doc: compute_with/ordering](src_doc/compute_with/ordering.md);
+verified via `[loopdoc-trace]`).
 
 ### Loop ownership: producers and elision
 
@@ -1470,13 +1482,20 @@ compute_at rule:
   is the legal cross-parent case at a shared `compute_at(out, y)`. Note the rule
   is *exactly* compute-level equality — members may still have **different store
   levels**.
-* A Func's stages fused into a given parent must target **non-decreasing
-  parent-stage indices** as the Func's own stages advance — you cannot fuse
-  `f.s0` into `g.s1` and `f.s1` into `g.s0`. This is exactly a guard that the
-  stage ordering stays **acyclic**: `f`'s stages are forced into order (`s0`
-  before `s1`), so pinning `f.s0` to `g.s1` (later) but `f.s1` to `g.s0`
-  (earlier) is a contradiction. Halide checks it per Func, per parent, up front
-  ([src_doc: compute_with/legality](src_doc/compute_with/legality.md)).
+* The stage order (above) must **exist** — `compute_with` may not pin a Func's
+  stages so that no consistent order can. Since a Func's own stages are forced
+  into order (`s0` before `s1` …), as a Func's stages advance the parent-stage
+  index they fuse into must be **non-decreasing, and may repeat only across
+  *consecutive* fused stages** (no unfused stage in between). Two failure shapes:
+  a **decrease** — fuse `f.s0` into `g.s1` but `f.s1` into `g.s0`
+  ([examples/neg_cwtest_crossing_edges2.cpp](examples/neg_cwtest_crossing_edges2.cpp))
+  — and a **repeat across a gap** — fuse `f.s0` and `f.s2` both into `g.s0` while
+  `f.s1` is unfused
+  ([examples/neg_cwtest_crossing_edges1.cpp](examples/neg_cwtest_crossing_edges1.cpp)):
+  the unfused `f.s1` must sit strictly between `f.s0` and `f.s2`, yet both are
+  pinned to the single stage `g.s0`, leaving nowhere to put it. Either way Halide
+  rejects up front with *"impossible to establish correct stage order"* — checked
+  per Func, per parent ([src_doc: compute_with/legality](src_doc/compute_with/legality.md)).
 
 A **producer's `compute_at` legality** inside a fused group needs **no new
 rule** — it is exactly §7's principle, *the site must enclose every use of the
