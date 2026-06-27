@@ -1359,6 +1359,31 @@ of A fuses into a stage of B.
    stage can then land after stages of members ordered *after* it — see "The two
    observable orders".) This emitted sequence is the body/compute order. Emit each
    ready stage by:
+<!-- Human: this is a request for discussion that's too hard to type into the claude UI, not a request for an edit yet.
+
+My feeling is that "loop fusion" is a broken metaphor, both for loopdoc.md and for the real Halide.
+A side effect of this documentation may be to show that this is happening.
+When a child stage is "fused", what really seems to be happening is
+
+    * The child stage gets *all its loops* emitted at the level, including the "fused away" loops, EXCEPT:
+        - the "fused away" loops (i.e. the ones at or above the fuse level's var) get adjusted to extent-1 loops.
+        - the "fused into" loops (i.e. the parent loops at or above the fuse level's var) get their extents expanded to cover the iterations of the "fused away" loop if needed, with guarding or something inserted
+        - presumably uses of the "fused away" loop iterators get replaced with "fused into" loop iterators (invisible in print_loop_nest)
+        - actually thinking about it, the "fused into" loops may also be extent-1 in the f/g/h chain case.
+          so the guarding/extent-adjustment REALLY has to traverse the chain and find the "original parent" to adjust.
+          Given how complicated and poorly-tested this is, I wouldn't be surprised at all if there's catastrophic Halide compiler bugs here.
+          But this is bounds inference, not the micro-agent's concern.
+    * Much later (completely separate from this), all extent-1 loops get simplified away.
+      This is what micro_halide_collapses is for in this experiment, but the micro-agent should know a priori about the extent-1 loops here.
+
+After the simplification, this ostensibly has the same behavior as the informal "fuse all loops" description, but this is not what is really happening,
+and the illusion breaks when you try to name some of the "fused" loops with the child as the site-func.
+We knew before this was the case for compute_at, but also it turns out for compute_with per our current investigation.
+
+What is your take on this diagnosis?
+Is it supported by source code evidence?
+
+-->
      * **unfused** (no fuse level — including every spine-owner / root stage):
        start its own loop nest, appended as a sibling;
      * **fused**: splice it into its parent stage's nest at the edge's `v`. They
@@ -1486,6 +1511,17 @@ Two consequences:
   [examples/compute_with_at.cpp](examples/compute_with_at.cpp) collapses the
   shared `y` via the parent alone.
 
+The same collapse drives a chain subtlety: a child's fuse level into its parent
+should be **at or below the parent's own fuse level**. If a child fuses into a
+non-spine-owner parent at a loop *above* that parent's fuse level, the loop is one
+of the parent's collapsed dummies, so the child splices at the parent's slot and
+the child's loops below `v` re-materialize as real loops nested inside the spine
+owner's shared nest — recomputing the child redundantly (correct, just wasteful).
+[examples/compute_with_chain_outer.cpp](examples/compute_with_chain_outer.cpp) is
+this surprise (`f` fused outer than `g`);
+[_inner](examples/compute_with_chain_inner.cpp) and
+[_equal](examples/compute_with_chain_equal.cpp) are the well-behaved cases.
+
 ### Legality
 
 `compute_with` has its own preconditions, separate from the general
@@ -1559,6 +1595,18 @@ stages' iteration domains are aligned in the shared loop, and Halide inserts gua
 bounds and guards, not the `for`/`produce`/`consume` structure, so — like all
 bounds detail — they do not appear in the canonicalized nest and are not modeled
 here.
+
+### Known issue: inconsistent `tile` across a fused group
+
+Avoid fusing on a level `v` that is a `tile`/`split` *result* in one member but
+reached by a different (or no) `tile` in another member of the same group — i.e.
+the members arrive at `v` through inconsistent loop transforms. This is a genuine
+Halide bug, not a structural quirk: it can generate out-of-bounds accesses
+([Halide #4751](https://github.com/halide/Halide/issues/4751)). Other
+`compute_with` shapes — multi-child groups, chains, members with differing
+extents, even differing fuse levels — compute *correct* results; this
+inconsistent-tiling case is the one to steer clear of. (Not modeled here — no
+example exercises it.)
 
 
 ---
