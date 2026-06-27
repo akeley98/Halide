@@ -1318,16 +1318,12 @@ the same `compute_at` site); mismatched compute levels are an error.
 
 ### How the fused nest is built
 
-<!-- Human: stage order is mentioned for the first time in this section, 3 times, but nowhere is it really clarified how it's defined.
-Especially bad due to the advice to "build it first" [how? You just launch immediately into the list.].
-Is the stage order the order discovered by the repeated "emit the [ready] stages" step?
-Hence not really "built first", but "built concurrent with the loop nest" (metaphorically, `stage_order.compute_with(fused_nest)`)?
--->
-
-The whole group is assembled from one **stage order**: a single sequence listing
-every stage of every member, each spliced at its own fuse level. The body order,
-the produce nesting, and the legality rule below all follow from it, so build it
-first. This mirrors Halide's `build_pipeline_group`
+The group's stages are emitted into the shared nest in one **stage order**: a
+single sequence that interleaves every stage of every member, each spliced in at
+its own fuse level. This order is not computed up front — it is *discovered by the
+emission itself* (step 2 below), one ready stage at a time, as the nest grows. The
+body order, the produce nesting, and the legality rule all follow from this one
+sequence. The procedure mirrors Halide's `build_pipeline_group`
 ([src_doc: compute_with/growth](src_doc/compute_with/growth.md); the
 `[loopdoc-trace]` lines in any fused example's `debug_1` log print the member
 order and the stage order directly).
@@ -1344,12 +1340,15 @@ of A fuses into a stage of B.
    producer/consumer dependency among themselves (a precondition) and no cyclic
    fuse edges (Legality), so the fuse edges are the only ordering constraint and
    the sort is well-defined. A chain `g.compute_with(f)`, `h.compute_with(g)` is
-   deepest-child-first `h, g, f`. Call the last Func in this order the **spine
-   owner** — in the common case where one member is an ancestor of all the rest
-   (children fused into one parent, or a chain) it is just that ancestor. It has
-   two roles below: the outermost `produce` (step 3), and the sole owner of the
-   real shared loops (Loop ownership). This is the group's within-group
-   realization order
+   deepest-child-first `h, g, f`. The last Func in this order — whatever the
+   group's shape — is the **spine owner**. When one member is an ancestor of all
+   the rest (children fused into one parent, or a chain) that ancestor is the
+   spine owner; when none is — e.g. one child with two parents — it is simply
+   whichever Func the tie-break places last (`h` in
+   [examples/compute_with_two_parents.cpp](examples/compute_with_two_parents.cpp),
+   members `f, g, h`). It has two roles below: the outermost `produce` (step 3),
+   and the sole owner of the real shared loops (Loop ownership). This is the
+   group's within-group realization order
    ([src_doc: compute_with/ordering](src_doc/compute_with/ordering.md)).
 2. **Emit the stages, in a repeated sweep.** Walk the members in step-1 order and
    emit each member's stages in order (`s0`, `s1`, …) for as long as the next one
@@ -1444,12 +1443,16 @@ verified via `[loopdoc-trace]`).
 
 Step 2 noted that only the spine owner keeps real shared loops; every other
 member's shared loops collapse to extent-1 scheduling points at its splice
-position. The **surprising** part appears once two or more loops are shared: all
-of a non-parent's collapsed loops sit at the *same* place — its splice position
-at the fuse point — so naming any of them as a site resolves there, no matter
-which loop you named. A site `(non-parent, v')` for a shared `v'` *above* the fuse
-level is therefore not the same place as `(spine-owner, v')`, even though the two
-loops were fused together.
+position. This is about membership, not the parent/child role: in a chain
+`f`→`g`→`h` the middle func `g` is `f`'s parent yet still collapses, because it is
+not the spine owner — `f` splices into `g`'s collapsed slot, so `g`'s and `f`'s
+bodies end up siblings at `g`'s position inside `h`'s real loops. The
+**surprising** part appears once two or more loops are shared: all of such a
+member's collapsed loops sit at the *same* place — its splice position at the fuse
+point — so naming any of them as a site resolves there, no matter which loop you
+named. A site `(non-spine-owner, v')` for a shared `v'` *above* the fuse level is
+therefore not the same place as `(spine-owner, v')`, even though the two loops
+were fused together.
 
 [examples/human_compute_at_compute_with_child.cpp](examples/human_compute_at_compute_with_child.cpp)
 makes this concrete: `parent`/`child` fuse at `y` (loops `z` outer, `y`, `x`), and
@@ -1511,8 +1514,8 @@ compute_at rule:
   before the other. Halide rejects it up front — `f.compute_with(g, …)` together
   with `g.update(0).compute_with(f.update(0), …)` errors "Found cyclic
   dependencies between compute_with of f and g". (This is the cross-Func direction
-  cycle; the next bullet is the within-Func stage-index version.)
-<!-- Human: actually, the next bullet is the compute level stuff; the one after is the stage order. -->
+  cycle; the "stage order must exist" bullet below is the within-Func
+  stage-index version.)
 * All group members must share one compute level — the same `compute_root`, or the
   same `compute_at` site. This is not arbitrary: the whole group is injected as a
   single loop nest at that one compute level (one injection point), so every
