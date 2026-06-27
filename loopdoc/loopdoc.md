@@ -1359,31 +1359,6 @@ of A fuses into a stage of B.
    stage can then land after stages of members ordered *after* it — see "The two
    observable orders".) This emitted sequence is the body/compute order. Emit each
    ready stage by:
-<!-- Human: this is a request for discussion that's too hard to type into the claude UI, not a request for an edit yet.
-
-My feeling is that "loop fusion" is a broken metaphor, both for loopdoc.md and for the real Halide.
-A side effect of this documentation may be to show that this is happening.
-When a child stage is "fused", what really seems to be happening is
-
-    * The child stage gets *all its loops* emitted at the level, including the "fused away" loops, EXCEPT:
-        - the "fused away" loops (i.e. the ones at or above the fuse level's var) get adjusted to extent-1 loops.
-        - the "fused into" loops (i.e. the parent loops at or above the fuse level's var) get their extents expanded to cover the iterations of the "fused away" loop if needed, with guarding or something inserted
-        - presumably uses of the "fused away" loop iterators get replaced with "fused into" loop iterators (invisible in print_loop_nest)
-        - actually thinking about it, the "fused into" loops may also be extent-1 in the f/g/h chain case.
-          so the guarding/extent-adjustment REALLY has to traverse the chain and find the "original parent" to adjust.
-          Given how complicated and poorly-tested this is, I wouldn't be surprised at all if there's catastrophic Halide compiler bugs here.
-          But this is bounds inference, not the micro-agent's concern.
-    * Much later (completely separate from this), all extent-1 loops get simplified away.
-      This is what micro_halide_collapses is for in this experiment, but the micro-agent should know a priori about the extent-1 loops here.
-
-After the simplification, this ostensibly has the same behavior as the informal "fuse all loops" description, but this is not what is really happening,
-and the illusion breaks when you try to name some of the "fused" loops with the child as the site-func.
-We knew before this was the case for compute_at, but also it turns out for compute_with per our current investigation.
-
-What is your take on this diagnosis?
-Is it supported by source code evidence?
-
--->
      * **unfused** (no fuse level — including every spine-owner / root stage):
        start its own loop nest, appended as a sibling;
      * **fused**: splice it into its parent stage's nest at the edge's `v`. They
