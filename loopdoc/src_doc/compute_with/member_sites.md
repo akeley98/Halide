@@ -91,7 +91,13 @@ sits *after* parent's body and wraps only child; at the parent it sits at the
   (loops `z` outer, `y`, `x`), `g.compute_at(child, z)` lands `g` inside `fused.y`
   at the child's spot (per-`y`), whereas `g.compute_at(parent, z)` lands it under
   the real `fused.z`, above `fused.y` (per-`z`) —
-  `examples/human_compute_at_compute_with_child.cpp` / `_no.cpp`.
+  `examples/human_compute_at_compute_with_child.cpp` / `_no.cpp`. The dividing line
+  is spine-owner-vs-rest, not parent-vs-child: in a chain `f`→`g`→`h` (members
+  `f, g, h`, spine owner `h`) the *middle* func `g` is `f`'s parent yet collapses
+  too, so `g.compute_at(g_middle, z)`-style sites land at `g`'s slot inside `h`'s
+  real `for fused.z: for fused.y:` (per-`y`), and `f` splices into that same slot —
+  confirmed against real Halide (3D funcs, chain fused at `y`, producer at the
+  middle func).
 * Computing a producer at `(child, v)` is therefore **legal exactly when the §7
   enclose-every-use rule holds** — i.e. when every use of the producer lies
   within that child's region (see [legality](legality.md)). When the producer is
