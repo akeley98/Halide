@@ -1,0 +1,87 @@
+module name=output_5, target=arm-64-osx-arm_dot_prod-arm_fp16
+external_plus_metadata func output_5 (output$5) {
+assert(reinterpret<uint64>((struct halide_buffer_t *)output$5.buffer) != 0_u64, halide_error_buffer_argument_is_null("output$5"))
+let output$5 = (void *)_halide_buffer_get_host((struct halide_buffer_t *)output$5.buffer)
+let output$5.type = (uint32)_halide_buffer_get_type((struct halide_buffer_t *)output$5.buffer)
+let output$5.device_dirty = (uint1)_halide_buffer_get_device_dirty((struct halide_buffer_t *)output$5.buffer)
+let output$5.dimensions = _halide_buffer_get_dimensions((struct halide_buffer_t *)output$5.buffer)
+let output$5.min.0 = _halide_buffer_get_min((struct halide_buffer_t *)output$5.buffer, 0)
+let output$5.extent.0 = _halide_buffer_get_extent((struct halide_buffer_t *)output$5.buffer, 0)
+let output$5.stride.0 = _halide_buffer_get_stride((struct halide_buffer_t *)output$5.buffer, 0)
+let output$5.min.1 = _halide_buffer_get_min((struct halide_buffer_t *)output$5.buffer, 1)
+let output$5.extent.1 = _halide_buffer_get_extent((struct halide_buffer_t *)output$5.buffer, 1)
+let output$5.stride.1 = _halide_buffer_get_stride((struct halide_buffer_t *)output$5.buffer, 1)
+if ((uint1)_halide_buffer_is_bounds_query((struct halide_buffer_t *)output$5.buffer)) {
+ (struct halide_buffer_t *)_halide_buffer_init((struct halide_buffer_t *)output$5.buffer, (struct halide_dimension_t *)_halide_buffer_get_shape((struct halide_buffer_t *)output$5.buffer), reinterpret<(void *)>(0_u64), 0_u64, reinterpret<(struct halide_device_interface_t *)>(0_u64), 0, 32, 2, (struct halide_dimension_t *)make_struct(output$5.min.0, output$5.extent.0, 1, 0, output$5.min.1, output$5.extent.1, output$5.extent.0, 0), 0_u64)
+}
+if (!(uint1)_halide_buffer_is_bounds_query((struct halide_buffer_t *)output$5.buffer)) {
+ assert(output$5.type == 73728_u32, halide_error_bad_type("Output buffer output$5", output$5.type, 73728_u32))
+ assert(output$5.dimensions == 2, halide_error_bad_dimensions("Output buffer output$5", output$5.dimensions, 2))
+ assert(0 <= output$5.extent.0, halide_error_buffer_extents_negative("Output buffer output$5", 0, output$5.extent.0))
+ assert(0 <= output$5.extent.1, halide_error_buffer_extents_negative("Output buffer output$5", 1, output$5.extent.1))
+ assert(output$5.stride.0 == 1, halide_error_constraint_violated("output$5.stride.0", output$5.stride.0, "1", 1))
+ let output$5.total_extent.1 = int64(output$5.extent.1)*int64(output$5.extent.0)
+ assert((uint64)abs(int64(output$5.extent.0)) <= 2147483647_u64, halide_error_buffer_allocation_too_large("output$5", (uint64)abs(int64(output$5.extent.0)), 2147483647_u64))
+ assert((uint64)abs(int64(output$5.extent.1)*int64(output$5.stride.1)) <= 2147483647_u64, halide_error_buffer_allocation_too_large("output$5", (uint64)abs(int64(output$5.extent.1)*int64(output$5.stride.1)), 2147483647_u64))
+ assert(output$5.total_extent.1 <= 2147483647_i64, halide_error_buffer_extents_too_large("output$5", output$5.total_extent.1, 2147483647_i64))
+ assert(!output$5.device_dirty, halide_error_device_dirty_with_no_device_support("Output buffer output$5"))
+ assert(output$5 != reinterpret<(void *)>(0_u64), halide_error_host_is_null("Output buffer output$5"))
+ _halide_buffer_set_host_dirty((struct halide_buffer_t *)output$5.buffer, true)
+ allocate child_1$5[int32 * output$5.extent.0 * output$5.extent.1]
+ produce child_1$5 {
+  let t354 = output$5.min.0 + output$5.min.1
+  for (child_1$5.s0.y.rebased, 0, output$5.extent.1 + -1) {
+   let t356 = child_1$5.s0.y.rebased*output$5.extent.0
+   let t355 = child_1$5.s0.y.rebased + t354
+   for (child_1$5.s0.x.rebased, 0, output$5.extent.0 + -1) {
+    child_1$5[child_1$5.s0.x.rebased + t356] = child_1$5.s0.x.rebased + t355
+   }
+  }
+ }
+ allocate child_2$5[int32 * output$5.extent.1 * output$5.extent.0]
+ produce child_2$5 {
+  let t357 = output$5.min.0 + output$5.min.1
+  for (child_2$5.s0.y.rebased, 0, output$5.extent.0 + -1) {
+   let t359 = child_2$5.s0.y.rebased*output$5.extent.1
+   let t358 = child_2$5.s0.y.rebased + t357
+   for (child_2$5.s0.x.rebased, 0, output$5.extent.1 + -1) {
+    child_2$5[child_2$5.s0.x.rebased + t359] = child_2$5.s0.x.rebased + t358
+   }
+  }
+ }
+ allocate parent$5[int32 * output$5.extent.0 * output$5.extent.1]
+ produce parent$5 {
+  let t360 = output$5.min.0 + output$5.min.1
+  for (parent$5.s0.y.rebased, 0, output$5.extent.1 + -1) {
+   let t362 = output$5.extent.0*parent$5.s0.y.rebased
+   let t361 = parent$5.s0.y.rebased + t360
+   for (parent$5.s0.x.rebased, 0, output$5.extent.0 + -1) {
+    parent$5[parent$5.s0.x.rebased + t362] = parent$5.s0.x.rebased + t361
+   }
+  }
+ }
+ produce output$5 {
+  consume parent$5 {
+   consume child_2$5 {
+    consume child_1$5 {
+     let t363 = 0 - (output$5.min.1*output$5.stride.1)
+     for (output$5.s0.y.rebased, 0, output$5.extent.1 + -1) {
+      let t365 = ((output$5.min.1 + output$5.s0.y.rebased)*output$5.stride.1) + t363
+      for (output$5.s0.x.rebased, 0, output$5.extent.0 + -1) {
+       output$5[output$5.s0.x.rebased + t365] = 
+         let t366 = (output$5.extent.0*output$5.s0.y.rebased) + output$5.s0.x.rebased in
+         child_1$5[t366] + (child_2$5[(output$5.extent.1*output$5.s0.x.rebased) + output$5.s0.y.rebased] + parent$5[t366])
+
+      }
+     }
+    }
+   }
+  }
+ }
+ free child_1$5
+ free child_2$5
+ free parent$5
+}
+}
+
+

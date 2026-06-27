@@ -1,0 +1,169 @@
+module name=output_9, target=arm-64-osx-arm_dot_prod-arm_fp16
+external_plus_metadata func output_9 (output$9) {
+assert(reinterpret<uint64>((struct halide_buffer_t *)output$9.buffer) != 0_u64, halide_error_buffer_argument_is_null("output$9"))
+let output$9 = (void *)_halide_buffer_get_host((struct halide_buffer_t *)output$9.buffer)
+let output$9.type = (uint32)_halide_buffer_get_type((struct halide_buffer_t *)output$9.buffer)
+let output$9.device_dirty = (uint1)_halide_buffer_get_device_dirty((struct halide_buffer_t *)output$9.buffer)
+let output$9.dimensions = _halide_buffer_get_dimensions((struct halide_buffer_t *)output$9.buffer)
+let output$9.min.0 = _halide_buffer_get_min((struct halide_buffer_t *)output$9.buffer, 0)
+let output$9.extent.0 = _halide_buffer_get_extent((struct halide_buffer_t *)output$9.buffer, 0)
+let output$9.stride.0 = _halide_buffer_get_stride((struct halide_buffer_t *)output$9.buffer, 0)
+let output$9.min.1 = _halide_buffer_get_min((struct halide_buffer_t *)output$9.buffer, 1)
+let output$9.extent.1 = _halide_buffer_get_extent((struct halide_buffer_t *)output$9.buffer, 1)
+let output$9.stride.1 = _halide_buffer_get_stride((struct halide_buffer_t *)output$9.buffer, 1)
+if ((uint1)_halide_buffer_is_bounds_query((struct halide_buffer_t *)output$9.buffer)) {
+ (struct halide_buffer_t *)_halide_buffer_init((struct halide_buffer_t *)output$9.buffer, (struct halide_dimension_t *)_halide_buffer_get_shape((struct halide_buffer_t *)output$9.buffer), reinterpret<(void *)>(0_u64), 0_u64, reinterpret<(struct halide_device_interface_t *)>(0_u64), 0, 32, 2, (struct halide_dimension_t *)make_struct(output$9.min.0, output$9.extent.0, 1, 0, output$9.min.1, output$9.extent.1, output$9.extent.0, 0), 0_u64)
+}
+if (!(uint1)_halide_buffer_is_bounds_query((struct halide_buffer_t *)output$9.buffer)) {
+ assert(output$9.type == 73728_u32, halide_error_bad_type("Output buffer output$9", output$9.type, 73728_u32))
+ assert(output$9.dimensions == 2, halide_error_bad_dimensions("Output buffer output$9", output$9.dimensions, 2))
+ assert(0 <= output$9.extent.0, halide_error_buffer_extents_negative("Output buffer output$9", 0, output$9.extent.0))
+ assert(0 <= output$9.extent.1, halide_error_buffer_extents_negative("Output buffer output$9", 1, output$9.extent.1))
+ assert(output$9.stride.0 == 1, halide_error_constraint_violated("output$9.stride.0", output$9.stride.0, "1", 1))
+ let output$9.total_extent.1 = int64(output$9.extent.1)*int64(output$9.extent.0)
+ assert((uint64)abs(int64(output$9.extent.0)) <= 2147483647_u64, halide_error_buffer_allocation_too_large("output$9", (uint64)abs(int64(output$9.extent.0)), 2147483647_u64))
+ assert((uint64)abs(int64(output$9.extent.1)*int64(output$9.stride.1)) <= 2147483647_u64, halide_error_buffer_allocation_too_large("output$9", (uint64)abs(int64(output$9.extent.1)*int64(output$9.stride.1)), 2147483647_u64))
+ assert(output$9.total_extent.1 <= 2147483647_i64, halide_error_buffer_extents_too_large("output$9", output$9.total_extent.1, 2147483647_i64))
+ assert(!output$9.device_dirty, halide_error_device_dirty_with_no_device_support("Output buffer output$9"))
+ assert(output$9 != reinterpret<(void *)>(0_u64), halide_error_host_is_null("Output buffer output$9"))
+ _halide_buffer_set_host_dirty((struct halide_buffer_t *)output$9.buffer, true)
+ allocate parent$9[int32 * output$9.extent.0 * output$9.extent.1]
+ allocate child_2$9[int32 * output$9.extent.1 * output$9.extent.0]
+ allocate child_1$9[int32 * output$9.extent.0 * output$9.extent.1]
+ produce child_1$9 {
+  produce child_2$9 {
+   produce parent$9 {
+    let parent$9.s0.fused.y.prologue = min(max(output$9.min.0, output$9.min.1), max(output$9.extent.0 + output$9.min.0, output$9.extent.1 + output$9.min.1))
+    let parent$9.s0.fused.y.epilogue = let t1691 = (output$9.extent.0 + output$9.min.0) in (let t1692 = (output$9.extent.1 + output$9.min.1) in max(min(t1691, t1692), min(max(output$9.min.0, output$9.min.1), max(t1691, t1692))))
+    let parent$9.s0.fused.y.new_min = min(output$9.min.0, output$9.min.1)
+    let parent$9.s0.fused.y.new_max.s = max(min(max(output$9.extent.0 + output$9.min.0, output$9.extent.1 + output$9.min.1), parent$9.s0.fused.y.prologue), parent$9.s0.fused.y.new_min)
+    let t1632 = output$9.extent.0 + output$9.min.0
+    let t1633 = output$9.extent.1 + output$9.min.1
+    let t1627 = max(t1632, t1633)
+    let t1626 = min(output$9.min.0, output$9.min.1)
+    let t1625 = parent$9.s0.fused.y.new_max.s - parent$9.s0.fused.y.new_min
+    for (parent$9.s0.fused.y.rebased, 0, t1625 + -1) {
+     let parent$9.s0.fused.x.new_max.s = max(t1626, t1627)
+     let t1634 = parent$9.s0.fused.x.new_max.s - t1626
+     let t1638 = (((parent$9.s0.fused.y.new_min - output$9.min.0) + parent$9.s0.fused.y.rebased)*output$9.extent.1) + (t1626 - output$9.min.1)
+     let t1637 = (((parent$9.s0.fused.y.new_min - output$9.min.1) + parent$9.s0.fused.y.rebased)*output$9.extent.0) + (t1626 - output$9.min.0)
+     let t1636 = (parent$9.s0.fused.y.new_min + t1626) + parent$9.s0.fused.y.rebased
+     let t1635 = parent$9.s0.fused.y.new_min + parent$9.s0.fused.y.rebased
+     for (parent$9.s0.fused.x.rebased, 0, t1634 + -1) {
+      if (let t1693 = (parent$9.s0.fused.x.rebased + t1626) in ((((output$9.min.0 <= t1693) && ((t1693 + 1) <= t1632)) && ((t1635 + 1) <= t1633)) && (output$9.min.1 <= t1635))) {
+       parent$9[parent$9.s0.fused.x.rebased + t1637] = parent$9.s0.fused.x.rebased + t1636
+      }
+      if (let t1694 = (parent$9.s0.fused.x.rebased + t1626) in ((((output$9.min.1 <= t1694) && ((t1694 + 1) <= t1633)) && ((t1635 + 1) <= t1632)) && (output$9.min.0 <= t1635))) {
+       child_2$9[parent$9.s0.fused.x.rebased + t1638] = parent$9.s0.fused.x.rebased + t1636
+      }
+      if (let t1695 = (parent$9.s0.fused.x.rebased + t1626) in ((((output$9.min.0 <= t1695) && ((t1695 + 1) <= t1632)) && ((t1635 + 1) <= t1633)) && (output$9.min.1 <= t1635))) {
+       child_1$9[parent$9.s0.fused.x.rebased + t1637] = parent$9.s0.fused.x.rebased + t1636
+      }
+     }
+    }
+    let t1648 = output$9.extent.0 + output$9.min.0
+    let t1649 = output$9.extent.1 + output$9.min.1
+    let t1650 = max(t1648, t1649)
+    let t1651 = min(max(output$9.min.0, output$9.min.1), t1650)
+    let t1641 = max(min(t1648, t1649), t1651)
+    let t1642 = min(output$9.min.0, output$9.min.1)
+    let t1639 = parent$9.s0.fused.y.epilogue - parent$9.s0.fused.y.prologue
+    for (parent$9.s0.fused.y.rebased, 0, t1639 + -1) {
+     let parent_9.s0.fused.x.new_max$1.s = max(min(t1650, t1651), t1642)
+     let t1652 = parent_9.s0.fused.x.new_max$1.s - t1642
+     let t1655 = (((parent$9.s0.fused.y.prologue - output$9.min.0) + parent$9.s0.fused.y.rebased)*output$9.extent.1) + (t1642 - output$9.min.1)
+     let t1654 = (((parent$9.s0.fused.y.prologue - output$9.min.1) + parent$9.s0.fused.y.rebased)*output$9.extent.0) + (t1642 - output$9.min.0)
+     let t1653 = (parent$9.s0.fused.y.prologue + t1642) + parent$9.s0.fused.y.rebased
+     for (parent$9.s0.fused.x.rebased, 0, t1652 + -1) {
+      if (let t1696 = (parent$9.s0.fused.x.rebased + t1642) in ((output$9.min.0 <= t1696) && ((t1696 + 1) <= t1648))) {
+       parent$9[parent$9.s0.fused.x.rebased + t1654] = parent$9.s0.fused.x.rebased + t1653
+      }
+      if (let t1697 = (parent$9.s0.fused.x.rebased + t1642) in ((output$9.min.1 <= t1697) && ((t1697 + 1) <= t1649))) {
+       child_2$9[parent$9.s0.fused.x.rebased + t1655] = parent$9.s0.fused.x.rebased + t1653
+      }
+      if (let t1698 = (parent$9.s0.fused.x.rebased + t1642) in ((output$9.min.0 <= t1698) && ((t1698 + 1) <= t1648))) {
+       child_1$9[parent$9.s0.fused.x.rebased + t1654] = parent$9.s0.fused.x.rebased + t1653
+      }
+     }
+     let t1656 = t1641 - t1651
+     let t1659 = (((parent$9.s0.fused.y.prologue - output$9.min.0) + parent$9.s0.fused.y.rebased)*output$9.extent.1) + (t1651 - output$9.min.1)
+     let t1658 = (((parent$9.s0.fused.y.prologue - output$9.min.1) + parent$9.s0.fused.y.rebased)*output$9.extent.0) + (t1651 - output$9.min.0)
+     let t1657 = (parent$9.s0.fused.y.prologue + t1651) + parent$9.s0.fused.y.rebased
+     for (parent$9.s0.fused.x.rebased, 0, t1656 + -1) {
+      parent$9[parent$9.s0.fused.x.rebased + t1658] = parent$9.s0.fused.x.rebased + t1657
+      child_2$9[parent$9.s0.fused.x.rebased + t1659] = parent$9.s0.fused.x.rebased + t1657
+      child_1$9[parent$9.s0.fused.x.rebased + t1658] = parent$9.s0.fused.x.rebased + t1657
+     }
+     let parent_9.s0.fused.x.new_max$2.s = max(t1641, t1650)
+     let t1660 = parent_9.s0.fused.x.new_max$2.s - t1641
+     let t1663 = (((parent$9.s0.fused.y.prologue - output$9.min.0) + parent$9.s0.fused.y.rebased)*output$9.extent.1) + (t1641 - output$9.min.1)
+     let t1662 = (((parent$9.s0.fused.y.prologue - output$9.min.1) + parent$9.s0.fused.y.rebased)*output$9.extent.0) + (t1641 - output$9.min.0)
+     let t1661 = (parent$9.s0.fused.y.prologue + t1641) + parent$9.s0.fused.y.rebased
+     for (parent$9.s0.fused.x.rebased, 0, t1660 + -1) {
+      if (((parent$9.s0.fused.x.rebased + t1641) + 1) <= t1648) {
+       parent$9[parent$9.s0.fused.x.rebased + t1662] = parent$9.s0.fused.x.rebased + t1661
+      }
+      if (((parent$9.s0.fused.x.rebased + t1641) + 1) <= t1649) {
+       child_2$9[parent$9.s0.fused.x.rebased + t1663] = parent$9.s0.fused.x.rebased + t1661
+      }
+      if (((parent$9.s0.fused.x.rebased + t1641) + 1) <= t1648) {
+       child_1$9[parent$9.s0.fused.x.rebased + t1662] = parent$9.s0.fused.x.rebased + t1661
+      }
+     }
+    }
+    let parent_9.s0.fused.y.old_max$1.s = max(output$9.extent.0 + output$9.min.0, output$9.extent.1 + output$9.min.1)
+    let parent_9.s0.fused.y.new_max$1.s = max(min(max(output$9.extent.0 + output$9.min.0, output$9.extent.1 + output$9.min.1), parent_9.s0.fused.y.old_max$1.s), parent$9.s0.fused.y.epilogue)
+    let t1671 = output$9.extent.0 + output$9.min.0
+    let t1672 = output$9.extent.1 + output$9.min.1
+    let t1666 = max(t1671, t1672)
+    let t1665 = min(output$9.min.0, output$9.min.1)
+    let t1664 = parent_9.s0.fused.y.new_max$1.s - parent$9.s0.fused.y.epilogue
+    for (parent$9.s0.fused.y.rebased, 0, t1664 + -1) {
+     let parent_9.s0.fused.x.new_max$3.s = max(t1665, t1666)
+     let t1679 = (parent$9.s0.fused.y.epilogue + parent$9.s0.fused.y.rebased) + 1
+     let t1674 = t1679 <= t1672
+     let t1677 = t1679 <= t1671
+     let t1673 = parent_9.s0.fused.x.new_max$3.s - t1665
+     let t1678 = (((parent$9.s0.fused.y.epilogue - output$9.min.0) + parent$9.s0.fused.y.rebased)*output$9.extent.1) + (t1665 - output$9.min.1)
+     let t1676 = (((parent$9.s0.fused.y.epilogue - output$9.min.1) + parent$9.s0.fused.y.rebased)*output$9.extent.0) + (t1665 - output$9.min.0)
+     let t1675 = (parent$9.s0.fused.y.epilogue + t1665) + parent$9.s0.fused.y.rebased
+     for (parent$9.s0.fused.x.rebased, 0, t1673 + -1) {
+      if (let t1699 = (parent$9.s0.fused.x.rebased + t1665) in (((output$9.min.0 <= t1699) && ((t1699 + 1) <= t1671)) && t1674)) {
+       parent$9[parent$9.s0.fused.x.rebased + t1676] = parent$9.s0.fused.x.rebased + t1675
+      }
+      if (let t1700 = (parent$9.s0.fused.x.rebased + t1665) in (((output$9.min.1 <= t1700) && ((t1700 + 1) <= t1672)) && t1677)) {
+       child_2$9[parent$9.s0.fused.x.rebased + t1678] = parent$9.s0.fused.x.rebased + t1675
+      }
+      if (let t1701 = (parent$9.s0.fused.x.rebased + t1665) in (((output$9.min.0 <= t1701) && ((t1701 + 1) <= t1671)) && t1674)) {
+       child_1$9[parent$9.s0.fused.x.rebased + t1676] = parent$9.s0.fused.x.rebased + t1675
+      }
+     }
+    }
+   }
+  }
+ }
+ produce output$9 {
+  consume child_1$9 {
+   consume child_2$9 {
+    consume parent$9 {
+     let t1680 = 0 - (output$9.min.1*output$9.stride.1)
+     for (output$9.s0.y.rebased, 0, output$9.extent.1 + -1) {
+      let t1682 = ((output$9.min.1 + output$9.s0.y.rebased)*output$9.stride.1) + t1680
+      for (output$9.s0.x.rebased, 0, output$9.extent.0 + -1) {
+       output$9[output$9.s0.x.rebased + t1682] = 
+         let t1702 = (output$9.extent.0*output$9.s0.y.rebased) + output$9.s0.x.rebased in
+         child_1$9[t1702] + (child_2$9[(output$9.extent.1*output$9.s0.x.rebased) + output$9.s0.y.rebased] + parent$9[t1702])
+
+      }
+     }
+    }
+   }
+  }
+ }
+ free parent$9
+ free child_2$9
+ free child_1$9
+}
+}
+
+

@@ -1,0 +1,190 @@
+module name=output_2, target=arm-64-osx-arm_dot_prod-arm_fp16
+external_plus_metadata func output_2 (output$2) {
+assert(reinterpret<uint64>((struct halide_buffer_t *)output$2.buffer) != 0_u64, halide_error_buffer_argument_is_null("output$2"))
+let output$2 = (void *)_halide_buffer_get_host((struct halide_buffer_t *)output$2.buffer)
+let output$2.type = (uint32)_halide_buffer_get_type((struct halide_buffer_t *)output$2.buffer)
+let output$2.device_dirty = (uint1)_halide_buffer_get_device_dirty((struct halide_buffer_t *)output$2.buffer)
+let output$2.dimensions = _halide_buffer_get_dimensions((struct halide_buffer_t *)output$2.buffer)
+let output$2.min.0 = _halide_buffer_get_min((struct halide_buffer_t *)output$2.buffer, 0)
+let output$2.extent.0 = _halide_buffer_get_extent((struct halide_buffer_t *)output$2.buffer, 0)
+let output$2.stride.0 = _halide_buffer_get_stride((struct halide_buffer_t *)output$2.buffer, 0)
+let output$2.min.1 = _halide_buffer_get_min((struct halide_buffer_t *)output$2.buffer, 1)
+let output$2.extent.1 = _halide_buffer_get_extent((struct halide_buffer_t *)output$2.buffer, 1)
+let output$2.stride.1 = _halide_buffer_get_stride((struct halide_buffer_t *)output$2.buffer, 1)
+let output$2.min.2 = _halide_buffer_get_min((struct halide_buffer_t *)output$2.buffer, 2)
+let output$2.extent.2 = _halide_buffer_get_extent((struct halide_buffer_t *)output$2.buffer, 2)
+let output$2.stride.2 = _halide_buffer_get_stride((struct halide_buffer_t *)output$2.buffer, 2)
+if ((uint1)_halide_buffer_is_bounds_query((struct halide_buffer_t *)output$2.buffer)) {
+ (struct halide_buffer_t *)_halide_buffer_init((struct halide_buffer_t *)output$2.buffer, (struct halide_dimension_t *)_halide_buffer_get_shape((struct halide_buffer_t *)output$2.buffer), reinterpret<(void *)>(0_u64), 0_u64, reinterpret<(struct halide_device_interface_t *)>(0_u64), 0, 32, 3, (struct halide_dimension_t *)make_struct(output$2.min.0, output$2.extent.0, 1, 0, output$2.min.1, output$2.extent.1, output$2.extent.0, 0, output$2.min.2, output$2.extent.2, output$2.extent.0*output$2.extent.1, 0), 0_u64)
+}
+if (!(uint1)_halide_buffer_is_bounds_query((struct halide_buffer_t *)output$2.buffer)) {
+ assert(output$2.type == 73728_u32, halide_error_bad_type("Output buffer output$2", output$2.type, 73728_u32))
+ assert(output$2.dimensions == 3, halide_error_bad_dimensions("Output buffer output$2", output$2.dimensions, 3))
+ assert(0 <= output$2.extent.0, halide_error_buffer_extents_negative("Output buffer output$2", 0, output$2.extent.0))
+ assert(0 <= output$2.extent.1, halide_error_buffer_extents_negative("Output buffer output$2", 1, output$2.extent.1))
+ assert(0 <= output$2.extent.2, halide_error_buffer_extents_negative("Output buffer output$2", 2, output$2.extent.2))
+ assert(output$2.stride.0 == 1, halide_error_constraint_violated("output$2.stride.0", output$2.stride.0, "1", 1))
+ let output$2.total_extent.1 = int64(output$2.extent.1)*int64(output$2.extent.0)
+ let output$2.total_extent.2 = output$2.total_extent.1*int64(output$2.extent.2)
+ assert((uint64)abs(int64(output$2.extent.0)) <= 2147483647_u64, halide_error_buffer_allocation_too_large("output$2", (uint64)abs(int64(output$2.extent.0)), 2147483647_u64))
+ assert((uint64)abs(int64(output$2.extent.1)*int64(output$2.stride.1)) <= 2147483647_u64, halide_error_buffer_allocation_too_large("output$2", (uint64)abs(int64(output$2.extent.1)*int64(output$2.stride.1)), 2147483647_u64))
+ assert(output$2.total_extent.1 <= 2147483647_i64, halide_error_buffer_extents_too_large("output$2", output$2.total_extent.1, 2147483647_i64))
+ assert((uint64)abs(int64(output$2.extent.2)*int64(output$2.stride.2)) <= 2147483647_u64, halide_error_buffer_allocation_too_large("output$2", (uint64)abs(int64(output$2.extent.2)*int64(output$2.stride.2)), 2147483647_u64))
+ assert(output$2.total_extent.2 <= 2147483647_i64, halide_error_buffer_extents_too_large("output$2", output$2.total_extent.2, 2147483647_i64))
+ assert(!output$2.device_dirty, halide_error_device_dirty_with_no_device_support("Output buffer output$2"))
+ assert(output$2 != reinterpret<(void *)>(0_u64), halide_error_host_is_null("Output buffer output$2"))
+ _halide_buffer_set_host_dirty((struct halide_buffer_t *)output$2.buffer, true)
+ allocate h$2[int32 * output$2.extent.0 * output$2.extent.1 * output$2.extent.2]
+ allocate g$2[int32 * output$2.extent.0 * output$2.extent.1 * output$2.extent.2]
+ allocate f$2[int32 * output$2.extent.2 * output$2.extent.1 * output$2.extent.0]
+ produce f$2 {
+  produce g$2 {
+   produce h$2 {
+    let h$2.s0.fused.z.prologue = min(max(output$2.min.0, output$2.min.2), max(output$2.extent.2 + output$2.min.2, output$2.extent.0 + output$2.min.0))
+    let h$2.s0.fused.z.epilogue = let t249 = (output$2.extent.0 + output$2.min.0) in (let t250 = (output$2.extent.2 + output$2.min.2) in max(min(t249, t250), min(max(output$2.min.0, output$2.min.2), max(t250, t249))))
+    let h$2.s0.fused.z.new_min = min(output$2.min.0, output$2.min.2)
+    let h$2.s0.fused.z.new_max.s = max(min(max(output$2.extent.0 + output$2.min.0, output$2.extent.2 + output$2.min.2), h$2.s0.fused.z.prologue), h$2.s0.fused.z.new_min)
+    let t173 = h$2.s0.fused.z.new_max.s - h$2.s0.fused.z.new_min
+    for (h$2.s0.fused.z.rebased, 0, t173 + -1) {
+     if (let t251 = (h$2.s0.fused.z.new_min + h$2.s0.fused.z.rebased) in ((output$2.min.2 <= t251) && ((t251 + 1) <= (output$2.extent.2 + output$2.min.2)))) {
+      let t181 = (output$2.extent.0*output$2.extent.1)*((h$2.s0.fused.z.new_min - output$2.min.2) + h$2.s0.fused.z.rebased)
+      let t180 = ((h$2.s0.fused.z.new_min + h$2.s0.fused.z.rebased)*100) + output$2.min.0
+      for (h$2.s0.fused.y.rebased, 0, output$2.extent.1 + -1) {
+       let t183 = (h$2.s0.fused.y.rebased*output$2.extent.0) + t181
+       let t182 = ((h$2.s0.fused.y.rebased + output$2.min.1)*10) + t180
+       for (h$2.s0.x.rebased, 0, output$2.extent.0 + -1) {
+        h$2[h$2.s0.x.rebased + t183] = (h$2.s0.x.rebased + t182) + 2
+       }
+      }
+     }
+     let t190 = h$2.s0.fused.z.new_min + h$2.s0.fused.z.rebased
+     let t191 = t190*100
+     let t192 = t190 + 1
+     let t184 = (output$2.min.2 <= t190) && (t192 <= (output$2.extent.2 + output$2.min.2))
+     let t187 = (output$2.min.0 <= t190) && (t192 <= (output$2.extent.0 + output$2.min.0))
+     let t186 = (output$2.extent.0*output$2.extent.1)*((h$2.s0.fused.z.new_min - output$2.min.2) + h$2.s0.fused.z.rebased)
+     let t189 = (output$2.extent.1*output$2.extent.2)*((h$2.s0.fused.z.new_min - output$2.min.0) + h$2.s0.fused.z.rebased)
+     let t188 = output$2.min.2 + t191
+     let t185 = output$2.min.0 + t191
+     for (g$2.s0.y.rebased, 0, output$2.extent.1 + -1) {
+      if (t184) {
+       let t194 = (g$2.s0.y.rebased*output$2.extent.0) + t186
+       let t193 = ((g$2.s0.y.rebased + output$2.min.1)*10) + t185
+       for (g$2.s0.x.rebased, 0, output$2.extent.0 + -1) {
+        g$2[g$2.s0.x.rebased + t194] = (g$2.s0.x.rebased + t193) + 1
+       }
+      }
+      if (t187) {
+       let t196 = (g$2.s0.y.rebased*output$2.extent.2) + t189
+       let t195 = ((g$2.s0.y.rebased + output$2.min.1)*10) + t188
+       for (f$2.s0.x.rebased, 0, output$2.extent.2 + -1) {
+        f$2[f$2.s0.x.rebased + t196] = f$2.s0.x.rebased + t195
+       }
+      }
+     }
+    }
+    let t197 = h$2.s0.fused.z.epilogue - h$2.s0.fused.z.prologue
+    for (h$2.s0.fused.z.rebased, 0, t197 + -1) {
+     let t203 = (output$2.extent.0*output$2.extent.1)*((h$2.s0.fused.z.prologue - output$2.min.2) + h$2.s0.fused.z.rebased)
+     let t202 = ((h$2.s0.fused.z.prologue + h$2.s0.fused.z.rebased)*100) + output$2.min.0
+     for (h$2.s0.fused.y.rebased, 0, output$2.extent.1 + -1) {
+      let t205 = (h$2.s0.fused.y.rebased*output$2.extent.0) + t203
+      let t204 = ((h$2.s0.fused.y.rebased + output$2.min.1)*10) + t202
+      for (h$2.s0.x.rebased, 0, output$2.extent.0 + -1) {
+       h$2[h$2.s0.x.rebased + t205] = (h$2.s0.x.rebased + t204) + 2
+      }
+     }
+     let t210 = (h$2.s0.fused.z.prologue + h$2.s0.fused.z.rebased)*100
+     let t207 = (output$2.extent.0*output$2.extent.1)*((h$2.s0.fused.z.prologue - output$2.min.2) + h$2.s0.fused.z.rebased)
+     let t209 = (output$2.extent.1*output$2.extent.2)*((h$2.s0.fused.z.prologue - output$2.min.0) + h$2.s0.fused.z.rebased)
+     let t208 = output$2.min.2 + t210
+     let t206 = output$2.min.0 + t210
+     for (g$2.s0.y.rebased, 0, output$2.extent.1 + -1) {
+      let t212 = (g$2.s0.y.rebased*output$2.extent.0) + t207
+      let t211 = ((g$2.s0.y.rebased + output$2.min.1)*10) + t206
+      for (g$2.s0.x.rebased, 0, output$2.extent.0 + -1) {
+       g$2[g$2.s0.x.rebased + t212] = (g$2.s0.x.rebased + t211) + 1
+      }
+      let t214 = (g$2.s0.y.rebased*output$2.extent.2) + t209
+      let t213 = ((g$2.s0.y.rebased + output$2.min.1)*10) + t208
+      for (f$2.s0.x.rebased, 0, output$2.extent.2 + -1) {
+       f$2[f$2.s0.x.rebased + t214] = f$2.s0.x.rebased + t213
+      }
+     }
+    }
+    let h_2.s0.fused.z.old_max$1.s = max(output$2.extent.2 + output$2.min.2, output$2.extent.0 + output$2.min.0)
+    let h_2.s0.fused.z.new_max$1.s = max(min(max(output$2.extent.0 + output$2.min.0, output$2.extent.2 + output$2.min.2), h_2.s0.fused.z.old_max$1.s), h$2.s0.fused.z.epilogue)
+    let t215 = h_2.s0.fused.z.new_max$1.s - h$2.s0.fused.z.epilogue
+    for (h$2.s0.fused.z.rebased, 0, t215 + -1) {
+     if (((h$2.s0.fused.z.epilogue + h$2.s0.fused.z.rebased) + 1) <= (output$2.extent.2 + output$2.min.2)) {
+      let t223 = (output$2.extent.0*output$2.extent.1)*((h$2.s0.fused.z.epilogue - output$2.min.2) + h$2.s0.fused.z.rebased)
+      let t222 = ((h$2.s0.fused.z.epilogue + h$2.s0.fused.z.rebased)*100) + output$2.min.0
+      for (h$2.s0.fused.y.rebased, 0, output$2.extent.1 + -1) {
+       let t225 = (h$2.s0.fused.y.rebased*output$2.extent.0) + t223
+       let t224 = ((h$2.s0.fused.y.rebased + output$2.min.1)*10) + t222
+       for (h$2.s0.x.rebased, 0, output$2.extent.0 + -1) {
+        h$2[h$2.s0.x.rebased + t225] = (h$2.s0.x.rebased + t224) + 2
+       }
+      }
+     }
+     let t232 = h$2.s0.fused.z.epilogue + h$2.s0.fused.z.rebased
+     let t233 = t232*100
+     let t234 = t232 + 1
+     let t226 = t234 <= (output$2.extent.2 + output$2.min.2)
+     let t229 = t234 <= (output$2.extent.0 + output$2.min.0)
+     let t228 = (output$2.extent.0*output$2.extent.1)*((h$2.s0.fused.z.epilogue - output$2.min.2) + h$2.s0.fused.z.rebased)
+     let t231 = (output$2.extent.1*output$2.extent.2)*((h$2.s0.fused.z.epilogue - output$2.min.0) + h$2.s0.fused.z.rebased)
+     let t230 = output$2.min.2 + t233
+     let t227 = output$2.min.0 + t233
+     for (g$2.s0.y.rebased, 0, output$2.extent.1 + -1) {
+      if (t226) {
+       let t236 = (g$2.s0.y.rebased*output$2.extent.0) + t228
+       let t235 = ((g$2.s0.y.rebased + output$2.min.1)*10) + t227
+       for (g$2.s0.x.rebased, 0, output$2.extent.0 + -1) {
+        g$2[g$2.s0.x.rebased + t236] = (g$2.s0.x.rebased + t235) + 1
+       }
+      }
+      if (t229) {
+       let t238 = (g$2.s0.y.rebased*output$2.extent.2) + t231
+       let t237 = ((g$2.s0.y.rebased + output$2.min.1)*10) + t230
+       for (f$2.s0.x.rebased, 0, output$2.extent.2 + -1) {
+        f$2[f$2.s0.x.rebased + t238] = f$2.s0.x.rebased + t237
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+ produce output$2 {
+  consume f$2 {
+   consume g$2 {
+    consume h$2 {
+     let t241 = 0 - ((output$2.min.2*output$2.stride.2) + (output$2.min.1*output$2.stride.1))
+     for (output$2.s0.z.rebased, 0, output$2.extent.2 + -1) {
+      let t242 = (output$2.extent.0*output$2.extent.1)*output$2.s0.z.rebased
+      let t244 = ((output$2.min.2 + output$2.s0.z.rebased)*output$2.stride.2) + t241
+      for (output$2.s0.y.rebased, 0, output$2.extent.1 + -1) {
+       let t247 = output$2.extent.1*output$2.extent.2
+       let t248 = ((output$2.min.1 + output$2.s0.y.rebased)*output$2.stride.1) + t244
+       let t245 = (output$2.extent.0*output$2.s0.y.rebased) + t242
+       let t246 = (output$2.extent.2*output$2.s0.y.rebased) + output$2.s0.z.rebased
+       for (output$2.s0.x.rebased, 0, output$2.extent.0 + -1) {
+        output$2[output$2.s0.x.rebased + t248] = 
+          let t252 = output$2.s0.x.rebased + t245 in
+          g$2[t252] + (f$2[(output$2.s0.x.rebased*t247) + t246] + h$2[t252])
+
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+ free h$2
+ free g$2
+ free f$2
+}
+}
+
+
