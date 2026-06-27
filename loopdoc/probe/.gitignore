@@ -1,0 +1,4 @@
+# Compiled probe binaries (build artifacts). Keep the .cpp sources, .stmt dumps,
+# and .md write-ups.
+/probe_*
+!/probe_*.cpp
