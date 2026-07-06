@@ -5,7 +5,7 @@ compute_with topic is split into [fused_groups](fused_groups.md),
 [growth](growth.md), [member_sites](member_sites.md), [ordering](ordering.md),
 [legality](legality.md)._
 
-This backs loopdoc §14's "how the fused nest is built" growth procedure and §15
+This backs loopdoc §14's "how the fused nest is built" growth procedure and §16
 step 4. The whole group is emitted by `build_pipeline_group`
 (`src/ScheduleFunctions.cpp` ~1679); `InjectFunctionRealization` is constructed
 with the whole group as its `funcs` vector (in within-group realization order,

@@ -1312,7 +1312,7 @@ g.update().compute_with(f.update(), y);     // ... and the update stages
 ```
 
 Like every directive, `compute_with` only records state — a per-stage fuse level
-(§1) on the child — and the nest is built from it later (§15). Because the state
+(§1) on the child — and the nest is built from it later (§16). Because the state
 is one fuse level per stage, calling `compute_with` again on the same stage
 overwrites the previous one (Halide warns). So `f.compute_with(a, y)` then
 `f.compute_with(b, y)` fuses `f` with `b` only — it does not create a group
@@ -1610,7 +1610,119 @@ example exercises it.)
 
 ---
 
-## 15. Putting the algorithm together (how the nest is built)
+## 15. `specialize`: conditional schedule variants
+
+`f.specialize(cond)` gives a definition a **conditional variant**: at run time, if
+`cond` holds, a specialized schedule is used; otherwise a fallback runs. In the
+printed nest this shows up as **several loop nests where you'd expect one** —
+Halide emits the branch nests back to back.
+
+### The state it records
+
+`specialize` is per **definition** — the pure definition, or a specific update
+stage (`f.update(n).specialize(...)`). Each definition carries an **ordered list
+of specializations**; each specialization pairs a condition with **its own copy
+of the schedule** (a forked Definition). `f.specialize(cond)`:
+
+* appends a specialization whose schedule is a **copy of the schedule so far** —
+  every directive issued on `f` *before* this `specialize()` call
+  ([examples/specialize_inherit.cpp](examples/specialize_inherit.cpp): a `tile`
+  before `specialize` is inherited by the branch, which then adds a `split`); and
+* returns a **handle** to that copy, so further scheduling on the handle affects
+  the branch only.
+
+Directives issued on `f` **after** a `specialize()` call modify the parent
+(fallback) schedule, not the already-forked specialization
+([examples/specialize_fallback_scope.cpp](examples/specialize_fallback_scope.cpp):
+a `split` added after `specialize` lands on the fallback only). A specialization
+may itself be specialized, nesting the variants
+([examples/specialize_nested.cpp](examples/specialize_nested.cpp)).
+`f.specialize_fail(msg)` appends a terminal specialization that aborts at run
+time instead of providing a fallback; nothing may be specialized after it.
+
+### How it becomes loops
+
+Each definition's specializations lower to a nested if/else that wraps that
+definition's loop nest: `if cond_0 { branch_0 } else if cond_1 { branch_1 } …
+else { fallback }`, in **declaration order**, with the unspecialized **fallback
+last**. Each branch is a full loop nest built from **that branch's** copied
+schedule (§16 applied to the fork).
+
+`print_loop_nest()` does not print conditions or any `if`/`else` marker: it walks
+into **every** branch and prints each branch's loop nest, so the branches appear
+**concatenated as sibling subtrees under the same `produce`** node, in that same
+order — specialization branches first (declaration order), fallback last
+([examples/specialize_basic.cpp](examples/specialize_basic.cpp): a tiled branch,
+4 loops, then the plain fallback, 2 loops, both inside one `produce f`). A
+specialized **producer** is no different — its branches sit inside its own
+`produce` block ([examples/specialize_producer_self.cpp](examples/specialize_producer_self.cpp)).
+
+Two consequences of Halide simplifying the nest before printing:
+
+* **`specialize_fail` prints no fallback.** Its else-branch is an assertion, which
+  carries no loops, so only the specialization branches appear
+  ([examples/specialize_fail.cpp](examples/specialize_fail.cpp)).
+* **Identical branches merge.** If a branch's nest is *identical* to the fallback
+  it wraps (same loops, same order, same nested producers — i.e. the
+  specialization changed nothing structural), Halide folds the if/else back into
+  one copy, so that specialization leaves no trace. A branch that differs only in
+  a way this document's structural comparison ignores (the order of two plain
+  serial loops, a constant tile size) is still a *distinct* nest and is printed
+  separately. In practice every useful specialization changes the structure, so
+  each one prints its own subtree; the examples here are all structurally
+  distinct per branch.
+
+### Producers under a specialized consumer
+
+A producer computed (or stored/hoisted) at a loop of a specialized consumer is
+injected **separately into each branch**, resolved against **that branch's** own
+loop nest — each branch has its own copy of the dimension list (§9), so the
+producer follows the branch's structure
+([examples/specialize_producer_at.cpp](examples/specialize_producer_at.cpp): the
+specialization splits an outer loop, and the `compute_at` producer is injected at
+the inner loop of *each* branch's nest). A producer computed **outside** the
+consumer (e.g. at `root`) is emitted once, before the consumer, and is not
+duplicated per branch
+([examples/specialize_producer_root.cpp](examples/specialize_producer_root.cpp)).
+
+`specialize` forks **only the specialized Func's own schedule**. It does **not**
+reach into its callees: a producer is a separate Func with **one** definition and
+**one** schedule, shared by every branch. So the only per-branch variation a
+producer can show is its **placement** — which happens when the `compute_at`
+level names a loop that the consumer's branch has moved (by a per-branch
+`reorder`/`split`/`rename`). There is no way to schedule a producer's *internals*
+(its own splits, its own compute level) differently across a consumer's branches;
+that would require genuinely separate Funcs.
+
+### Legality
+
+The Func that **calls** `compute_with` must have no specializations: a fused group
+is emitted as one shared, unconditional loop nest (§14), which has no room for a
+member's per-branch variants. `f.specialize(cond); f.compute_with(g, v)` is
+rejected ([examples/neg_compute_with_specialize.cpp](examples/neg_compute_with_specialize.cpp)).
+The restriction is on the caller (the member being fused in), not on the target
+`g` (see [src_doc: compute_with/legality](src_doc/compute_with/legality.md)).
+
+### Out of scope
+
+* **Condition de-duplication.** Re-calling `specialize` with an *equal* condition
+  `Expr` returns the *existing* specialization rather than appending a new one.
+  This document does not model that: the examples always use **distinct**
+  conditions (e.g. separate `Param<bool>`s), so each `specialize` call is a new
+  branch and no `Expr`-equality bookkeeping is needed.
+* **Per-branch loop elision.** Placing a producer at a *different loop* per branch
+  (e.g. `compute_at(f, y)` in one branch, `compute_at(f, x)` in another) gives it
+  a different required region — and so a different set of elided (point) loops —
+  per branch. The declared-elision annotation (`micro_halide_collapses`, §7) is
+  keyed per producer-stage, not per branch, so it cannot express that asymmetry;
+  such an example is deferred, exactly as with the multi-host-stage elision case.
+  The examples here keep each producer's elision the same across branches.
+
+See [src_doc: specialize](src_doc/specialize.md) for the compiler-level account
+(the `Specialization` list, the `IfThenElse` lowering in `build_provide_loop_nest`,
+and why the printer shows branches with no condition).
+
+## 16. Putting the algorithm together (how the nest is built)
 
 The whole loop nest follows from the rules above, assembled into one procedure:
 
@@ -1671,7 +1783,11 @@ The whole loop nest follows from the rules above, assembled into one procedure:
 
    **A stage's loop nest** is built by walking that stage's dimension list (after
    its §9 transforms; an update stage's list also carries its `RVar`s) from the
-   outermost dimension inward. At each dimension:
+   outermost dimension inward. (If the stage's definition carries
+   **specializations** (§15), this produces **one nest per branch** — each branch
+   walking its own forked dimension list — emitted back to back inside the single
+   `produce`, specialization branches first and the fallback last; the steps below
+   describe building one such nest.) At each dimension:
      * if the dimension was declared **elided** (§7), skip its `for` line but keep
        the level as a valid injection site;
      * **open a `store h:` node** for any item `h` whose store level is this level
@@ -1720,4 +1836,5 @@ produce/consume), [compute_at and loops](src_doc/compute_at_and_loops.md),
 [growth](src_doc/compute_with/growth.md),
 [member_sites](src_doc/compute_with/member_sites.md),
 [ordering](src_doc/compute_with/ordering.md),
-[legality](src_doc/compute_with/legality.md)).
+[legality](src_doc/compute_with/legality.md)), and
+[specialize](src_doc/specialize.md).

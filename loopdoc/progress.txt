@@ -149,7 +149,7 @@ Marking convention:
             the human asked it to clarify the overwrite behavior; kept.]
         Until the harness change, it is intentionally RED on these two examples.
 
-[ ] `specialize`
+[WIP] `specialize`
     NOTES: may run into test harness bugs here with loop nest diffing.
     Micro-agent should stop and report problems back to the main agent
     if this is the case.
@@ -161,6 +161,67 @@ Marking convention:
     First, having g be compute_at/store_at/hoist'd differently depending on which specialized f is the caller (easy case).
     Second, having g be scheduled differently internally depending on which specialized f is the caller (hard case, requires g clone/wrapper?)
     Third, the previous case except we care about specializing some h that g consumes based on which specialized f is the ultimate caller (even harder case, chain of g/h clone/wrapper?)
+
+    Don't trigger the Halide behavior where `specialize(...)` with an already-seen Expr returns an existing specialization,
+    and not a new specialization.
+
+    --- main-agent findings (probe/SPECIALIZE_FINDINGS.md + probe_specialize*.cpp) ---
+    * MODEL: each Definition (pure + each update) carries an ordered
+      specializations list; specialize() forks a COPY of the schedule-so-far and
+      returns a handle to it (later directives on the handle -> branch;
+      directives on the Func after specialize() -> fallback). specialize_fail
+      terminates the chain. Lowering (ScheduleFunctions.cpp ~518-544): nested
+      IfThenElse, folded last-to-first, so `if c0{s0} else if c1{s1}...
+      else{fallback}` in declaration order, fallback last; specialize_fail's else
+      is an assert (no loops).
+    * RENDERING: PrintLoopNest has NO IfThenElse visitor -> both branches print
+      CONCATENATED as sibling subtrees under ONE `produce`, no if/else text, no
+      condition. Two simplifier effects: (a) specialize_fail prints no fallback;
+      (b) IDENTICAL-branch merge (simplify folds if/else with byte-identical IR
+      into one) -- a no-op specialization vanishes. A branch differing only in a
+      canonicalize-invisible way (serial-loop order, const bounds) is still a
+      distinct IR nest and prints separately.
+    * HARNESS: the concatenated multi-branch output PARSES cleanly in
+      canonicalize.py (sibling subtrees under produce F0); the anticipated
+      "loop-nest diffing bug" did NOT materialize for distinct-branch examples.
+      The real subtlety is the identical-branch MERGE: micro must emit one copy
+      per branch and merge two adjacent copies only on TRUE IR identity, not
+      canonical identity (else it would wrongly merge a reorder-only branch).
+      All committed examples have STRUCTURALLY DISTINCT branches, so no merge is
+      exercised -- micro can emit one-nest-per-branch without merge logic for now.
+    * THE THREE USER CASES: the human is CORRECT that specialize does NOT
+      transitively specialize a callee. specialize forks ONLY the specialized
+      Func's own schedule; a callee has ONE definition + ONE schedule shared by
+      all branches. So:
+        - Case 1 (producer placed differently per branch): achievable -- the only
+          per-branch variation is PLACEMENT, when the compute_at level names a
+          loop the branch moved (per-branch reorder/split/rename). Documented
+          (loopdoc §15). BUT a producer at a *different loop* per branch gets
+          different bounds -> different elided loops per branch, which the
+          per-producer-stage micro_halide_collapses API cannot express (see the
+          [open] gap below). specialize_producer_at.cpp uses the SYMMETRIC-elision
+          variant (producer at the same var in both branches, f's outer loop
+          split) to stay testable.
+        - Cases 2 & 3 (callee scheduled differently INTERNALLY per branch): NOT
+          expressible via specialize at all (would need genuinely separate Funcs;
+          not even clone_in helps, since a specialized f is still one consumer of
+          the callee). Documented as the CORRECTION to the user's hypothesis
+          (loopdoc §15 "Producers under a specialized consumer"). No example.
+    * CONDITION DE-DUP: OUT OF SCOPE per the human note above -- every example
+      uses DISTINCT conditions (separate Param<bool>s), so micro need not cache
+      Expr equality. loopdoc §15 "Out of scope" documents it.
+    * MICRO SCAFFOLD (this commit): added Param<T> (converts to Expr) + THROWING
+      stubs Func/Stage::specialize + specialize_fail (like the rfactor/compute_with
+      scaffolding). Examples COMPILE with micro; positives THROW at runtime
+      pending the micro-agent. Legality (compute_with caller must have no
+      specializations) is the micro-agent's to enforce once specialize is real.
+    * EXAMPLES (8 positive + 1 negative): specialize_basic (concat + order),
+      specialize_inherit (schedule-so-far copied), specialize_fallback_scope
+      (post-specialize directive -> fallback only), specialize_nested (3 distinct
+      branches), specialize_fail (drops fallback), specialize_producer_root (root
+      producer emitted once, not per branch), specialize_producer_at (per-branch
+      producer injection, symmetric elision), specialize_producer_self (producer's
+      own branches). neg_compute_with_specialize (caller specialized -> illegal).
 
 [ ] `vectorize`, `unroll`, `parallel`, `gpu`, `gpu_lanes`, `gpu_threads`, `gpu_blocks`, `gpu_tile`
     NOTES: micro_halide will not reason about bounds analysis so do
@@ -196,6 +257,7 @@ The main-agent may mark issues as [fixed] if changes to the docs seem to have ca
   - [fixed] store_at | PER-STAGE placement of the `store` node when the store/compute HOST has several stages. The level (host, v) names a v loop in EVERY stage of host, but the stored Func is computed only in the host stages whose body uses it (the §7 per-stage injection rule), and the `store` node must follow it into exactly those stages. FOUND by main-agent probing (store_at of an rfactor intermediate, and the minimal store_at_update_stage): micro_halide emitted the store node in the FIRST host stage owning the store-level loop (e.g. f's PURE stage) regardless of where the Func is computed, and so omitted it from the stage (the update/merge) that actually produces the Func. DOC FIXED (loopdoc §8 new "per host stage" paragraph; src_doc §8 "Per host stage" subsection). IMPL: micro_halide's store-node emission must attach to the same per-stage body where the produce/consume is injected, not the first stage with a matching loop. store_at_update_stage (plain producer used only in f's update) and rfactor_intm_store_at (rfactor intermediate stored at merge.x) both failed until fixed. RESOLVED: a logged micro-agent (adec909af3977431e, integrity clean, read loopdoc.md, no commits) replaced the single resolve_stage() store-filing with a per-host-stage loop gated by the SAME body_uses predicate used for produce/consume injection (§7), so the store node files into exactly the host stages that compute f. Derived from §8's per-host-stage paragraph; no doc gaps. Main-agent adversarial confirm (PASS, zero further micro changes): store_at_two_update_stages (p used in BOTH update stages -> store node in both, not the pure stage). 91 examples pass. | store_at_update_stage.cpp, rfactor_intm_store_at.cpp, store_at_two_update_stages.cpp
   - [fixed] in/clone_in | GLOBAL wrapper vs f's OWN wrappers. loopdoc §13 said f.in() is "used by every consumer that has no custom wrapper of its own" but did NOT say the global wrapper must SKIP f's own wrappers (custom and global), which keep reading f. FOUND by main-agent adversarial testing (in_custom_and_global): the micro-agent's redirect() sent a custom wrapper's read of f to the global wrapper, producing a chain f->global->custom->g1 instead of custom & global as siblings both reading f. src_doc §13 already had the correct rule (global skips the wrapped Func's own wrappers; custom precedence); the gap was loopdoc §13 only. DOC FIXED (loopdoc §13: custom precedence + global skips f's own wrappers, cite in_custom_and_global). IMPL: redirect() must not apply the global wrapper to any wrapper of f. RESOLVED: a logged micro-agent (ad20a816768fea7ac, integrity clean) added is_own_wrapper(f,c) (c is f's global wrapper or any value in f->wrappers) and gated the global-redirect branch on !is_own_wrapper, so f's own wrappers keep reading f; also gave the custom wrapper a distinct name f_in_<consumer> (the canonicalizer keys identity on the printed name, so two 'f_in' nodes had collapsed). 106 examples pass. | in_custom_and_global.cpp
   - [open] compute_with | The "matching loop nests down to v" criterion includes the KIND of each paired shared dim (Var vs RVar), not just name + count: Halide's per-pair check compares dim_type/for_type/device_api too (ScheduleFunctions ~2496-2514; src_doc compute_with.md). loopdoc §14 now documents the Var/RVar-kind requirement (and that the fuse level itself may be a Var or RVar -- compute_with_rvar.cpp). micro_halide does NOT yet enforce the dim-KIND match (it checks name + count only). Left unimplemented per human instruction (update the doc, defer the micro change to a future micro-agent). NOTE: hard to trigger with a clean example -- it needs a Var and an RVar sharing the same printed name down to v, which normal schedules don't produce; so there is no failing example forcing it. | compute_with_rvar.cpp (positive RVar-fusion; no negative triggers the kind check)
+  - [open] specialize | A producer placed at a DIFFERENT loop per branch (user "case 1" in its strong form: g.compute_at(f,y) in one branch, g.compute_at(f,x) in another, via a per-branch reorder/rename) gets a DIFFERENT required region -> a DIFFERENT set of elided (point) loops per branch. The declared-elision API (micro_halide_collapses, §7) is keyed per (producer, producer-stage), NOT per (producer, branch), so it cannot express that asymmetry -- same root cause as the [open] "multiple host stages, different elision per injection" gap above. DECISION: deferred; loopdoc §15 "Out of scope" documents it. The committed producer-under-specialize example (specialize_producer_at.cpp) uses the SYMMETRIC-elision variant (g at the same var in both branches, f's OUTER loop split) so g's collapse set is identical across branches. Revisit if a milestone needs the different-loop-per-branch case (would need a (producer, branch)-keyed collapse annotation). | (different-loop-per-branch variant, not committed; specialize_producer_at.cpp is the symmetric substitute)
 
   # --- compute_with hardening findings (from copying Halide's test/correctness/compute_with.cpp; triaged by sub-agent + main-agent verification) ---
   # ALL [fixed] below RESOLVED by the closing hardening micro-agent (human-run; only micro_halide.hpp + two permitted micro_halide_collapses annotations changed; no new doc gaps). Harness independently re-run green 152/152. See the compute_with milestone NOTES above for the per-fix doc mapping. The one still-[open] entry is the RVar-vs-Var dim-KIND match (untriggered; deferred).

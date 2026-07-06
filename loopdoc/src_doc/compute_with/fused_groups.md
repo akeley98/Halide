@@ -44,7 +44,7 @@ a `FusedPair` onto the **parent** stage's `fused_pairs()` list (init stage if
 * The pipeline DAG is then computed with each group collapsed to a **single
   dummy node** (~360): every member depends on the dummy, and the dummy depends
   on all funcs the members call. So the whole group realizes **as a unit**, after
-  everything it reads. (This is the basis for loopdoc §15 step 2 "a fused group
+  everything it reads. (This is the basis for loopdoc §16 step 2 "a fused group
   is ordered as a unit", and for the rfactor-feeds-a-member ordering — see
   [ordering](ordering.md).)
 
