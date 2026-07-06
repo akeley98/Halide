@@ -312,6 +312,16 @@ entire remainder of the pipeline — regardless of which parts actually read `f`
 (The name reflects that `f`'s values are now available to be consumed there, not
 that the wrapped code is exactly `f`'s readers.)
 
+`f.compute_inline()` is the **inverse**: it resets `f`'s compute level back to
+`inlined`, the default — it is literally `compute_at(inlined())`. Its purpose is
+to **undo** a previous `compute_root`/`compute_at`, after which `f` behaves as if
+never scheduled: a pure `f` is substituted into its callers and vanishes from the
+nest (§5); a non-pure `f` is realized at its innermost use (§11). It resets *only*
+the compute level — any `split`/`reorder` already recorded stays but becomes
+inapplicable (an inlined Func has no loop nest of its own; Halide warns if you
+transform one). A **store or hoist level may not be left set on an inlined Func**
+(§8 Legality).
+
 This is the first source of `consume` nesting worth stating plainly: when
 several Funcs are realized in sequence, their `consume` blocks **nest** — the
 rest of the program, *including any later producers*, sits inside the current
@@ -814,7 +824,12 @@ Func with update stages wraps all of them
   ([examples/neg_store_inside_compute.cpp](examples/neg_store_inside_compute.cpp)).
 * A Func with a store level must also have a non-inline compute level: using
   `store_at`/`store_root` without `compute_at`/`compute_root` is illegal
-  ([examples/neg_store_at_inlined.cpp](examples/neg_store_at_inlined.cpp)).
+  ([examples/neg_store_at_inlined.cpp](examples/neg_store_at_inlined.cpp)). This
+  is checked purely on the compute level being `inlined`, so it holds even for a
+  **non-pure** Func — although such a Func *is* realized (at its innermost use,
+  §11), that realized-inline default still does not carry a store level; you must
+  give it an explicit `compute_at`/`compute_root` first. (So `compute_inline()`,
+  §6, and a store/hoist level are mutually exclusive.)
 * Like the compute level, the store level must enclose every use of `f` (§7's
   legal-site rule applies to it too).
 

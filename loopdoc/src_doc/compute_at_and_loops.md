@@ -38,6 +38,17 @@ The realization (`produce`/loops/`consume`) is spliced in as a prefix of that
 loop's body, with the remainder of the body becoming the `consume` content.
 This backs loopdoc §7's nesting picture and §15 steps 3–4.
 
+`compute_inline()` is not a separate mechanism: `Func::compute_inline()`
+(`src/Func.cpp` ~3070) is literally `return compute_at(LoopLevel::inlined());`,
+i.e. it just sets the compute level back to the `inlined` default. So it needs no
+new emission logic — the resulting nest is §5's pure-inline substitution or §11's
+non-pure realize-at-innermost-use. The only related guard is that an `inlined`
+compute level forbids a store/hoist level (`store_at`/`store_root`/`hoist_storage`
+[_root]), checked at `ScheduleFunctions.cpp` ~2319–2331 — see
+[storage](storage.md) — and this fires on `compute_at.is_inlined()` regardless of
+whether the Func is pure or non-pure. This backs loopdoc §6's `compute_inline`
+paragraph.
+
 ### Legality of a compute_at site
 
 Before injecting, `schedule_functions` validates the requested level against the
