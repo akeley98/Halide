@@ -1640,7 +1640,13 @@ Halide emits the branch nests back to back.
 `specialize` is per **definition** — the pure definition, or a specific update
 stage (`f.update(n).specialize(...)`). Each definition carries an **ordered list
 of specializations**; each specialization pairs a condition with **its own copy
-of the schedule** (a forked Definition). `f.specialize(cond)`:
+of the schedule** (a forked Definition). This per-stage affinity is only visible
+on an impure Func (one with update stages): specializing one stage expands only
+*that* stage's nest, leaving the others as single nests inside the same
+`produce f` ([examples/specialize_update_stage.cpp](examples/specialize_update_stage.cpp)
+specializes only the update stage; [examples/specialize_both_stages.cpp](examples/specialize_both_stages.cpp)
+specializes the pure and update stages independently, giving four nests — two per
+stage — under one `produce f`). `f.specialize(cond)`:
 
 * appends a specialization whose schedule is a **copy of the schedule so far** —
   every directive issued on `f` *before* this `specialize()` call

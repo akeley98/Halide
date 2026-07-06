@@ -230,14 +230,17 @@ Marking convention:
       scaffolding). Examples COMPILE with micro; positives THROW at runtime
       pending the micro-agent. Legality (compute_with caller must have no
       specializations) is the micro-agent's to enforce once specialize is real.
-    * EXAMPLES (9 positive + 1 negative): specialize_basic (concat + order),
+    * EXAMPLES (11 positive + 1 negative): specialize_basic (concat + order),
       specialize_inherit (schedule-so-far copied), specialize_fallback_scope
       (post-specialize directive -> fallback only), specialize_nested (3 distinct
       branches), specialize_fail (drops fallback), specialize_producer_root (root
       producer emitted once, not per branch), specialize_producer_at (per-branch
       producer injection, symmetric elision), specialize_producer_self (producer's
       own branches; specialized func deep in pipeline), specialize_midchain (middle
-      func of an a->b->c->out chain specialized, producer a injected per branch).
+      func of an a->b->c->out chain specialized, producer a injected per branch),
+      specialize_update_stage (per-stage affinity: only the UPDATE specialized ->
+      pure=1 nest, update=2), specialize_both_stages (pure and update specialized
+      independently -> 4 nests under one produce f).
       neg_compute_with_specialize (caller specialized -> illegal).
 
 [ ] `vectorize`, `unroll`, `parallel`, `gpu`, `gpu_lanes`, `gpu_threads`, `gpu_blocks`, `gpu_tile`
