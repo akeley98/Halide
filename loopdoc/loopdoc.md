@@ -63,9 +63,13 @@ add the **schedule** that places and reshapes those loops across the pipeline.
       Unlike the compute/store level, this is set *per stage*, not whole-Func.
     * a per-stage, ordered list of **specializations**, set by `specialize` (§15)
       and *empty* by default. Each specialization pairs a condition with **its own
-      forked copy of the stage's schedule** (which may itself carry further
-      specializations); `specialize_fail` records a terminal one with no fallback.
-      Each becomes a conditional variant of the stage's loop nest (§15).
+      forked copy of the stage's definition** — the schedule (splits, levels, …)
+      *plus* that copy's own specialization list, which starts empty. This nests:
+      calling `specialize` again on a branch adds to *that branch's* list
+      (`f.specialize(c1).specialize(c2)` → an `if` inside an `if`, §15). It is the
+      structure that recurses, not the schedule directives. `specialize_fail`
+      records a terminal specialization with no fallback. Each becomes a
+      conditional variant of the stage's loop nest (§15).
 
 * **`ImageParam`** — an input buffer. It is a *leaf*: it is never computed and
   never appears in the loop nest. A Func that reads an `ImageParam` simply has
