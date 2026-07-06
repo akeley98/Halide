@@ -81,6 +81,56 @@ human's three cases, only case 1 (per-branch **placement**) is achievable; cases
 2/3 (per-branch internal schedule of a callee / callee-of-callee) are not
 expressible via `specialize` — they would require genuinely separate Funcs.
 
+## Per-branch producer scheduling (user "case 2/3"): no schedule-only mechanism
+
+`probe_specialize_case2.cpp` and `probe_specialize_deadbranch.cpp`.
+
+There is **no scheduling directive** that makes a producer computed *differently
+internally* depending on which specialized branch of its consumer uses it. A
+producer is a separate Func with **one** schedule (plus its own specialization
+tree), shared by every branch of every consumer. `specialize()` forks only the
+specialized Func's own schedule, never its callees.
+
+- **`clone_in(f)` / `in(f)` do NOT help.** They redirect a *consumer's* reads to
+  **one** wrapper/clone Func with **one** schedule. `f` reads that single Func in
+  **all** its branches. `probe_specialize_case2.cpp` (1)/(2): with `f`'s branches
+  made structurally distinct, the one clone/wrapper appears in *both* branches
+  tiled **identically** — there is no handle to schedule it per branch.
+
+- **`select(cond, g, gc)` is the only thing that yields per-branch producers, and
+  it is an ALGORITHM construct, not a schedule.** With `f(x,y) =
+  select(cond, g, gc)` and `f.specialize(cond)`, `simplify_specializations` prunes
+  the select per branch, so branch A injects only `g` and the fallback only `gc`,
+  each with its independent schedule (`probe_specialize_case2.cpp` (3): tiled `g`
+  in one branch, plain `gc` in the other). But this **changes what `f` computes**
+  and carries **no equivalence guarantee** — Halide never checks `g == gc` (the
+  probe makes them differ, `gc = in + 1`, and it compiles happily). So it steps
+  outside Halide's algorithm/schedule separation and its "rescheduling can't
+  change results" safety net. It is a workaround, not a scheduling answer. Case 3
+  (vary a grand-producer `h` per `f`-branch) is the same one level deeper:
+  duplicate the sub-chain (`g_a/h_a` vs `g_b/h_b`) and `select` between them.
+
+### When is the dead branch eliminated? (early, so it imposes no constraints)
+
+`print_loop_nest` order (PrintLoopNest.cpp): `realization_order` →
+`simplify_specializations(env)` → `schedule_functions`. The select is pruned per
+branch **before** the scheduler injects/validates producers, so a producer that
+is dead in a branch is never injected there and imposes **no** scheduling
+constraint there. `probe_specialize_deadbranch.cpp`:
+
+- (b) `g.compute_at(f, xi)` where `xi` exists only in `g`'s live (tiled) branch
+  and is **absent from the fallback** (where `g` is dead) → **legal**. The dead
+  side's lack of `xi` is irrelevant.
+- (c) contrast: `g.compute_at(f, x)` where `g`'s **live** branch tiled `x` away →
+  **error**, and the "legal locations" Halide lists are that live branch's tile
+  loops (`xo/yo/xi/yi`), not the fallback's `x`.
+
+So the worry that "scheduling on the dead side triggers illegal-schedule errors"
+does **not** materialize. A producer's compute_at level need only be valid in the
+branch(es) where it is actually used. (Func.h's "the Var must exist in all paths"
+means all paths where the producer is *used*; with `select`, that is its single
+live branch.)
+
 ## Legality
 
 The Func that **calls** `compute_with` must have no specializations
