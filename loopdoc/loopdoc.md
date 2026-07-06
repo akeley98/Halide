@@ -1293,6 +1293,16 @@ producer cannot be scheduled per consumer branch. (If instead the *wrapped* Func
 `f` is the one specialized, nothing special happens here: consumers read `f`, and
 `f`'s branches live inside its own `produce`, per §15.)
 
+The two directives differ in what they carry over from a specialized wrapped Func.
+A **clone** is a *deep copy* of the wrapped Func's whole state — definition,
+schedule, **and its specializations** — so the clone starts with an independent
+copy of those branches
+([examples/specialize_clone_inherits.cpp](examples/specialize_clone_inherits.cpp):
+`f` is specialized, and `f.clone_in(g)` prints with the same two branches). An
+**`in` wrapper**, by contrast, is a *fresh* pointwise Func (`wrapper(args) =
+f(args)`) with its own empty schedule — it does **not** inherit `f`'s
+specializations.
+
 ### Implementation note
 
 Although the documentation, for simplicity, describes `f.in(g)` or

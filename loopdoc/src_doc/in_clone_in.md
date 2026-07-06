@@ -64,7 +64,10 @@ mutated at call time is the **wrapped** Func, plus creation of the new wrapper:
      reduction domains) into the new member, then `substitute_calls` remaps the
      clone's **self-references** to point at the clone itself (weakened). A clone
      is an independent duplicate of *that one Func's* definition + schedule +
-     storage; an `in` wrapper is a one-line reader of the original.
+     storage; an `in` wrapper is a one-line reader of the original. Because the
+     copy includes `specializations`, a clone of a specialized Func carries those
+     branches (independently); an `in` wrapper, being a fresh pointwise Func, does
+     not (loopdoc §13/§15; `examples/specialize_clone_inherits.cpp`).
      **Its callees are NOT duplicated.** The clone's copied definition expressions
      still hold the *same* `FunctionPtr`s to whatever the original called, so the
      clone reads the *shared* producers. Two independent checks confirm this:
