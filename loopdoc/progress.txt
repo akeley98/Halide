@@ -135,11 +135,19 @@ Marking convention:
         ^Warning: in canonicalize.py (or pre-filter in harness.py) before parsing;
         Halide warnings are non-fatal and not part of the loop nest. Low risk;
         would unblock warning-emitting-but-valid schedules generally.
-        CANARY: compute_inline_split_pure.cpp is committed CURRENTLY FAILING
-        ("Canonicalizer failed" on the Warning line) on purpose, so the harness
-        change lands as a clearly-separated commit that flips exactly this test
-        green (verified: micro and real nests MATCH once ^Warning: lines are
-        stripped). Until then the harness is intentionally RED on this one example.
+        CANARIES (committed CURRENTLY FAILING on purpose -- "Canonicalizer failed"
+        on the Warning line -- so the harness change lands as a clearly-separated
+        commit that flips exactly these green; verified micro==real once ^Warning:
+        lines are stripped):
+          - compute_inline_split_pure.cpp -- pure inline + split "meaningless to
+            split ... inline" warning.
+          - compute_with_overwrite_warning.cpp -- compute_with called twice on one
+            stage; "f already has a compute_with ... Replacing it" overwrite
+            warning (unrelated to inline; broadens the motivation). Also confirms
+            micro's compute_with overwrite semantics (f fuses with the LAST parent
+            only). [Authored by the human-launched compute_with micro-agent when
+            the human asked it to clarify the overwrite behavior; kept.]
+        Until the harness change, it is intentionally RED on these two examples.
 
 [ ] `specialize`
     NOTES: may run into test harness bugs here with loop nest diffing.
