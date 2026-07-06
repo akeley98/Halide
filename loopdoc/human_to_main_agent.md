@@ -2,30 +2,14 @@
 
 Grouped into sections; sections are meant to be done in stated order, with tasks within a section not necessarily ordered.
 
-## `specialize` Doc Edits
-
-[x] Briefly mention that `f.specialize(...)` returns an existing function handle if given a duplicate `Expr`, and that this is out-of-scope for `micro_halide`.
-    DONE: loopdoc §15 "Out of scope" first bullet (returns the handle to the existing specialization; distinct conditions used throughout; no Expr-equality bookkeeping in micro_halide).
-
-[x] Rephrase the `select` paragraph as a separate explicit "known limitation" sub-section, which introduces the poorly-tested workaround.
-    Basically, roll back to something similar to the "impossible" language, except an ",unless ..." calling forward to the weird sub-section.
-    Declare simplifying `select` as out-of-scope for `micro_halide`.
-    DONE: §15 "Producers under a specialized consumer" now says it is "impossible, through scheduling ... *Unless* you step outside scheduling entirely" -> new subsection "Known limitation: no per-branch producer scheduling" frames the select workaround as an off-label, unverified, silently-degrading last resort, and declares select-simplification out-of-scope for micro_halide. src_doc/specialize.md has the mechanism.
-
-[x] Update "objects and their conceptual state" with the extra specialize state.
-    DONE: §1 Func bullet list gains a per-stage "specializations" entry (ordered list; each a condition + forked schedule copy that may nest; specialize_fail = terminal, no fallback).
-
-[x] Update `in`/`clone_in` section with brief interaction with `specialize`.
-    Also, what happens if the func parameter is a Func handle from `f.specialize(...)`?
-    Is it exactly equivalent to passing `f` itself?
-    DONE: §13 new "Interaction with specialize" subsection. ANSWER to your question: NOT equivalent, and not even allowed. `f.specialize(cond)` returns a `Stage`, and `in`/`clone_in` take a `Func` (`Stage` does not convert to `Func`), so `g.in(f.specialize(cond))` does NOT COMPILE (verified). Wrappers/clones are keyed by consumer Func, never by branch -> one wrapper is read in ALL of the consumer's branches; there is no "wrap only one branch."
-
-[x] If not done, write some examples where the specialized function is deep in the pipeline, and not the top-level function.
-    Inform me of the names of the new or existing examples.
-    DONE. Example names:
-      * specialize_producer_self.cpp (existing) -- the producer `g` (two levels below the output `out`; chain g -> f -> out) is the specialized Func.
-      * specialize_midchain.cpp (NEW) -- chain a -> b -> c -> out; the MIDDLE Func `b` is specialized, with its own producer `a` (compute_at b.x) injected into each of b's branches, and consumer `c` above it.
-
-[x] Clarify if `Identical branches merge` is intended to be out-of-scope for `micro_halide`.
-    If so, I agree with this decision.
-    CONFIRMED out-of-scope. loopdoc §15 "Out of scope" now states micro_halide may emit one loop nest per branch (specializations then fallback) WITHOUT merging identical ones; matching Halide's simplify()-driven merge would need true-IR-identity comparison. All examples have structurally distinct branches, so no merge is exercised.
+[x] Add the `specialize_tree.cpp` example.
+    DONE: examples/specialize_tree.cpp -- sibling cond_b + child cond_c of cond_a -> 4-leaf tree; verified vs real Halide. Cited from §15 "How it becomes loops".
+[x] Edit `loopdoc.md` based on comments.
+    DONE (all three inline <!-- Human --> comments removed):
+      * §1: the nesting detail is now deferred to §15 with a forward ref.
+      * §15: "declaration order" defined as the program order of the specialize() calls (first-declared tested first, first match wins).
+      * §15: added the flat-vs-nested explanation -- siblings on one handle => flat if/else-if chain; specialize on a returned branch handle => nested if; mixing builds a tree -- citing specialize_tree.cpp (and specialize_nested.cpp).
+[x] Move the specialization stubs to common code in `FuncStageImpl` unless there's a non-obvious reason I overlooked why this is a bad idea.
+    DONE: specialize / specialize_fail now declared once on FuncStageImpl (defined out of line as template methods, since they return the still-incomplete Stage), removed from Func and Stage. No non-obvious reason against it -- specialize is one operation on whichever stage `stage_index` names, so the base is the right home (and matches Halide, where Func::specialize forwards to the Stage-level op). All specialize examples still compile with micro (and still throw at the stub, pending the micro-agent).
+[x] Add ominous comments to `micro_halide.hpp` about not duplicating code in `Func` and `Stage` so I don't have to keep asking for this.
+    DONE: a prominent block on FuncStageImpl says to put shared Func/Stage scheduling methods there, never copy-pasted into both classes, and how to handle Stage-returning methods; plus short "inherited from FuncStageImpl; do NOT redeclare" notes left in Func and Stage.
