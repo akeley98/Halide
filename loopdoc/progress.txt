@@ -93,8 +93,32 @@ Marking convention:
       * [loopdoc-trace] debug(1) instrumentation kept in src/ScheduleFunctions.cpp
         (build_pipeline_group) as a permanent research aid on this branch.
 
-[ ] `compute_inline`
+[WIP] `compute_inline`
     NOTES:
+      * TRIVIAL feature. Func::compute_inline() (Func.cpp ~3070) is literally
+        `compute_at(LoopLevel::inlined())` -- it just resets the compute level to
+        the inlined default (inverse of compute_root/compute_at). No new emission
+        logic: the resulting nest is §5 (pure inline vanishes) or §11 (non-pure
+        realized at innermost use), both already implemented in micro.
+      * Verified in real Halide (scratch probe): compute_root->compute_inline on a
+        pure Func is byte-identical to the default (vanishes); on a non-pure Func
+        it realizes at the innermost use (§11). A leftover split under an inlined
+        Func triggers a Halide "meaningless to split ... scheduled inline" WARNING
+        (would break canonicalize) -> examples must avoid dangling transforms.
+      * store_at x inline interaction (asked by human): Halide REJECTS a store or
+        hoist level on an inlined-compute Func -- pure AND non-pure alike (checked
+        on compute_at.is_inlined(), ScheduleFunctions.cpp ~2319-2331). This was
+        ALREADY documented (§8 Legality) with examples neg_store_at_inlined.cpp /
+        neg_hoist_at_inlined.cpp; §8 now also clarifies it applies to the non-pure
+        realized-at-use case. src_doc storage.md already backs the check.
+      * DONE so far (this session): §6 compute_inline paragraph; §8 non-pure
+        clarification; src_doc compute_at_and_loops.md §6 backing; micro_halide
+        compute_inline() TODO throw-stub (micro-agent to implement the level reset
+        from §6). loopdoc changes committed for human review.
+      * TODO before micro-agent launch: write examples (compute_inline_override
+        [pure: compute_root->compute_inline vanishes], compute_inline_nonpure_
+        override [non-pure: realized at use, not root]); ensure they compile under
+        micro (the stub throws at runtime, which is fine pre-implementation).
 
 [ ] `specialize`
     NOTES: may run into test harness bugs here with loop nest diffing.

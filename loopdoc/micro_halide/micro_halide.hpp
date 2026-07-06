@@ -884,6 +884,16 @@ class Func: public FuncStageImpl<Func>
         return *this;
     }
 
+    // compute_inline(): reset the compute level to the default (inlined) -- the
+    // inverse of compute_root/compute_at. STUB (main agent) so examples compile;
+    // the micro-agent implements it from loopdoc.md section 6 (the resulting nest
+    // is then §5's pure-inline vanish or §11's non-pure realize-at-use; the
+    // store/hoist-requires-a-non-inline-compute-level legality is already in §8).
+    Func &compute_inline()
+    {
+        throw std::runtime_error("TODO compute_inline: micro-agent to implement from loopdoc.md section 6");
+    }
+
     // store_at / store_root: record the store level. See the note on
     // FuncContents -- the loop-nest effect (the `store` node) and legality are
     // for the micro-agent to implement from loopdoc.md section 8.
