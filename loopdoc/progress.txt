@@ -135,6 +135,11 @@ Marking convention:
         ^Warning: in canonicalize.py (or pre-filter in harness.py) before parsing;
         Halide warnings are non-fatal and not part of the loop nest. Low risk;
         would unblock warning-emitting-but-valid schedules generally.
+        CANARY: compute_inline_split_pure.cpp is committed CURRENTLY FAILING
+        ("Canonicalizer failed" on the Warning line) on purpose, so the harness
+        change lands as a clearly-separated commit that flips exactly this test
+        green (verified: micro and real nests MATCH once ^Warning: lines are
+        stripped). Until then the harness is intentionally RED on this one example.
 
 [ ] `specialize`
     NOTES: may run into test harness bugs here with loop nest diffing.
