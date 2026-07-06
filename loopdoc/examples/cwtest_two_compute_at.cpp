@@ -42,6 +42,9 @@ int main() {
         output3.compute_with(output2, k);
         // intermediate computed per output1_value-k: its own k loop collapses.
         micro_halide_collapses(intermediate, {k});
+        // output3_value computed at output3's innermost k (output3 a fused child):
+        // its own k loop is a single point and collapses too.
+        micro_halide_collapses(output3_value, {k});
         out.print_loop_nest();
     }
     catch (const CompileError &e) {

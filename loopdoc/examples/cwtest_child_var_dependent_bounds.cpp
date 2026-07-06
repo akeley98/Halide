@@ -44,6 +44,18 @@ int main() {
         g.update().compute_with(f.update(), r);
         f.update().unscheduled();
 
+        // Declared point-loop elision (ground truth from real Halide; bounds
+        // inference is out of scope, see README / loopdoc §14). f_inter is read
+        // as f_inter(x, r) at f's update loop, so at each (x, r) it is a single
+        // point in both dims -> both x and y collapse, in both its stages.
+        // g_inter feeds the fused CHILD g, whose x is the shared fused.x; its
+        // required x-region spans (the "child var dependent bounds"), so only y
+        // collapses.
+        micro_halide_collapses(f_inter, {x, y});
+        micro_halide_collapses(f_inter.update(), {x, y});
+        micro_halide_collapses(g_inter, {y});
+        micro_halide_collapses(g_inter.update(), {y});
+
         out.print_loop_nest();
     }
     catch (const CompileError &e) {

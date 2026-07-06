@@ -55,64 +55,41 @@ Marking convention:
 [✅] `in` (wrapper functions) and `clone_in`
     NOTES:
 
-[WIP] `compute_with` (this is where things get very confusing)
+[✅] `compute_with`
     NOTES:
-      * Behavior + model: loopdoc §14 (the constructive "growth" account) + §15
-        step 4 (item-based emission). Source internals: src_doc/compute_with.md
-        (to be split into per-topic sub-files with specific control-flow
-        walk-throughs; see methodology note below).
-      * FIRST PASS DONE, NOT COMPLETE. A micro-agent implemented Func/Stage::
-        compute_with from loopdoc §14/§15 alone (integrity-clean) and the
-        original hand-written example set passed. But copying Halide's own
-        test/correctness/compute_with.cpp (via sub-agents) then exposed real gaps:
-        the harness is now INTENTIONALLY RED on 10 known-failing cwtest_* examples.
-      * KNOWN-FAILING (committed as regression tests; full detail in DISCOVERED
-        DOC GAPS below):
-          - OVERFITS (loopdoc correct, micro impl incomplete -> a future
-            micro-agent hardens micro): cwtest_nested_compute_with (post-fusion
-            producer enclosure), neg_cwtest_crossing_edges1/2 (acyclic stage-order
-            not enforced), cwtest_update_stage_rfactor (group not ordered as a unit
-            vs an external producer), cwtest_rvar_bounds (known RVar-kind-not-piped).
-          - DOC GAPS (loopdoc must be fixed FIRST, then re-delegate):
-            * MEMBER ORDERING within a group is the within-group *topological*
-              order over fuse edges (children before parents; chains deepest-first),
-              NOT the §6 name tie-break §14 currently states. Affects produce-nesting
-              for chains + free/unfused-stage order. (cwtest_mixed_tile_factor,
-              _overlapping_updates, _update_stage_diagonal, _child_var_dependent_bounds)
-            * §14's "compute_at naming a CHILD member is always illegal" is a DOC
-              ERROR. Verified (probe /tmp/cwverify.cpp vs real Halide, all 3 of
-              compute_at/store_at/hoist_storage): naming a child is the ordinary §7
-              enclose-every-use rule -- legal when the producer's uses are all within
-              that child, illegal otherwise. Main agent over-generalized earlier.
-              (cwtest_two_compute_at)
-      * UNDERSTOOD THIS PASS (member-site mechanism, evidenced by source + debug):
-        in a fused group, (parent,v) and (child,v) are DIFFERENT sites at different
-        positions, not the same loop. Each member-stage keeps its own
-        <member>.s<n>.fused.<v> loop; the parent's is the real loop, each
-        non-parent's is rewritten to an extent-1 "scheduling point" pinned to the
-        parent's (substitute_fused_bounds, ScheduleFunctions.cpp ~1046, comment
-        ~1069-1076). compute_at(member,v) matches that member's loop by name
-        (HL_DEBUG_CODEGEN=3: "Found compute level at child.s0.fused.y" vs
-        "parent.s0.fused.y"), so the producer lands at that member's position.
-      * METHODOLOGY (agreed with human): break src_doc/compute_with.md into
-        per-topic sub-files, each a control-flow walk-through with specific line
-        citations + (where useful) HL_DEBUG_CODEGEN/[loopdoc-trace] evidence;
-        loopdoc references the specific sub-file/section per rule (no bare "see
-        compute_with.md"); micro-agent still never reads src_doc.
-      * Passing examples (the verified core; still green): compute_with_basic/
-        _split/_innermost/_at/_three/_parent_alpha/_update/_producer/_chain/_tile/
-        _two_parents/_two_parents_at, compute_with_rvar; negatives
-        neg_compute_with_dependency/_dim_count/_level_mismatch/_mismatch/
-        _producer_at_child; cwtest_* that pass (different_arg_num_compute_at,
-        double_split_fuse, fuse, fuse_compute_at, mismatching_splits,
-        store_at_different_levels, multiple_fuse_group, update_stage/2/3,
-        update_stage_pairwise, vectorize_inlined).
-      * REMAINING TO CLOSE THE MILESTONE: (1) fix the two DOC GAPS in loopdoc §14
-        (member ordering; child-member compute_at legality) + correct the
-        neg_compute_with_producer_at_child rationale; (2) split src_doc per the
-        methodology and back each rule with a walk-through; (3) re-delegate ONE
-        micro-agent to harden micro against all 10 known-failing cwtest_* (incl.
-        the RVar-kind piping); (4) confirm the harness goes fully green again.
+      * Behavior + model: loopdoc §14 (one stage-order account -- member order,
+        the emit-sweep, produce nesting, Loop ownership) + §15 steps 2-4. Source
+        internals split by topic under src_doc/compute_with/ (fused_groups, growth,
+        member_sites, ordering, legality), each a control-flow walk-through cited
+        from §14.
+      * CLOSED. A logged micro-agent (run by the human this time, to supervise the
+        anti-reverse-engineering rule -- so the tool-use log is not the integrity
+        record; the diff is) hardened micro_halide from §14/§15 alone. Integrity
+        clean: only micro_halide.hpp + two permitted micro_halide_collapses
+        annotations (cwtest_two_compute_at, cwtest_child_var_dependent_bounds)
+        changed; no loopdoc/src_doc/harness edits; reported no new doc gaps.
+        Harness fully green, independently re-run by the main agent: 152/152
+        (125 positive, 27 negative).
+      * What the hardening fixed, each tied to a doc passage: topological member
+        order (§14 step 1); the repeated stage-order sweep (§14 step 2); the
+        cyclic-fuse + "stage order must exist" legality checks (§14 Legality --
+        both crossing-edge shapes and the cross-func mutual cycle); fuse-aware
+        post-fusion enclosure and the (child,v) collapsed-loop sites incl. the
+        chain-outer re-materialization (§14 Loop ownership); group-as-one-
+        realization-node so an external producer interleaves correctly (§15 step 2).
+        Positive result for the doc: §14/§15 were sufficient to derive all of this
+        without reading src/ or src_doc/.
+      * Known Halide weak spot documented for the final reader only (no example;
+        the micro-agent needn't know it): inconsistent tile across a fused group
+        can OOB (§14 "Known issue", Halide #4751). A bounds-inference probe
+        (probe/, FINDINGS.md) found NO correctness bugs in the shapes tested
+        (multi-child, chains both directions, differing extents, differing fuse
+        levels) -- so the doc frames compute_with's surprises as structural, not
+        buggy, and flags only the #4751 tiling case.
+      * Still OPEN (narrow, untriggered): the RVar-vs-Var dim-KIND match in the
+        matching-loops precondition is documented (§14 Legality) but not enforced
+        by micro; no clean example forces it (needs a Var and an RVar sharing a
+        printed name down to v). Deferred -- see the [open] entry below.
       * [loopdoc-trace] debug(1) instrumentation kept in src/ScheduleFunctions.cpp
         (build_pipeline_group) as a permanent research aid on this branch.
 
@@ -160,15 +137,16 @@ The main-agent may mark issues as [fixed] if changes to the docs seem to have ca
   - [open] compute_with | The "matching loop nests down to v" criterion includes the KIND of each paired shared dim (Var vs RVar), not just name + count: Halide's per-pair check compares dim_type/for_type/device_api too (ScheduleFunctions ~2496-2514; src_doc compute_with.md). loopdoc §14 now documents the Var/RVar-kind requirement (and that the fuse level itself may be a Var or RVar -- compute_with_rvar.cpp). micro_halide does NOT yet enforce the dim-KIND match (it checks name + count only). Left unimplemented per human instruction (update the doc, defer the micro change to a future micro-agent). NOTE: hard to trigger with a clean example -- it needs a Var and an RVar sharing the same printed name down to v, which normal schedules don't produce; so there is no failing example forcing it. | compute_with_rvar.cpp (positive RVar-fusion; no negative triggers the kind check)
 
   # --- compute_with hardening findings (from copying Halide's test/correctness/compute_with.cpp; triaged by sub-agent + main-agent verification) ---
-  - [open] compute_with OVERFIT | A producer compute_at the GROUP PARENT but read by a fused CHILD is wrongly REJECTED by micro: micro checks compute_at enclosure against the PRE-fusion nest, but §14 says producer legality is §7's enclose-every-use evaluated on the POST-fusion structure (the child's reads sit under the shared loop). loopdoc §14 is correct; micro impl incomplete. | cwtest_nested_compute_with
-  - [open] compute_with OVERFIT | micro does not enforce the acyclic stage-order rule (§14 "non-decreasing parent-stage indices"; check_fused_stages_are_scheduled_in_order). Crossing fuse edges (f.s0->g.s1 with f.s1->g.s0, or f.s0->g.s0 & f.s2->g.s0 with f.s1 unfused) are accepted by micro but Halide errors "impossible to establish correct stage order". loopdoc §14 documents the rule; micro impl missing. NOTE: the two neg_cwtest_crossing_edges*.cpp files as written also have a uint8/int literal type mismatch that aborts real Halide on a TYPE error first -- the crossing-edge rejection was confirmed via corrected standalone repros; fix the example types when hardening. | neg_cwtest_crossing_edges1, neg_cwtest_crossing_edges2
-  - [open] compute_with OVERFIT | micro does not enforce the CROSS-FUNC mutual-fusion cycle check (check_no_cyclic_compute_with, RealizationOrder.cpp ~181): f fused into g AND g fused into f (e.g. f.compute_with(g) with g.update(0).compute_with(f.update(0))) -- a 2-cycle in the func-level member order. Real Halide errors "Found cyclic dependencies between compute_with of f and g" (exit 1); micro accepts it, emits member order [g,f] and a nest, exits 0 -> behavior difference. Distinct from the crossing_edges stage-index check above (this is direction-flip, that is same-direction inconsistent stage indices). loopdoc §14 Legality documents it; micro impl missing. Added as a regression test by main-agent. | neg_compute_with_mutual
-  - [open] compute_with OVERFIT | rfactor x compute_with: an external producer (f1) that feeds a MEMBER of a fused group must be ordered before the whole group (the group is one node in realization order, §15 step 2). micro orders f1 AFTER the group. loopdoc correct; micro impl incomplete. | cwtest_update_stage_rfactor
-  - [open] compute_with OVERFIT (doc now FIXED) | MEMBER-ORDERING within a fused group: the real within-group realization order is a TOPOLOGICAL order over the fuse edges (each child before its parent => spine-owner last; a CHAIN orders deepest-child-first), with §6 only breaking ties among edge-unordered members; FREE/unfused stages follow this realization order, not §6 name. CONFIRMED via [loopdoc-trace] (chain funcs=[h,g,f]; overlapping_updates funcs=[g,f], free stages emit g.s0,f.s0). loopdoc §14 member-ordering + src_doc compute_with/ordering.md corrected. micro_halide still uses §6-name order -- remaining overfit for the hardening micro-agent. | cwtest_mixed_tile_factor (chain), cwtest_overlapping_updates, cwtest_update_stage_diagonal, cwtest_child_var_dependent_bounds
-  - [open] compute_with OVERFIT (doc now FIXED) | compute_at/store_at/hoist_storage naming a CHILD member is NOT always illegal (the old §14 claim was wrong). It is the ordinary §7 enclose-every-use rule: (member,v) is a real site at that member's slot (member_sites.md); naming a child is legal when the producer's uses are all within that child, illegal otherwise. Verified for all three directives (/tmp/cwverify.cpp). loopdoc §14 ownership/producer bullet + neg_compute_with_producer_at_child.cpp comment corrected; src_doc compute_with/member_sites.md + legality.md written. micro_halide still inlines / mis-handles the child site -- remaining overfit for the hardening micro-agent. | cwtest_two_compute_at, neg_compute_with_producer_at_child
+  # ALL [fixed] below RESOLVED by the closing hardening micro-agent (human-run; only micro_halide.hpp + two permitted micro_halide_collapses annotations changed; no new doc gaps). Harness independently re-run green 152/152. See the compute_with milestone NOTES above for the per-fix doc mapping. The one still-[open] entry is the RVar-vs-Var dim-KIND match (untriggered; deferred).
+  - [fixed] compute_with OVERFIT | A producer compute_at the GROUP PARENT but read by a fused CHILD is wrongly REJECTED by micro: micro checks compute_at enclosure against the PRE-fusion nest, but §14 says producer legality is §7's enclose-every-use evaluated on the POST-fusion structure (the child's reads sit under the shared loop). loopdoc §14 is correct; micro impl incomplete. | cwtest_nested_compute_with
+  - [fixed] compute_with OVERFIT | micro does not enforce the acyclic stage-order rule (§14 "non-decreasing parent-stage indices"; check_fused_stages_are_scheduled_in_order). Crossing fuse edges (f.s0->g.s1 with f.s1->g.s0, or f.s0->g.s0 & f.s2->g.s0 with f.s1 unfused) are accepted by micro but Halide errors "impossible to establish correct stage order". loopdoc §14 documents the rule; micro impl missing. NOTE: the two neg_cwtest_crossing_edges*.cpp files as written also have a uint8/int literal type mismatch that aborts real Halide on a TYPE error first -- the crossing-edge rejection was confirmed via corrected standalone repros; fix the example types when hardening. | neg_cwtest_crossing_edges1, neg_cwtest_crossing_edges2
+  - [fixed] compute_with OVERFIT | micro does not enforce the CROSS-FUNC mutual-fusion cycle check (check_no_cyclic_compute_with, RealizationOrder.cpp ~181): f fused into g AND g fused into f (e.g. f.compute_with(g) with g.update(0).compute_with(f.update(0))) -- a 2-cycle in the func-level member order. Real Halide errors "Found cyclic dependencies between compute_with of f and g" (exit 1); micro accepts it, emits member order [g,f] and a nest, exits 0 -> behavior difference. Distinct from the crossing_edges stage-index check above (this is direction-flip, that is same-direction inconsistent stage indices). loopdoc §14 Legality documents it; micro impl missing. Added as a regression test by main-agent. | neg_compute_with_mutual
+  - [fixed] compute_with OVERFIT | rfactor x compute_with: an external producer (f1) that feeds a MEMBER of a fused group must be ordered before the whole group (the group is one node in realization order, §15 step 2). micro orders f1 AFTER the group. loopdoc correct; micro impl incomplete. | cwtest_update_stage_rfactor
+  - [fixed] compute_with OVERFIT (doc now FIXED) | MEMBER-ORDERING within a fused group: the real within-group realization order is a TOPOLOGICAL order over the fuse edges (each child before its parent => spine-owner last; a CHAIN orders deepest-child-first), with §6 only breaking ties among edge-unordered members; FREE/unfused stages follow this realization order, not §6 name. CONFIRMED via [loopdoc-trace] (chain funcs=[h,g,f]; overlapping_updates funcs=[g,f], free stages emit g.s0,f.s0). loopdoc §14 member-ordering + src_doc compute_with/ordering.md corrected. micro_halide still uses §6-name order -- remaining overfit for the hardening micro-agent. | cwtest_mixed_tile_factor (chain), cwtest_overlapping_updates, cwtest_update_stage_diagonal, cwtest_child_var_dependent_bounds
+  - [fixed] compute_with OVERFIT (doc now FIXED) | compute_at/store_at/hoist_storage naming a CHILD member is NOT always illegal (the old §14 claim was wrong). It is the ordinary §7 enclose-every-use rule: (member,v) is a real site at that member's slot (member_sites.md); naming a child is legal when the producer's uses are all within that child, illegal otherwise. Verified for all three directives (/tmp/cwverify.cpp). loopdoc §14 ownership/producer bullet + neg_compute_with_producer_at_child.cpp comment corrected; src_doc compute_with/member_sites.md + legality.md written. micro_halide still inlines / mis-handles the child site -- remaining overfit for the hardening micro-agent. | cwtest_two_compute_at, neg_compute_with_producer_at_child
 
   # --- compute_with hardening micro-agent (STOPPED MID-RUN by human; micro_halide.hpp was truncated). The agent got the member-ordering tests green by reverse-engineering Halide rather than reading the doc -- an integrity problem -- so the human halted it and asked it to pivot to doc criticism. The body/compute-order section is the wreck. Recorded gaps: ---
   - [fixed] compute_with DOC GAP | BODY/COMPUTE ORDER ("Member ordering" bullet) is under-specified: "a free (unfused) stage emits at its member's realization slot" does NOT reconstruct cwtest_update_stage_diagonal. There f.s2->g.s1 and g.s1->h.s0 (realization order f,g,h); the free stage g.s2 emits LAST (after ALL of h's stages), not at g's slot, because it is BLOCKED at its slot (predecessor g.s1 is fused into h.s0, unemitted) and emission only RETURNS to a blocked member after later-realized members are exhausted (a repeated-sweep / "momentum" discipline). The realization-SLOT metaphor hides this; every passing example happens to avoid a blocked free stage having to jump a later-realized member, so the gap was invisible until diagonal. SUGGEST: respecify as an explicit repeated sweep over members in realization order (emit a member's stages in order until one is not yet ready -- own predecessor or fused parent unemitted -- then move on; repeat sweeps to fixpoint), worked through on diagonal. The micro-agent only matched Halide by inventing exactly this sweep from the OUTPUT, which is the integrity violation the rules forbid. RESOLVED (main-agent, from SOURCE not output): build_pipeline_group's stage_order construction (ScheduleFunctions.cpp ~1761-1800) IS literally this repeated sweep -- for each member in funcs order, emit its ready stages (deps==0, bundling consecutive), break at first blocked stage, repeat sweeps to fixpoint. loopdoc §14 "How the fused nest is built" rewritten around ONE stage order (step 2 = the sweep), with cwtest_update_stage_diagonal as the worked example under "The two observable orders"; src_doc compute_with/ordering.md gives the source loop + worked sweep. The body order IS this sequence -- the "realization slot" metaphor was a lossy paraphrase of it. | cwtest_update_stage_diagonal (also surfaces in cwtest_child_var_dependent_bounds' f.s0/g.s0 free pure stages)
   - [fixed] compute_with DOC GAP | CROSSING-EDGES legality ("non-decreasing parent-stage indices") is NECESSARY but NOT SUFFICIENT, so it does not explain neg_cwtest_crossing_edges1 (f.s0->g.s0 AND f.s2->g.s0, same parent stage, f.s1 unfused between). Parent indices (0,0) are non-decreasing -> doc admits it, but Halide errors "impossible to establish correct stage order between f.s0 with g.s0 and f.s2 with g.s0" (the unfused f.s1 must sit strictly between f.s0 and f.s2 yet both are pinned to the single g.s0). The doc's rule only catches crossing_edges2 (parent indices 1,0 decreasing). SUGGEST: phrase as "combined stage order must be acyclic/consistent" and give BOTH failure shapes (decreasing parent index; two edges to the SAME parent stage straddling an unfused stage). Confirmed via the real Halide error text; NOTE the progress.txt claim of a "uint8/int type mismatch" in these files is WRONG -- both compile and fail purely on the stage-order check. RESOLVED (main-agent, from SOURCE): check_fused_stages_are_scheduled_in_order (RealizationOrder.cpp ~210-237) is exactly "non-decreasing, and equal ONLY across consecutive fused stages (are_stages_consecutive resets at any unfused stage)" -- which rejects BOTH shapes. src_doc compute_with/legality.md already had the precise rule; only loopdoc §14 lagged. loopdoc §14 legality bullet rewritten to "the stage order must exist" with both failure shapes (decrease: crossing_edges2; repeat-across-gap: crossing_edges1) and both examples cited. | neg_cwtest_crossing_edges1, neg_cwtest_crossing_edges2
-  - [open] compute_with EXAMPLE GAP (not a doc gap) | cwtest_child_var_dependent_bounds is missing micro_halide_collapses annotations: real Halide elides f_inter/g_inter's pure-stage x loops and f/g's pure-stage x loops to points (f_inter/g_inter computed at the update RVar r make their pure x a single point; the def-stage x loops also collapse). The producer-placement itself is doc-consistent (f_inter and g_inter, both compute_at(f,r), land under the shared fused.r loop nested in §6 order f_inter,g_inter, g_inter serving g's read since g's body is enclosed -- §14 "Loop ownership"/§15 step 3). So the ONLY non-body-order discrepancy here is declared elision missing from the example, plus the body-order gap above. | cwtest_child_var_dependent_bounds
+  - [fixed] compute_with EXAMPLE GAP (not a doc gap) | cwtest_child_var_dependent_bounds is missing micro_halide_collapses annotations: real Halide elides f_inter/g_inter's pure-stage x loops and f/g's pure-stage x loops to points (f_inter/g_inter computed at the update RVar r make their pure x a single point; the def-stage x loops also collapse). The producer-placement itself is doc-consistent (f_inter and g_inter, both compute_at(f,r), land under the shared fused.r loop nested in §6 order f_inter,g_inter, g_inter serving g's read since g's body is enclosed -- §14 "Loop ownership"/§15 step 3). So the ONLY non-body-order discrepancy here is declared elision missing from the example, plus the body-order gap above. | cwtest_child_var_dependent_bounds
   - [note] compute_with | The member-ordering / produce-nesting half of §14 ("Member ordering" -- within-group realization order = topological child-before-parent, §6 tie-break only for edge-unordered members; produce nesting = reverse) WAS reconstructible from the doc and matched Halide for cwtest_overlapping_updates and the cwtest_mixed_tile_factor chain. It is specifically the BODY/COMPUTE-order sub-bullet (the realization-SLOT phrasing) that fails. Keep the realization-order definition; rewrite only the body-emission description. | cwtest_overlapping_updates, cwtest_mixed_tile_factor
