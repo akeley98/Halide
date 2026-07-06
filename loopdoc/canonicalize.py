@@ -73,6 +73,13 @@ class ParseError(Exception):
 _FOR_TYPES = ("for", "parallel", "unrolled", "vectorized",
               "extern", "gpu_block", "gpu_thread", "gpu_lane")
 
+# Halide's print_loop_nest() path can emit free-form "Warning: ..." lines on
+# stderr *before* the loop nest (e.g. splitting a var of an inlined func, or
+# overwriting an existing compute_with). These are diagnostics, not loop-nest
+# structure, and micro_halide does not reproduce them. Strip them so they don't
+# trip the fail-open parser. (Targeted, human-authorized harness change.)
+_WARNING_RE = re.compile(r"^Warning:")
+
 _PRODUCE_RE = re.compile(r"^produce (?P<name>\S+):$")
 _CONSUME_RE = re.compile(r"^consume (?P<name>\S+):$")
 _STORE_RE = re.compile(r"^store (?P<name>\S+):$")
@@ -123,6 +130,8 @@ def parse(output: str) -> list:
     stack: list = [(-1, None)]
     for lineno, raw in enumerate(output.splitlines(), 1):
         if not raw.strip():
+            continue
+        if _WARNING_RE.match(raw):
             continue
         n_spaces = len(raw) - len(raw.lstrip(" "))
         if n_spaces % _INDENT != 0:
