@@ -2,7 +2,7 @@
 
 The purpose of the main agent is to write the loop documentation and the accompanying Halide examples.
 The main agent will mostly NOT implement `micro_halide`.
-Instead, the main agent delegates this to sub-agents that are reading the main agent's documentation.
+Instead, the main agent delegates this to other agents ("micro agents") that are reading the main agent's documentation.
 
 
 ## Flow
@@ -44,7 +44,10 @@ Instead, the main agent delegates this to sub-agents that are reading the main a
   IMPORTANT: the milestones are not an outline of how to structure the `loopdoc.md`!!!
   Each milestone involves *holistically* editing the entire documentation into a coherent whole, not just appending more text at the end.
 
+  You may wish to leave comments using `<!-- -->` syntax in `loopdoc.md` highlighting what changed to guide the micro-agent.
+
 * Write/update C++ examples in `examples/`, and cite those examples in the `loopdoc.md` at appropriate points to help illustrate the documentation.
+  Implement stub functions in `micro_halide` as needed to make examples compile (but not necessarily execute successfully).
 
 * The Hard Part: Back-up your claims in the `loopdoc.md` by explaining, with a new or modified file in `src_doc`, how the Halide compiler is *implementing* the documented behavior.
   Unlike the main `loopdoc.md` file, this is at a level of detail suitable to help humans maintain the Halide compiler.
@@ -52,12 +55,10 @@ Instead, the main agent delegates this to sub-agents that are reading the main a
   As needed, insert `debug(1) << "text";` logging into the Halide compiler itself, and include transcripts of the debug log to illustrate the compiler's internal logic.
 
 * Loop:
-    * Make a git commit
+    * Ensure all C++ examples compile with `micro_halide` (they don't have to execute successfully).
+    * Make a git commit.
     * Pause; ask the user to review the documentation.
-    * If this is not the bootstrap milestone, spawn micro-agents to edit `micro_halide` based on the documentation you've written.
-      Spawn them as described in "Launching logged micro-agents" below.
-      You may wish to leave comments using `<!-- -->` syntax in `loopdoc.md` highlighting what changed to guide the micro-agent.
-    * If this is the bootstrap milestone, edit `micro_halide` yourself to make the tests (`sh test.sh`) pass.
+      If the user approves, the user will launch a separate "micro-agent" Claude instance.
     * Review micro_halide changes made by the micro-agent.
     * Make a git commit, with commentary on whether the tests are passing or failing.
 
@@ -87,9 +88,6 @@ Instead, the main agent delegates this to sub-agents that are reading the main a
 * DO NOT modify the harness.
   If you suspect a bug in the harness, flag it for human review.
 
-* DO NOT spawn a micro-agent if the C++ compilation step failed.
-  Implement stub functions in `micro_halide` as needed to make examples compile (but not necessarily execute successfully).
-
 * Avoid implementing non-trivial logic in `micro_halide`.
   It's a judgment call what "non-trivial" is: decide by considering the purpose of `micro_halide` is to test the micro-agent's comprehension of the documentation you are writing.
   Since only you (and not the micro-agent) are allowed to reference the Halide source code, you should probably implement drop-in replacements for classes and functions that are patterned after the real Halide, but have placeholder implementations (`throw std::runtime_error("TODO xyz")`).
@@ -102,40 +100,6 @@ Instead, the main agent delegates this to sub-agents that are reading the main a
 
 * The human is not experienced in agentic coding and indeed has not a very clear picture of what he's doing.
   You may stop to give suggestions if the harness or milestone list or overall way of doing things seem counterproductive.
-
-
-## Launching logged micro-agents
-
-Always spawn micro-agents as the **`micro-halide` agent type** (defined in
-`.claude/agents/micro-halide.md`), i.e. call the Agent tool with
-`subagent_type: "micro-halide"`. That agent type is tool-restricted and has a
-PreToolUse hook that logs every tool call to `loopdoc/tool_audit.jsonl` for
-integrity review. Do NOT use a generic sub-agent for micro_halide work -- it
-would be unlogged and unrestricted.
-
-When writing the spawn prompt:
-
-* DO NOT paste anything derived from the Halide source. The whole experiment
-  rests on the micro-agent reconstructing structure from `loopdoc.md` alone;
-
-* Remind it that its canonical instructions are `loopdoc/micro_agent.md`.
-
-* Stop putting clarifications of Halide behavior, or hints/sketches of how to implement micro_halide,
-  in the prompt for the micro-agent, except for extenuating circumstances approved by the human.
-  If some information is needed, it's supposed to go into `loopdoc.md`,
-  which means the info actually becomes part of the final artifact of this experiment,
-  instead of into a temporary prompt that is difficult to audit or reproduce.
-
-After the micro-agent returns, BEFORE trusting its results:
-
-* Run `python3 review_micro.py --last` (or `--agent <id>`).
-* If it reports `INTEGRITY FLAGGED` (the micro-agent read Halide source, or committed),
-  flag for human review -- a contaminated run tells you nothing about doc quality.
-* If it warns the micro-agent never read `loopdoc.md`, treat any pass with
-  suspicion and consider re-running.
-
-The audit log accumulates across runs and is gitignored; `review_micro.py` with
-no arguments summarizes every micro-agent run on record.
 
 
 ## Halide Source Code References
