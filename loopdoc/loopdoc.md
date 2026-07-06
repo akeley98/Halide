@@ -317,10 +317,19 @@ that the wrapped code is exactly `f`'s readers.)
 to **undo** a previous `compute_root`/`compute_at`, after which `f` behaves as if
 never scheduled: a pure `f` is substituted into its callers and vanishes from the
 nest (§5); a non-pure `f` is realized at its innermost use (§11). It resets *only*
-the compute level — any `split`/`reorder` already recorded stays but becomes
-inapplicable (an inlined Func has no loop nest of its own; Halide warns if you
-transform one). A **store or hoist level may not be left set on an inlined Func**
-(§8 Legality).
+the compute level — any recorded `split`/`fuse`/`reorder` stays. For a **pure**
+inline Func that is moot (it vanishes; Halide warns *"meaningless to split …
+scheduled inline"* if you transform one). But a **non-pure** inline Func is still
+realized (§11), so a transform on its stages genuinely takes effect on those
+realized loops — a `split` inner loop survives
+([examples/compute_inline_split_nonpure.cpp](examples/compute_inline_split_nonpure.cpp)),
+a `fuse` produces the fused loop
+([examples/compute_inline_fuse_nonpure.cpp](examples/compute_inline_fuse_nonpure.cpp)).
+A **store or hoist level may not be left set on an inlined Func**, even when
+reached by an inline override
+([examples/neg_compute_inline_leftover_store.cpp](examples/neg_compute_inline_leftover_store.cpp),
+[examples/neg_compute_inline_leftover_hoist.cpp](examples/neg_compute_inline_leftover_hoist.cpp));
+see §8 Legality.
 
 This is the first source of `consume` nesting worth stating plainly: when
 several Funcs are realized in sequence, their `consume` blocks **nest** — the

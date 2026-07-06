@@ -885,13 +885,13 @@ class Func: public FuncStageImpl<Func>
     }
 
     // compute_inline(): reset the compute level to the default (inlined) -- the
-    // inverse of compute_root/compute_at. STUB (main agent) so examples compile;
-    // the micro-agent implements it from loopdoc.md section 6 (the resulting nest
-    // is then §5's pure-inline vanish or §11's non-pure realize-at-use; the
-    // store/hoist-requires-a-non-inline-compute-level legality is already in §8).
+    // inverse of compute_root/compute_at.
     Func &compute_inline()
     {
-        throw std::runtime_error("TODO compute_inline: micro-agent to implement from loopdoc.md section 6");
+        contents->level = FuncContents::Level::Inline;
+        contents->at_func = {};
+        contents->at_var = {};
+        return *this;
     }
 
     // store_at / store_root: record the store level. See the note on
