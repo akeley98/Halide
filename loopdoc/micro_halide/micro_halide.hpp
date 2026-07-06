@@ -759,6 +759,19 @@ class Stage;
 // ---------------------------------------------------------------------------
 // Common code for scheduling operators valid both on Func (program the
 // pure stage) and Stage (program an update stage).
+//
+// !!! PUT SHARED Func/Stage SCHEDULING METHODS HERE, NOT IN BOTH Func AND Stage.
+// If a scheduling operator makes sense on both a Func (its pure stage) and a
+// Stage (an update stage) -- which is MOST of them: split/fuse/reorder/tile,
+// compute_with, specialize/specialize_fail, ... -- declare it ONCE on this CRTP
+// base. It operates on whichever stage `stage_index` names, and both Func and
+// Stage inherit it. Do NOT copy-paste a declaration into class Func and class
+// Stage: that is duplicated code that drifts, and it is exactly the thing the
+// maintainer keeps having to undo. (Methods that genuinely belong to only one --
+// e.g. rfactor / in / clone_in on Func or update() on Func -- stay on that class.)
+// If a method must return `Stage` (incomplete here), declare it in-class and
+// define it out of line below, after Stage is complete, as a template method of
+// FuncStageImpl<Derived>.
 // ---------------------------------------------------------------------------
 template <typename Derived>
 class FuncStageImpl
@@ -856,6 +869,19 @@ class FuncStageImpl
         // Not in scope for micro_halide: replicating the rule:
         // > This counts as a schedule, so calling this twice on the same Stage will fail the assertion.
     }
+
+    // specialize / specialize_fail (loopdoc.md section 15): give THIS stage's
+    // definition a conditional variant. specialize() forks a COPY of the schedule
+    // so far and returns a handle to it (so further scheduling on the handle
+    // affects the branch only); specialize_fail() terminates the chain with no
+    // fallback. Shared by Func (pure stage) and Stage (update stage) -- this is
+    // ONE operation on whichever stage `stage_index` names, so it lives here in
+    // FuncStageImpl, NOT duplicated in Func and Stage (see the header note on
+    // FuncStageImpl). STUBS: forking the per-branch schedule and emitting the
+    // concatenated branch nests (loopdoc.md section 15) is the micro-agent's task.
+    // They throw until implemented.
+    class Stage specialize(const Expr &condition);
+    void specialize_fail(const std::string &message);
 };
 
 // ---------------------------------------------------------------------------
@@ -973,19 +999,9 @@ class Func: public FuncStageImpl<Func>
     Func clone_in(const Func &consumer);
     Func clone_in(const std::vector<Func> &consumers);
 
-    // compute_with is inherited from FuncStageImpl (works for Func and Stage,
-    // and accepts a Var or RVar fuse level).
-
-    // specialize / specialize_fail (loopdoc.md section 15): give this Func's
-    // current definition a conditional variant. specialize() forks a COPY of the
-    // schedule so far and returns a handle to it (so further scheduling on that
-    // handle affects the branch only); specialize_fail() terminates the chain
-    // with no fallback nest. These are STUBS provided by the main agent so
-    // examples compile; forking the per-branch schedule and emitting the
-    // concatenated branch nests (loopdoc.md section 15) is the micro-agent's
-    // task. They throw until implemented.
-    class Stage specialize(const Expr &condition);
-    void specialize_fail(const std::string &message);
+    // compute_with, specialize, and specialize_fail are inherited from
+    // FuncStageImpl (they work for Func and Stage alike); do NOT redeclare them
+    // here (see the header note on FuncStageImpl).
 
     void print_loop_nest();
 };
@@ -1016,13 +1032,10 @@ class Stage: public FuncStageImpl<Stage>
     }
     Func rfactor(const std::vector<std::pair<RVar, Var>> &preserved);
 
-    // compute_with is inherited from FuncStageImpl (loopdoc.md section 14).
-
-    // specialize / specialize_fail on an update stage (loopdoc.md section 15),
-    // and nested specialization of a branch. STUBS (see the note on
-    // Func::specialize); they throw until the micro-agent implements them.
-    Stage specialize(const Expr &condition);
-    void specialize_fail(const std::string &message);
+    // compute_with, specialize, and specialize_fail are inherited from
+    // FuncStageImpl; do NOT redeclare them here (see the header note on
+    // FuncStageImpl). Nested specialization of a branch just calls the inherited
+    // specialize() on the Stage handle a prior specialize() returned.
 };
 
 inline Stage Func::update(int i) const
@@ -1030,22 +1043,18 @@ inline Stage Func::update(int i) const
     return Stage(contents, i);
 }
 
-// specialize / specialize_fail STUBS (loopdoc.md section 15). The API compiles
-// so examples build; the per-branch schedule fork and the concatenated branch
+// specialize / specialize_fail STUBS (loopdoc.md section 15), defined ONCE for
+// both Func and Stage on the FuncStageImpl base (defined here, out of line,
+// because they return Stage which is only complete now). The API compiles so
+// examples build; the per-branch schedule fork and the concatenated branch
 // emission are the micro-agent's task. They throw until implemented.
-inline Stage Func::specialize(const Expr &)
+template <typename Derived>
+inline Stage FuncStageImpl<Derived>::specialize(const Expr &)
 {
     throw CompileError("micro_halide: TODO specialize (loopdoc.md section 15)");
 }
-inline void Func::specialize_fail(const std::string &)
-{
-    throw CompileError("micro_halide: TODO specialize_fail (loopdoc.md section 15)");
-}
-inline Stage Stage::specialize(const Expr &)
-{
-    throw CompileError("micro_halide: TODO specialize (loopdoc.md section 15)");
-}
-inline void Stage::specialize_fail(const std::string &)
+template <typename Derived>
+inline void FuncStageImpl<Derived>::specialize_fail(const std::string &)
 {
     throw CompileError("micro_halide: TODO specialize_fail (loopdoc.md section 15)");
 }

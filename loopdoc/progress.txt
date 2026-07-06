@@ -230,7 +230,7 @@ Marking convention:
       scaffolding). Examples COMPILE with micro; positives THROW at runtime
       pending the micro-agent. Legality (compute_with caller must have no
       specializations) is the micro-agent's to enforce once specialize is real.
-    * EXAMPLES (12 positive + 1 negative): specialize_basic (concat + order),
+    * EXAMPLES (13 positive + 1 negative): specialize_basic (concat + order),
       specialize_inherit (schedule-so-far copied), specialize_fallback_scope
       (post-specialize directive -> fallback only), specialize_nested (3 distinct
       branches), specialize_fail (drops fallback), specialize_producer_root (root
@@ -242,7 +242,8 @@ Marking convention:
       pure=1 nest, update=2), specialize_both_stages (pure and update specialized
       independently -> 4 nests under one produce f), specialize_clone_inherits
       (clone_in deep-copies specializations: the clone carries f's branches; an
-      in() wrapper would not).
+      in() wrapper would not), specialize_tree (sibling cond_b + child cond_c of
+      cond_a -> 4-leaf tree; flat vs nested).
       neg_compute_with_specialize (caller specialized -> illegal).
 
 [ ] `vectorize`, `unroll`, `parallel`, `gpu`, `gpu_lanes`, `gpu_threads`, `gpu_blocks`, `gpu_tile`

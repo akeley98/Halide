@@ -64,12 +64,11 @@ add the **schedule** that places and reshapes those loops across the pipeline.
     * a per-stage, ordered list of **specializations**, set by `specialize` (§15)
       and *empty* by default. Each specialization pairs a condition with **its own
       forked copy of the stage's definition** — the schedule (splits, levels, …)
-      *plus* that copy's own specialization list, which starts empty. This nests:
-      calling `specialize` again on a branch adds to *that branch's* list
-      (`f.specialize(c1).specialize(c2)` → an `if` inside an `if`, §15). It is the
-      structure that recurses, not the schedule directives. `specialize_fail`
-      records a terminal specialization with no fallback. Each becomes a
-      conditional variant of the stage's loop nest (§15).
+      *plus* that copy's own specialization list, which starts empty (so
+      specializations can nest; see §15 "How it becomes loops" for how nested and
+      sibling specializations combine). `specialize_fail` records a terminal
+      specialization with no fallback. Each becomes a conditional variant of the
+      stage's loop nest (§15).
 
 * **`ImageParam`** — an input buffer. It is a *leaf*: it is never computed and
   never appears in the loop nest. A Func that reads an `ImageParam` simply has
@@ -1680,11 +1679,44 @@ time instead of providing a fallback; nothing may be specialized after it.
 
 ### How it becomes loops
 
-Each definition's specializations lower to a nested if/else that wraps that
-definition's loop nest: `if cond_0 { branch_0 } else if cond_1 { branch_1 } …
-else { fallback }`, in **declaration order**, with the unspecialized **fallback
-last**. Each branch is a full loop nest built from **that branch's** copied
-schedule (§16 applied to the fork).
+A definition's specialization list lowers to a chain of `if`/`else`: the
+specializations become the `if`/`else if` arms, in **declaration order**, with
+the unspecialized default as the final `else` — `if cond_0 { branch_0 } else if
+cond_1 { branch_1 } … else { fallback }`. "Declaration order" is simply the order
+the `specialize()` calls were made in your C++ program (program order); the
+conditions are tested first-declared-first, so the first matching arm wins.  Each
+branch is a full loop nest built from **that branch's** copied schedule (§16
+applied to the fork).
+
+Because a specialization's forked copy is itself a full definition with its own
+(initially empty) specialization list (§1), specializations form a **tree**, and
+*which handle* you call `specialize` on decides the shape:
+
+* Calling `specialize` again on the **same** `Func`/`Stage` handle appends another
+  arm to *that* definition's list — the arms are **siblings**, giving one **flat**
+  `if / else if / … / else` chain.
+* Calling `specialize` on the **handle returned by** an earlier `specialize`
+  descends into that branch and appends to *its* list — a **child**, giving a
+  **nested** `if` inside that branch's arm
+  ([examples/specialize_nested.cpp](examples/specialize_nested.cpp) nests one
+  branch inside another).
+
+Mixing the two builds an arbitrary tree.
+[examples/specialize_tree.cpp](examples/specialize_tree.cpp) does both: with
+`fa = f.specialize(cond_a)`, then `f.specialize(cond_b)` (a **sibling** of
+`cond_a`, added to `f`), then `fa.specialize(cond_c)` (a **child** of `cond_a`,
+added to `fa`), the result is
+
+```
+if cond_a:
+  if cond_c: … else: …        // cond_a && cond_c ; cond_a && !cond_c
+else:
+  if cond_b: … else: …        // !cond_a && cond_b ; !cond_a && !cond_b
+```
+
+so `cond_c` is only tested when `cond_a` holds, and `cond_b` only when it does
+not — four leaf cases. (The `specialize` handle is a `Stage`, so store it as
+`Stage fa = f.specialize(cond_a);` — see §13 for why it is not a `Func`.)
 
 `print_loop_nest()` does not print conditions or any `if`/`else` marker: it walks
 into **every** branch and prints each branch's loop nest, so the branches appear
