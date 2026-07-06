@@ -2,38 +2,22 @@
 
 Grouped into sections; sections are meant to be done in stated order, with tasks within a section not necessarily ordered.
 
-## RVar
+## `specialize` Doc Edits
 
-- [ ] `RVar` isn't accepted by `micro_halide::compute_with`.
-      Fix and test this.
-      Minimal authorized modifications to `micro_halide` to test this for the main agent to do:
-      * First move the two `compute_with` implementations into the common `FuncStageImpl` class and get rid of the TODOs for the micro-agent.
-      * Then add a new `compute_with` for `RVar`. It seems the `Var` is just reduced to a string name so this should be easy to do without really adding any new logic.
-- [ ] The "Var or RVar"-ness may be part of the "matching loop nests down to `v`" criteria so the above may expose a real doc/`micro_halide` gap.
-  Don't fix `micro_halide` if this is the case, but update the doc (will launch micro-agent later).
-- [ ] Task from commit message: Doc gap (RVar task 2): the "matching loop nests down to v" criterion also
-    requires each paired shared dim to agree in KIND (Var vs RVar; Halide compares
-    `dim_type/for_type/device_api`, ScheduleFunctions ~2496-2514). loopdoc §14 now
-    states this and that the fuse level itself may be a Var or RVar. Per human
-    instruction, `micro_halide` is NOT changed to enforce the kind check (it checks
-    name+count); recorded as an [open] DISCOVERED DOC GAP for a future micro-agent.
-    Hard to trigger (needs a Var/RVar name collision), so no negative example forces it.
+[ ] Briefly mention that `f.specialize(...)` returns an existing function handle if given a duplicate `Expr`, and that this is out-of-scope for `micro_halide`.
 
-## Copy Halide Tests
+[ ] Rephrase the `select` paragraph as a separate explicit "known limitation" sub-section, which introduces the poorly-tested workaround.
+    Basically, roll back to something similar to the "impossible" language, except an ",unless ..." calling forward to the weird sub-section.
+    Declare simplifying `select` as out-of-scope for `micro_halide`.
 
-- [ ] Look at `test/correctness/compute_with.cpp` (about 2000 lines of code) and copy examples from there.
-      Get rid of trace and realize code, and get rid of anything not supported by `micro_halide`.
-      (Report if this seems to undermine the example).
-      Print the loop nest of the func that was realized in the original test.
-- [ ] Adapt some of those tests into negative examples.
+[ ] Update "objects and their conceptual state" with the extra specialize state.
 
-## More tests
+[ ] Update `in`/`clone_in` section with brief interaction with `specialize`.
+    Also, what happens if the func parameter is a Func handle from `f.specialize(...)`?
+    Is it exactly equivalent to passing `f` itself?
 
-Ignore cases that already exist or were covered by the `compute_with.cpp` copying.
+[ ] If not done, write some examples where the specialized function is deep in the pipeline, and not the top-level function.
+    Inform me of the names of the new or existing examples.
 
-- [ ] Cases of interaction between `store_at` and fused groups causing the site func argument to `store_at` to be wrong (a fused away child)
-- [ ] Cases of indirect producer/consumer relations (`f->g->h`) potentially making some `compute_with` not valid
-- [ ] Adversarial cases of `store:` being printed for multiple functions with the same site for `store_at`, with interaction with fused groups.
-- [ ] In general just make complicated versions of existing cases with more transitivity and indirect producer/consumer relations.
-      The latter has been a profitable source of bugs in the past.
-- [ ] `rfactor`-generated functions and `compute_with`. Test some interesting interactions.
+[ ] Clarify if `Identical branches merge` is intended to be out-of-scope for `micro_halide`.
+    If so, I agree with this decision.
