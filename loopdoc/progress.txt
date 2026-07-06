@@ -154,6 +154,14 @@ Marking convention:
     Micro-agent should stop and report problems back to the main agent
     if this is the case.
 
+    User request: consider a function f that is specialized and consumes function g.
+    Similar to clone, the specialized f doesn't transitively specialize g.
+    (Correct me if I'm mistaken).
+    This leads to three cases to carefully probe.
+    First, having g be compute_at/store_at/hoist'd differently depending on which specialized f is the caller (easy case).
+    Second, having g be scheduled differently internally depending on which specialized f is the caller (hard case, requires g clone/wrapper?)
+    Third, the previous case except we care about specializing some h that g consumes based on which specialized f is the ultimate caller (even harder case, chain of g/h clone/wrapper?)
+
 [ ] `vectorize`, `unroll`, `parallel`, `gpu`, `gpu_lanes`, `gpu_threads`, `gpu_blocks`, `gpu_tile`
     NOTES: micro_halide will not reason about bounds analysis so do
     not write negative examples that fail because of detected race conditions.
