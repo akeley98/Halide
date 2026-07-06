@@ -86,6 +86,28 @@ Two simplifier effects run before printing (`print_loop_nest`,
   differs only in ways the loopdoc canonicalizer drops (serial-loop order, constant
   bounds) is *not* merged and prints separately.
 
+## Per-branch producers, and when the dead branch is pruned
+
+`specialize` never forks a callee — `add_specialization` copies only *this*
+Definition's `stage_schedule`, and callees are shared Funcs in `env` with one
+schedule each. So there is no schedule-only way to compute a producer differently
+per consumer branch; `in`/`clone_in` likewise produce a single wrapper/clone Func
+(one schedule) read in every branch. The only per-branch producer mechanism is an
+**algorithm** `select(cond, g, gc)` combined with `f.specialize(cond)`: the branch
+whose condition is `cond` has `cond` propagated into its RHS by
+`simplify_specializations`, collapsing `select(cond, g, gc)` to `g` there (and to
+`gc` in the fallback). That is an algorithm change with no `g == gc` check.
+
+Ordering matters for legality: `simplify_specializations(env)` runs (PrintLoopNest
+~192) **before** `schedule_functions` (~203) injects producers and validates their
+compute levels. So a producer pruned from a branch's RHS is simply not present in
+that branch's body and is never injected there — it imposes no scheduling
+constraint on the branch where it is dead. A producer's `compute_at` level is
+validated only against the branch(es) whose body actually uses it. (Verified in
+`probe/probe_specialize_deadbranch.cpp`: a producer at a tile loop that exists only
+in its live branch is legal though the dead fallback lacks that loop; the invalid
+case reports the *live* branch's loops as the legal set.)
+
 ## Legality: fused members may not be specialized
 
 `compute_with` collection (`src/ScheduleFunctions.cpp` ~2455) asserts

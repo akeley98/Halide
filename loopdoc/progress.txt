@@ -202,11 +202,26 @@ Marking convention:
           [open] gap below). specialize_producer_at.cpp uses the SYMMETRIC-elision
           variant (producer at the same var in both branches, f's outer loop
           split) to stay testable.
-        - Cases 2 & 3 (callee scheduled differently INTERNALLY per branch): NOT
-          expressible via specialize at all (would need genuinely separate Funcs;
-          not even clone_in helps, since a specialized f is still one consumer of
-          the callee). Documented as the CORRECTION to the user's hypothesis
-          (loopdoc §15 "Producers under a specialized consumer"). No example.
+        - Cases 2 & 3 (callee scheduled differently INTERNALLY per branch): NO
+          SCHEDULE-ONLY mechanism (the user's assessment, confirmed). specialize
+          forks only the consumer's own schedule; clone_in/in give ONE shared
+          wrapper/clone schedule read in all branches (probe_specialize_case2.cpp
+          (1)/(2): the clone is tiled IDENTICALLY in both branches). The ONLY way
+          to get per-branch producers is an ALGORITHM select: f = select(cond, g,
+          gc) + f.specialize(cond), where simplify_specializations prunes the
+          select per branch so each injects only its named producer, independently
+          scheduled (probe (3): tiled g in one branch, plain gc in the other). But
+          that CHANGES what f computes and has NO equivalence safety net (Halide
+          never checks g==gc), so it sits OUTSIDE the algorithm/schedule
+          separation -- a workaround, not a scheduling answer. Case 3 = same one
+          level deeper (duplicate the g/h sub-chain). Dead-branch elimination is
+          EARLY (simplify_specializations, before schedule_functions), so a
+          producer dead in a branch imposes NO scheduling constraint there
+          (probe_specialize_deadbranch.cpp (b) legal; (c) errors only from the
+          LIVE branch). loopdoc §15 "Producers under a specialized consumer"
+          rewritten to this (was overclaimed as "not expressible"). Probes +
+          SPECIALIZE_FINDINGS.md "Case 2/3" section seed the design discussion.
+          No harness example (select needs Expr analysis micro_halide lacks).
     * CONDITION DE-DUP: OUT OF SCOPE per the human note above -- every example
       uses DISTINCT conditions (separate Param<bool>s), so micro need not cache
       Expr equality. loopdoc §15 "Out of scope" documents it.

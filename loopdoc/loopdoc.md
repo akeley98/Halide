@@ -1688,11 +1688,26 @@ duplicated per branch
 `specialize` forks **only the specialized Func's own schedule**. It does **not**
 reach into its callees: a producer is a separate Func with **one** definition and
 **one** schedule, shared by every branch. So the only per-branch variation a
-producer can show is its **placement** — which happens when the `compute_at`
-level names a loop that the consumer's branch has moved (by a per-branch
-`reorder`/`split`/`rename`). There is no way to schedule a producer's *internals*
-(its own splits, its own compute level) differently across a consumer's branches;
-that would require genuinely separate Funcs.
+producer can show *through scheduling* is its **placement** — which happens when
+the `compute_at` level names a loop that the consumer's branch has moved (by a
+per-branch `reorder`/`split`/`rename`). There is **no scheduling directive** that
+computes a producer *differently internally* (its own splits, its own compute
+level) depending on which branch of a consumer uses it — and `in`/`clone_in` do
+not provide one: they redirect a consumer's reads to a **single** wrapper/clone
+Func with one schedule, read in all of the consumer's branches.
+
+The only way to get genuinely per-branch producers is to make the **algorithm**
+select between separate Funcs — `f(x,y) = select(cond, g(x,y), gc(x,y))` with
+`f.specialize(cond)`, where the simplifier prunes the `select` per branch so each
+branch computes only the producer it names, each with its own schedule. Note this
+is an **algorithm** change, not a schedule: it alters what `f` computes and
+carries **no guarantee** that `g` and `gc` are equivalent (Halide never checks),
+so it sits outside the algorithm/schedule separation that otherwise makes
+scheduling value-preserving. (Because the `select` is pruned *before* producers
+are placed, a producer that is dead in a branch imposes no scheduling constraint
+there; a producer's `compute_at` level need only be valid in the branch where it
+is actually used. See [src_doc: specialize](src_doc/specialize.md) and
+`probe/SPECIALIZE_FINDINGS.md`.)
 
 ### Legality
 
