@@ -119,6 +119,27 @@ class Expr
     Expr(const FuncRef &);
 };
 
+// Param<T>: a scalar runtime parameter. Its VALUE is irrelevant to the loop
+// nest; it exists only to form specialize() conditions (loopdoc.md section 15).
+// Distinct Param objects are distinct conditions, and examples never reuse a
+// condition Expr, so micro_halide need not dedup specializations by condition
+// (loopdoc.md section 15 "Out of scope").
+template <typename T>
+class Param
+{
+  public:
+    Param()
+    {
+    }
+    explicit Param(const std::string &)
+    {
+    }
+    operator Expr() const
+    {
+        return Expr();
+    }
+};
+
 inline Expr combine(const Expr &a, const Expr &b)
 {
     Expr r;
@@ -955,6 +976,17 @@ class Func: public FuncStageImpl<Func>
     // compute_with is inherited from FuncStageImpl (works for Func and Stage,
     // and accepts a Var or RVar fuse level).
 
+    // specialize / specialize_fail (loopdoc.md section 15): give this Func's
+    // current definition a conditional variant. specialize() forks a COPY of the
+    // schedule so far and returns a handle to it (so further scheduling on that
+    // handle affects the branch only); specialize_fail() terminates the chain
+    // with no fallback nest. These are STUBS provided by the main agent so
+    // examples compile; forking the per-branch schedule and emitting the
+    // concatenated branch nests (loopdoc.md section 15) is the micro-agent's
+    // task. They throw until implemented.
+    class Stage specialize(const Expr &condition);
+    void specialize_fail(const std::string &message);
+
     void print_loop_nest();
 };
 
@@ -985,11 +1017,37 @@ class Stage: public FuncStageImpl<Stage>
     Func rfactor(const std::vector<std::pair<RVar, Var>> &preserved);
 
     // compute_with is inherited from FuncStageImpl (loopdoc.md section 14).
+
+    // specialize / specialize_fail on an update stage (loopdoc.md section 15),
+    // and nested specialization of a branch. STUBS (see the note on
+    // Func::specialize); they throw until the micro-agent implements them.
+    Stage specialize(const Expr &condition);
+    void specialize_fail(const std::string &message);
 };
 
 inline Stage Func::update(int i) const
 {
     return Stage(contents, i);
+}
+
+// specialize / specialize_fail STUBS (loopdoc.md section 15). The API compiles
+// so examples build; the per-branch schedule fork and the concatenated branch
+// emission are the micro-agent's task. They throw until implemented.
+inline Stage Func::specialize(const Expr &)
+{
+    throw CompileError("micro_halide: TODO specialize (loopdoc.md section 15)");
+}
+inline void Func::specialize_fail(const std::string &)
+{
+    throw CompileError("micro_halide: TODO specialize_fail (loopdoc.md section 15)");
+}
+inline Stage Stage::specialize(const Expr &)
+{
+    throw CompileError("micro_halide: TODO specialize (loopdoc.md section 15)");
+}
+inline void Stage::specialize_fail(const std::string &)
+{
+    throw CompileError("micro_halide: TODO specialize_fail (loopdoc.md section 15)");
 }
 
 // ---------------------------------------------------------------------------

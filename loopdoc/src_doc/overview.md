@@ -13,7 +13,7 @@ lowering:
     }
 
 This is why the output never inlines and always appears as the outermost
-`produce` (loopdoc §5, §6, §15 step 1). In the real `realize`/`compile` path the
+`produce` (loopdoc §5, §6, §16 step 1). In the real `realize`/`compile` path the
 same effect comes from the output simply being the realized buffer.
 
 ## 2. The default schedule is "inlined"
@@ -44,7 +44,7 @@ The topological producers-before-consumers order is computed by
 `print_loop_nest` calls it (`auto [order, fused_groups] =
 realization_order(outputs, env);`) and `schedule_functions` injects each
 function's realization in that order. This backs loopdoc §6 ("realization
-order") and §15 step 2. Inlined Funcs remain in `env` and so still contribute
+order") and §16 step 2. Inlined Funcs remain in `env` and so still contribute
 edges to the ordering even though they get no realization.
 
 ### Sibling tie-break

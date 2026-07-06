@@ -36,7 +36,7 @@ producer's realization at that point. The matching is done by the
 
 The realization (`produce`/loops/`consume`) is spliced in as a prefix of that
 loop's body, with the remainder of the body becoming the `consume` content.
-This backs loopdoc §7's nesting picture and §15 steps 3–4.
+This backs loopdoc §7's nesting picture and §16 steps 3–4.
 
 `compute_inline()` is not a separate mechanism: `Func::compute_inline()`
 (`src/Func.cpp` ~3070) is literally `return compute_at(LoopLevel::inlined());`,
