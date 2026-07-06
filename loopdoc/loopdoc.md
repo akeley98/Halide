@@ -61,6 +61,11 @@ add the **schedule** that places and reshapes those loops across the pipeline.
       **interleaved into another stage's**, the two sharing their outer loops;
       the connected set of stages so tied together forms a **fused group**.
       Unlike the compute/store level, this is set *per stage*, not whole-Func.
+    * a per-stage, ordered list of **specializations**, set by `specialize` (§15)
+      and *empty* by default. Each specialization pairs a condition with **its own
+      forked copy of the stage's schedule** (which may itself carry further
+      specializations); `specialize_fail` records a terminal one with no fallback.
+      Each becomes a conditional variant of the stage's loop nest (§15).
 
 * **`ImageParam`** — an input buffer. It is a *leaf*: it is never computed and
   never appears in the loop nest. A Func that reads an `ImageParam` simply has
@@ -1275,6 +1280,19 @@ now read by the wrapper — whereas `f.clone_in(h)` prints `f_clone_in_h` → `g
   *visitation-order* secondary key (§6) decides — the case that arises once
   several wrappers/clones share a name prefix.
 
+### Interaction with `specialize`
+
+Wrappers and clones are keyed by **consumer Func**, with no notion of a
+specialization branch. A single `f.in(g)` / `f.clone_in(g)` wrapper is read by `g`
+in **all** of `g`'s specialization branches (§15) — there is no per-branch
+wrapper. Correspondingly the consumer argument must be a **`Func`**: a
+`g.specialize(cond)` handle is a `Stage`, not a `Func`, so it **cannot be passed**
+to `in`/`clone_in` at all (it does not compile) — you cannot "wrap only one
+branch." This is the same one-schedule-per-Func fact behind §15's note that a
+producer cannot be scheduled per consumer branch. (If instead the *wrapped* Func
+`f` is the one specialized, nothing special happens here: consumers read `f`, and
+`f`'s branches live inside its own `produce`, per §15.)
+
 ### Implementation note
 
 Although the documentation, for simplicity, describes `f.in(g)` or
@@ -1684,30 +1702,57 @@ the inner loop of *each* branch's nest). A producer computed **outside** the
 consumer (e.g. at `root`) is emitted once, before the consumer, and is not
 duplicated per branch
 ([examples/specialize_producer_root.cpp](examples/specialize_producer_root.cpp)).
+The specialized Func need not be the output or its direct producer: it can sit
+deep in the pipeline, with a producer below it and a consumer above
+([examples/specialize_midchain.cpp](examples/specialize_midchain.cpp): the middle
+Func of an `a → b → c → out` chain is specialized).
 
 `specialize` forks **only the specialized Func's own schedule**. It does **not**
 reach into its callees: a producer is a separate Func with **one** definition and
 **one** schedule, shared by every branch. So the only per-branch variation a
 producer can show *through scheduling* is its **placement** — which happens when
 the `compute_at` level names a loop that the consumer's branch has moved (by a
-per-branch `reorder`/`split`/`rename`). There is **no scheduling directive** that
-computes a producer *differently internally* (its own splits, its own compute
-level) depending on which branch of a consumer uses it — and `in`/`clone_in` do
-not provide one: they redirect a consumer's reads to a **single** wrapper/clone
-Func with one schedule, read in all of the consumer's branches.
+per-branch `reorder`/`split`/`rename`). It is **impossible, through scheduling**,
+to compute a producer *differently internally* (its own splits, its own compute
+level) depending on which branch of a consumer uses it — `in`/`clone_in` do not
+provide a way either: they redirect a consumer's reads to a **single** wrapper/
+clone Func with one schedule, read in all of the consumer's branches (§13).
+*Unless* you step outside scheduling entirely and change the algorithm, in the
+narrow and fragile way described next.
 
-The only way to get genuinely per-branch producers is to make the **algorithm**
-select between separate Funcs — `f(x,y) = select(cond, g(x,y), gc(x,y))` with
-`f.specialize(cond)`, where the simplifier prunes the `select` per branch so each
-branch computes only the producer it names, each with its own schedule. Note this
-is an **algorithm** change, not a schedule: it alters what `f` computes and
-carries **no guarantee** that `g` and `gc` are equivalent (Halide never checks),
-so it sits outside the algorithm/schedule separation that otherwise makes
-scheduling value-preserving. (Because the `select` is pruned *before* producers
-are placed, a producer that is dead in a branch imposes no scheduling constraint
-there; a producer's `compute_at` level need only be valid in the branch where it
-is actually used. See [src_doc: specialize](src_doc/specialize.md) and
-`probe/SPECIALIZE_FINDINGS.md`.)
+### Known limitation: no per-branch producer scheduling
+
+A recurring wish is to compute a producer one way when a consumer took its `cond`
+branch and another way otherwise. There is **no scheduling directive for this**,
+and it is worth stating plainly rather than implying a clean idiom exists.
+
+The only thing that achieves it is an **algorithm** change: give the consumer two
+distinct producers and pick between them with `select` —
+`f(x,y) = select(cond, g(x,y), gc(x,y))` together with `f.specialize(cond)`. The
+specializer simplifies the branch's *value expression* using the known condition,
+collapsing the `select` to `g(x,y)` in the `cond` branch (and `gc(x,y)` in the
+fallback); as a downstream consequence each branch then references — and so
+schedules — only its own producer. This is **not a scheduling technique** and
+should be treated as a last resort:
+
+* It edits the algorithm (what `f` computes), so it forfeits Halide's core
+  guarantee that scheduling cannot change results. Nothing checks that `g` and
+  `gc` are equivalent — if you intend them to be, keeping them in sync is on you,
+  unverified.
+* It works only as a **side effect** of a value-simplification pass
+  (`simplify_specializations`), and only when the specialization condition is a
+  bare boolean parameter or `var == const`; for other conditions the `select` is
+  not guaranteed to be pruned, in which case *both* producers are scheduled and
+  the intended effect **silently** does not happen. See
+  [src_doc: specialize](src_doc/specialize.md) for the mechanism and
+  `probe/SPECIALIZE_FINDINGS.md` / `probe/probe_specialize_case2.cpp` for worked
+  cases; whether Halide intends this to work at Func granularity is an open
+  question, not settled behavior.
+
+This document does not treat `select`-pruning as part of the scheduling model, and
+**simplifying `select` (and thus this per-branch-producer behavior) is out of
+scope for `micro_halide`**: `micro_halide` does not analyze `Expr`s, so an example
+relying on it cannot be reproduced structurally and none is provided.
 
 ### Legality
 
@@ -1721,10 +1766,17 @@ The restriction is on the caller (the member being fused in), not on the target
 ### Out of scope
 
 * **Condition de-duplication.** Re-calling `specialize` with an *equal* condition
-  `Expr` returns the *existing* specialization rather than appending a new one.
-  This document does not model that: the examples always use **distinct**
-  conditions (e.g. separate `Param<bool>`s), so each `specialize` call is a new
-  branch and no `Expr`-equality bookkeeping is needed.
+  `Expr` returns the **handle to the existing** specialization rather than
+  appending a new one. This document does not model that: the examples always use
+  **distinct** conditions (e.g. separate `Param<bool>`s), so each `specialize`
+  call is a new branch and no `Expr`-equality bookkeeping is needed.
+* **Identical-branch merge.** The "How it becomes loops" note above — that Halide
+  folds an if/else whose branches are structurally identical into one printed copy
+  — is a `simplify()` effect that `micro_halide` need **not** reproduce: it may
+  emit one loop nest per branch (specializations then fallback) without merging.
+  Every example here has structurally distinct branches, so no merge is exercised;
+  matching Halide's merge would require true-IR-identity comparison, which is out
+  of scope.
 * **Per-branch loop elision.** Placing a producer at a *different loop* per branch
   (e.g. `compute_at(f, y)` in one branch, `compute_at(f, x)` in another) gives it
   a different required region — and so a different set of elided (point) loops —

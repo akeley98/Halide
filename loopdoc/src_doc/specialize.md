@@ -86,20 +86,62 @@ Two simplifier effects run before printing (`print_loop_nest`,
   differs only in ways the loopdoc canonicalizer drops (serial-loop order, constant
   bounds) is *not* merged and prints separately.
 
-## Per-branch producers, and when the dead branch is pruned
+## Per-branch producers: an off-label side effect, not a supported feature
 
 `specialize` never forks a callee — `add_specialization` copies only *this*
 Definition's `stage_schedule`, and callees are shared Funcs in `env` with one
 schedule each. So there is no schedule-only way to compute a producer differently
 per consumer branch; `in`/`clone_in` likewise produce a single wrapper/clone Func
-(one schedule) read in every branch. The only per-branch producer mechanism is an
-**algorithm** `select(cond, g, gc)` combined with `f.specialize(cond)`: the branch
-whose condition is `cond` has `cond` propagated into its RHS by
-`simplify_specializations`, collapsing `select(cond, g, gc)` to `g` there (and to
-`gc` in the fallback). That is an algorithm change with no `g == gc` check.
+(one schedule) read in every branch. (A `specialize()` handle is a `Stage`, not a
+`Func`, so it cannot even be passed to `in`/`clone_in`, which take a `Func`
+consumer — the wrapper is keyed by consumer Func, never by branch.)
 
-Ordering matters for legality: `simplify_specializations(env)` runs (PrintLoopNest
-~192) **before** `schedule_functions` (~203) injects producers and validates their
+The only way to get per-branch producers is an **algorithm** `select(cond, g, gc)`
+combined with `f.specialize(cond)`. It is worth being precise about *why* this
+works, because it is an emergent side effect of an unrelated pass, not a designed
+capability:
+
+- **Specialization itself lowers to `IfThenElse`, not `select`.**
+  `build_provide_loop_nest` wraps each branch's separately-scheduled nest with
+  `IfThenElse::make(s.condition, then_case, fallback)`
+  (`src/ScheduleFunctions.cpp:528`). The compiler never inserts a `select` to
+  implement a specialization, so `simplify_specializations` is not there to clean
+  up compiler-generated selects.
+
+- **`simplify_specializations` is a value-simplification pass.**
+  `propagate_specialization_in_definition` (`src/SimplifySpecializations.cpp`)
+  prunes const-false / const-true specializations, and — the relevant part —
+  propagates the branch condition as a *known fact* into each branch's own
+  `values()` and `args()` (the definition's expressions) and `simplify()`s them.
+  Its documented job (Func.h: `f(x) = x + select(cond, 0, 1); f.specialize(cond)`
+  → branches computing `x` and `x + 1`) is to make a specialized branch's
+  **computed values / bounds** simpler because the condition is known. It runs in
+  the real lowering pipeline (`src/Lower.cpp:172`), not just the print path.
+
+- **The per-producer trick rides on that.** `f = select(cond, g(x,y), gc(x,y))`
+  is a `values()` expression; the pass simplifies it to `g(x,y)` in the `cond`
+  branch. Only *then* — as a downstream consequence in `schedule_functions` — does
+  "the branch body references only `g`" cause only `g` to be injected/scheduled
+  there. The pass simplifies *expressions*; that this also steers *which producer
+  is scheduled* is incidental. Selecting over Func **calls** (rather than the
+  scalars in every Func.h example) to exploit it is undocumented, and Halide never
+  checks that `g` and `gc` compute the same values.
+
+- **The clean pruning only fires for a bare `Variable` or `var == const`
+  condition.** In `propagate_specialization_in_definition` the condition is
+  matched as `Variable` or `EQ(Variable, b)`; those get an exact
+  `substitute_value_in_var` (`cond → true`, `var → b`). Any other condition falls
+  through to `simplify_using_fact`, which keeps a branch expression only if
+  `can_prove(!fact || e)` — an implication check. If the algorithm's `select`
+  condition is not syntactically the specialization condition (or provably implied
+  by it), the `select` **survives**, both `g` and `gc` stay referenced, both get
+  scheduled, and the trick fails **silently** (no diagnostic). This fragility is
+  the strongest evidence it is not a supported pattern.
+
+### When the dead branch is pruned (relative to schedule legality)
+
+Ordering matters: `simplify_specializations(env)` runs (PrintLoopNest ~192; Lower
+~172) **before** `schedule_functions` injects producers and validates their
 compute levels. So a producer pruned from a branch's RHS is simply not present in
 that branch's body and is never injected there — it imposes no scheduling
 constraint on the branch where it is dead. A producer's `compute_at` level is
