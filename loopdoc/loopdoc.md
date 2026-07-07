@@ -5,14 +5,6 @@ nest*, at the level of detail needed to predict the output of
 `Func::print_loop_nest()` by hand. It is built up holistically: each section
 adds to a single mental model rather than describing an isolated feature.
 
-> Scope of this revision: the programming model, pure Funcs, update (reduction)
-> definitions with `RDom` / `RVar`, the default (inline) schedule,
-> `compute_root`, `compute_at`, `store_at` / `store_root`, `hoist_storage` /
-> `hoist_storage_root`, the loop transforms `split` / `fuse` / `reorder` /
-> `tile`, and the `print_loop_nest()` output format. Wrappers (`in`/`clone_in`),
-> `rfactor`, loop-type directives (`parallel`/`vectorize`/`unroll`), and GPU
-> scheduling are deferred to later revisions.
-
 ---
 
 ## 1. The programming model
