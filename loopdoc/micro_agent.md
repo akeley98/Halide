@@ -61,13 +61,9 @@ As such, the implementation must be based only on the information provided by th
   You may edit comments in `loopdoc.md`.
   Then stop and ask the main agent to start a new micro-agent.
 
-## Additional Important Rule Added By Human (this applies to YOU)
+## Final Note
 
-If you are working on the `compute_with` milestone, be aware that this feature is the rocky shore upon which many past attempts to document Halide clearly have wrecked, including Alex Reinking's famous paper on formal Halide semantics (well, at least it's famous here at Adobe).
-
-So, it would not be surprising at all if the first draft of loopdoc.md's documentation of `compute_with` suffers the same fate.
-
-When you encounter a test failure regarding `compute_with`, consider very carefully if the root cause could be loopdoc's (possible lack of) clarity.
+When you encounter a test failure, consider very carefully if the root cause could be loopdoc's (possible lack of) clarity.
 As explained above, don't continue if this is the case. i.e.,
 
 * If the test failed because it uses a feature you have not yet implemented -> OK, keep working
