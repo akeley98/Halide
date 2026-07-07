@@ -63,6 +63,13 @@ The non-micro branch also includes `halide_compat.h` (from `halide_compat/`),
 a small shim that provides do-nothing stubs for micro_halide-only annotations
 so the example compiles unchanged against real Halide.
 
+Some examples may create a common header of this structure with a
+`[[nodiscard]] int main_impl(...)` function instead of `int main`, then
+multiple `.cpp` files with `main` that delegates to `main_impl`.
+This allows creating a family of similar examples with minimal repetition,
+by varying the parameters to `main_impl`.
+Example: `examples/human_compute_at_compute_with_child_impl.hpp`.
+
 ## Example structure change: catching `CompileError` (human-authorized)
 
 The `main()` body wrapped in `try { … } catch (const CompileError &e) { … return
