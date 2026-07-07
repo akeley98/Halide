@@ -1121,24 +1121,25 @@ The preserved `RVar`s thus end up reduced in the *merge* (still `RVar`s in the
 original Func) and pure in the *intermediate* (the new `Var`s); the
 non-preserved `RVar`s are lifted entirely into the intermediate's reduction.
 
-<!-- PROTOTYPE (plan A): general "rfactor rewrites the LHS/RHS (preserving
-functional equivalence), per-(specialization, stage)" treatment, to be reviewed.
-The scaffold example + micro support for the branch case are pending. -->
 ### `rfactor` rewrites a stage's LHS/RHS — a per-`(specialization, stage)` edit
 
 Read the "rewrite" above as a concrete edit to the definition's **LHS/RHS state**
-(§1): `rfactor` creates a genuinely new Func — the intermediate is a real
-pipeline node, **not** a lazily-substituted wrapper like `in`/`clone_in` (§13) —
-and then **rewrites the chosen definition's own left-hand-side index and
-right-hand-side value expressions** to route the reduction through it. This is a
-scheduling-directed edit of the algorithm's LHS/RHS that nonetheless **preserves
-functional equivalence** (§1): the reduction is re-associated, not changed. The
-RHS rewrite is what turns the intermediate into a producer of the original Func
-(§1: a stage's producers come from its current RHS). The LHS rewrite is a no-op
-for a plain reduction (whose output index was already the pure vars), but real
-for a data-dependent scatter — a histogram `g(f(r.x, r.y)) += 1` moves the
-scatter index `f(...)` onto the intermediate and leaves the merge's LHS the plain
-`g(x)`.
+(§1). `rfactor` **returns a genuinely new Func** — the *intermediate*, a real
+pipeline node, **not** a lazily-substituted wrapper like `in`/`clone_in` (§13).
+It then rewrites the **`Stage` you called it on** (the *merge*): both that stage's
+**left-hand-side index expressions** and its **right-hand-side value expressions**
+change. This is a scheduling-directed edit of the algorithm's LHS/RHS that
+nonetheless **preserves functional equivalence** (§1): the reduction is
+re-associated, not changed.
+
+It is specifically the **RHS** rewrite that makes the intermediate a *producer* of
+the original Func — the merge's RHS now reads `intm(...)` (§1: a stage's producers
+come from what its expressions read). The **LHS** rewrite instead sets the merge's
+output index to the plain pure vars, and never reads the intermediate: a no-op for
+an ordinary reduction (whose index already was the pure vars), but real for a
+data-dependent scatter — a histogram `g(f(r.x, r.y)) += 1` has its scatter index
+`f(...)` moved onto the *intermediate*, leaving the merge's LHS the plain `g(x)`
+(so the read of the scattered-over input moves to the intermediate too).
 
 The edit lands on **whichever definition the handle you called `rfactor` on
 addresses**, and a handle is specific to a `(specialization, stage)` pair:
