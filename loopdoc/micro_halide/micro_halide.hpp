@@ -644,8 +644,8 @@ class FuncRef
         return out;
     }
 
-    // Record one update stage (loopdoc.md section 10). Captures the raw,
-    // type-distinguished data; the micro-agent turns it into a dimension list.
+    // Record one update stage (loopdoc.md section 10): build its default
+    // dimension list (RVars innermost, pure Vars outside) from the LHS/RHS.
     void record_update(const Expr &rhs)
     {
         std::vector<Var> pure_args;
@@ -924,9 +924,8 @@ class FuncStageImpl
     // fallback. Shared by Func (pure stage) and Stage (update stage) -- this is
     // ONE operation on whichever stage `stage_index` names, so it lives here in
     // FuncStageImpl, NOT duplicated in Func and Stage (see the header note on
-    // FuncStageImpl). STUBS: forking the per-branch schedule and emitting the
-    // concatenated branch nests (loopdoc.md section 15) is the micro-agent's task.
-    // They throw until implemented.
+    // FuncStageImpl). Defined out of line below (they return Stage, incomplete
+    // here).
     class Stage specialize(const Expr &condition);
     void specialize_fail(const std::string &message);
 };
@@ -988,9 +987,9 @@ class Func: public FuncStageImpl<Func>
         return *this;
     }
 
-    // store_at / store_root: record the store level. See the note on
-    // FuncContents -- the loop-nest effect (the `store` node) and legality are
-    // for the micro-agent to implement from loopdoc.md section 8.
+    // store_at / store_root: record the store level (loopdoc.md section 8). See
+    // the note on FuncContents; the loop-nest `store` node and its legality are
+    // emitted/checked by the printer.
     Func &store_at(const Func &f, const VarOrRVar &var)
     {
         contents->has_store_level = true;
@@ -1010,8 +1009,8 @@ class Func: public FuncStageImpl<Func>
     }
 
     // hoist_storage / hoist_storage_root: record the hoist-storage level. This
-    // has NO effect on the printed nest; only legality (for the micro-agent to
-    // implement from loopdoc.md section 8) depends on it.
+    // has NO effect on the printed nest; only legality depends on it (loopdoc.md
+    // section 8).
     Func &hoist_storage(const Func &f, const VarOrRVar &var)
     {
         contents->has_hoist_level = true;
@@ -1035,11 +1034,9 @@ class Func: public FuncStageImpl<Func>
     class Stage update(int i = 0) const;
 
     // in() / clone_in() (loopdoc.md section 13): create a wrapper / clone Func
-    // that the named consumer(s) read instead of this Func, and return it. These
-    // are STUBS provided by the main agent only so code that uses them COMPILES;
-    // the actual behavior (record the wrapper on THIS Func keyed by consumer,
-    // resolve consumer reads at nest-construction time via the producer-accessor
-    // seam) is the micro-agent's task for that milestone. They throw until then.
+    // that the named consumer(s) read instead of this Func, and return it. They
+    // record the wrapper on THIS Func keyed by consumer; the consumer reads are
+    // resolved at nest-construction time via the producer-accessor seam.
     Func in(const Func &consumer);
     Func in(const std::vector<Func> &consumers);
     Func in();
@@ -1055,10 +1052,9 @@ class Func: public FuncStageImpl<Func>
 
 // ---------------------------------------------------------------------------
 // Stage: a handle to one update stage's schedule, returned by Func::update(i).
-// The loop transforms below are STUBS (no-ops) provided by the main agent only
-// so the examples COMPILE. Implementing their per-stage effect -- rewriting
-// THAT stage's dimension list (which may contain RVars) -- is the micro-agent's
-// task, from loopdoc.md sections 6 and 10.
+// The loop transforms (split/fuse/reorder/tile, compute_with, specialize) are
+// inherited from FuncStageImpl and rewrite THIS stage's dimension list (which
+// may contain RVars); see loopdoc.md sections 6 and 10.
 // ---------------------------------------------------------------------------
 class Stage: public FuncStageImpl<Stage>
 {
@@ -1081,10 +1077,8 @@ class Stage: public FuncStageImpl<Stage>
 
     // rfactor (loopdoc.md section 12): factor THIS update stage's associative
     // reduction into a new intermediate Func plus a rewritten merge stage. It
-    // CREATES a new Func (returned) and MUTATES this stage. This is a STUB
-    // provided by the main agent only so examples compile; building the
-    // intermediate's stages and rewriting the merge is the documented behavior
-    // (loopdoc.md section 12) the micro-agent implements.
+    // CREATES a new Func (returned) and MUTATES this stage, building the
+    // intermediate's stages and rewriting the merge per loopdoc.md section 12.
     Func rfactor(const RVar &r, const Var &v)
     {
         return rfactor(std::vector<std::pair<RVar, Var>>{{r, v}});
