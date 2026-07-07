@@ -1,15 +1,36 @@
 # Human-added Tasks
 
-Grouped into sections; sections are meant to be done in stated order, with tasks within a section not necessarily ordered.
+New adversarial cases.
+Mainly to test the issue that although the algorithm is pure-functional-ish, the scheduling metaprogramming is definitely not.
+There's a lot of issues of preserving mutated scheduling state, and reasoning about when different handles have aliased state or not.
 
-[x] Add the `specialize_tree.cpp` example.
-    DONE: examples/specialize_tree.cpp -- sibling cond_b + child cond_c of cond_a -> 4-leaf tree; verified vs real Halide. Cited from §15 "How it becomes loops".
-[x] Edit `loopdoc.md` based on comments.
-    DONE (all three inline <!-- Human --> comments removed):
-      * §1: the nesting detail is now deferred to §15 with a forward ref.
-      * §15: "declaration order" defined as the program order of the specialize() calls (first-declared tested first, first match wins).
-      * §15: added the flat-vs-nested explanation -- siblings on one handle => flat if/else-if chain; specialize on a returned branch handle => nested if; mixing builds a tree -- citing specialize_tree.cpp (and specialize_nested.cpp).
-[x] Move the specialization stubs to common code in `FuncStageImpl` unless there's a non-obvious reason I overlooked why this is a bad idea.
-    DONE: specialize / specialize_fail now declared once on FuncStageImpl (defined out of line as template methods, since they return the still-incomplete Stage), removed from Func and Stage. No non-obvious reason against it -- specialize is one operation on whichever stage `stage_index` names, so the base is the right home (and matches Halide, where Func::specialize forwards to the Stage-level op). All specialize examples still compile with micro (and still throw at the stub, pending the micro-agent).
-[x] Add ominous comments to `micro_halide.hpp` about not duplicating code in `Func` and `Stage` so I don't have to keep asking for this.
-    DONE: a prominent block on FuncStageImpl says to put shared Func/Stage scheduling methods there, never copy-pasted into both classes, and how to handle Stage-returning methods; plus short "inherited from FuncStageImpl; do NOT redeclare" notes left in Func and Stage.
+Use the parameterizable .hpp + simple .cpp example structure to create example families.
+To eliminate doubt, the README.md has been edited to explicitly authorize agents to write such examples.
+
+[ ] `rfactor` before `specialize`.
+    Then schedule the `rfactor` output.
+    This should propagate to both branches of the `specialize`.
+    Make this a family of 2 examples: optionally, `tile` the func before `rfactor`, and `rfactor` only the inner loop.
+
+[ ] `specialize` then `rfactor` on each branch.
+    Give non-trivially different schedules to both `rfactor` output functions.
+    Also family of 2 examples: `tile` or not `tile`.
+
+[ ] Mix of the above two with non-trivial `specialize` tree structure.
+    (Since there's a tree of `specialize`, this means it's possible to have `rfactor` before some `specialize` branches and after other `specialize` branches).
+    `tile` at some point in all this.
+
+[ ] Write a family of `clone_in` + `specialize` examples:
+    Choice A:
+        * `specialize` followed by `clone_in`
+        * `clone_in` followed by `specialize` of the original
+        * `clone_in` followed by `specialize` of the clone
+    The `clone_in` will use the form where it's passed a list of two functions `g` and `h`.
+    `g` is pure and `h` uses the cloned function in an update stage.
+    Choice B:
+        * `g` and `h` are fused with `compute_with`
+        * `g` and `h` are both producers of some `f`, and the cloned function is `compute_at(f, ...)`
+        * Same, but additionally `h` has been `rfactor`'d so the `rfactor`-output function is what consumes the cloned function.
+        * do something that will cause the schedule to be illegal (negative example)
+    Also make sure the original func (`this` of `clone_in`) is non-trivially used somehow.
+    Test all combinations of choice A and choice B.
