@@ -28,12 +28,11 @@ using namespace Halide;
 //       for x: for r: g(...)=...                 # SPECIALIZED branch: merge over r.y
 //       for x: for r: for r: g(...)=...          # fallback: naive reduce r.x, r.y
 //
-// NOTE (micro gap, loopdoc progress.txt "specialize x rfactor"): micro's rfactor
-// currently rewrites the BASE stage, ignoring the specialization-branch handle,
-// so it emits the mirror of the above (factors the fallback, not the branch).
-// Making rfactor operate on the handle's definition (the branch) is what closes
-// this gap. This example is a scaffold: it compiles under micro but does not yet
-// match real Halide.
+// (History: this was the RED scaffold for the "specialize x rfactor" gap —
+// micro's rfactor originally rewrote the BASE stage and emitted the mirror of
+// the above. A micro-agent closed it by routing rfactor through the handle's
+// definition — stage() — so it factors the branch here; loopdoc §12/§15. Now
+// PASS. specialize_rfactor_base_clone.cpp is the reversed/base-factored guard.)
 int main() {
     Var x("x"), u("u");
     ImageParam in(type_of<uint8_t>(), 2, "in");
