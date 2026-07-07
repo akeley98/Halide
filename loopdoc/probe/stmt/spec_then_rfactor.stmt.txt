@@ -1,0 +1,107 @@
+module name=f, target=arm-64-osx-arm_dot_prod-arm_fp16
+external_plus_metadata func f (in, p0, f) {
+assert(reinterpret<uint64>((struct halide_buffer_t *)in.buffer) != 0_u64, halide_error_buffer_argument_is_null("in"))
+assert(reinterpret<uint64>((struct halide_buffer_t *)f.buffer) != 0_u64, halide_error_buffer_argument_is_null("f"))
+let f = (void *)_halide_buffer_get_host((struct halide_buffer_t *)f.buffer)
+let f.type = (uint32)_halide_buffer_get_type((struct halide_buffer_t *)f.buffer)
+let f.device_dirty = (uint1)_halide_buffer_get_device_dirty((struct halide_buffer_t *)f.buffer)
+let f.dimensions = _halide_buffer_get_dimensions((struct halide_buffer_t *)f.buffer)
+let f.min.0 = _halide_buffer_get_min((struct halide_buffer_t *)f.buffer, 0)
+let f.extent.0 = _halide_buffer_get_extent((struct halide_buffer_t *)f.buffer, 0)
+let f.stride.0 = _halide_buffer_get_stride((struct halide_buffer_t *)f.buffer, 0)
+let in = (void *)_halide_buffer_get_host((struct halide_buffer_t *)in.buffer)
+let in.type = (uint32)_halide_buffer_get_type((struct halide_buffer_t *)in.buffer)
+let in.device_dirty = (uint1)_halide_buffer_get_device_dirty((struct halide_buffer_t *)in.buffer)
+let in.dimensions = _halide_buffer_get_dimensions((struct halide_buffer_t *)in.buffer)
+let in.min.0 = _halide_buffer_get_min((struct halide_buffer_t *)in.buffer, 0)
+let in.extent.0 = _halide_buffer_get_extent((struct halide_buffer_t *)in.buffer, 0)
+let in.stride.0 = _halide_buffer_get_stride((struct halide_buffer_t *)in.buffer, 0)
+let in.min.1 = _halide_buffer_get_min((struct halide_buffer_t *)in.buffer, 1)
+let in.extent.1 = _halide_buffer_get_extent((struct halide_buffer_t *)in.buffer, 1)
+let in.stride.1 = _halide_buffer_get_stride((struct halide_buffer_t *)in.buffer, 1)
+let f.extent.0.required = max(select((uint1)p0, ((f.extent.0 + 3)/4)*4, f.extent.0), f.extent.0)
+if ((uint1)_halide_buffer_is_bounds_query((struct halide_buffer_t *)f.buffer)) {
+ (struct halide_buffer_t *)_halide_buffer_init((struct halide_buffer_t *)f.buffer, (struct halide_dimension_t *)_halide_buffer_get_shape((struct halide_buffer_t *)f.buffer), reinterpret<(void *)>(0_u64), 0_u64, reinterpret<(struct halide_device_interface_t *)>(0_u64), 0, 32, 1, (struct halide_dimension_t *)make_struct(f.min.0, f.extent.0.required, 1, 0), 0_u64)
+}
+if ((uint1)_halide_buffer_is_bounds_query((struct halide_buffer_t *)in.buffer)) {
+ (struct halide_buffer_t *)_halide_buffer_init((struct halide_buffer_t *)in.buffer, (struct halide_dimension_t *)_halide_buffer_get_shape((struct halide_buffer_t *)in.buffer), reinterpret<(void *)>(0_u64), 0_u64, reinterpret<(struct halide_device_interface_t *)>(0_u64), 1, 8, 2, (struct halide_dimension_t *)make_struct(0, 10, 1, 0, 0, 10, 10, 0), 0_u64)
+}
+if (!((uint1)_halide_buffer_is_bounds_query((struct halide_buffer_t *)f.buffer) || (uint1)_halide_buffer_is_bounds_query((struct halide_buffer_t *)in.buffer))) {
+ assert(f.type == 73728_u32, halide_error_bad_type("Output buffer f", f.type, 73728_u32))
+ assert(f.dimensions == 1, halide_error_bad_dimensions("Output buffer f", f.dimensions, 1))
+ assert(in.type == 67585_u32, halide_error_bad_type("Input buffer in", in.type, 67585_u32))
+ assert(in.dimensions == 2, halide_error_bad_dimensions("Input buffer in", in.dimensions, 2))
+ assert(f.extent.0.required <= f.extent.0, halide_error_access_out_of_bounds("Output buffer f", 0, f.min.0, (f.extent.0.required + f.min.0) + -1, f.min.0, (f.extent.0 + f.min.0) + -1))
+ assert(0 <= f.extent.0, halide_error_buffer_extents_negative("Output buffer f", 0, f.extent.0))
+ assert((in.min.0 <= 0) && (10 <= (in.extent.0 + in.min.0)), halide_error_access_out_of_bounds("Input buffer in", 0, 0, 9, in.min.0, (in.extent.0 + in.min.0) + -1))
+ assert(0 <= in.extent.0, halide_error_buffer_extents_negative("Input buffer in", 0, in.extent.0))
+ assert((in.min.1 <= 0) && (10 <= (in.extent.1 + in.min.1)), halide_error_access_out_of_bounds("Input buffer in", 1, 0, 9, in.min.1, (in.extent.1 + in.min.1) + -1))
+ assert(0 <= in.extent.1, halide_error_buffer_extents_negative("Input buffer in", 1, in.extent.1))
+ assert(f.stride.0 == 1, halide_error_constraint_violated("f.stride.0", f.stride.0, "1", 1))
+ assert(in.stride.0 == 1, halide_error_constraint_violated("in.stride.0", in.stride.0, "1", 1))
+ let in.total_extent.1 = int64(in.extent.1)*int64(in.extent.0)
+ assert((uint64)abs(int64(f.extent.0)) <= 2147483647_u64, halide_error_buffer_allocation_too_large("f", (uint64)abs(int64(f.extent.0)), 2147483647_u64))
+ assert((uint64)abs(int64(in.extent.0)) <= 2147483647_u64, halide_error_buffer_allocation_too_large("in", (uint64)abs(int64(in.extent.0)), 2147483647_u64))
+ assert((uint64)abs(int64(in.extent.1)*int64(in.stride.1)) <= 2147483647_u64, halide_error_buffer_allocation_too_large("in", (uint64)abs(int64(in.extent.1)*int64(in.stride.1)), 2147483647_u64))
+ assert(in.total_extent.1 <= 2147483647_i64, halide_error_buffer_extents_too_large("in", in.total_extent.1, 2147483647_i64))
+ assert(!f.device_dirty, halide_error_device_dirty_with_no_device_support("Output buffer f"))
+ assert(!in.device_dirty, halide_error_device_dirty_with_no_device_support("Input buffer in"))
+ assert(f != reinterpret<(void *)>(0_u64), halide_error_host_is_null("Output buffer f"))
+ assert(in != reinterpret<(void *)>(0_u64), halide_error_host_is_null("Input buffer in"))
+ _halide_buffer_set_host_dirty((struct halide_buffer_t *)f.buffer, true)
+ let f_intm.loaded = !(uint1)p0
+ allocate f_intm[int32 * f.extent.0 * 10] if f_intm.loaded
+ if (f_intm.loaded) {
+  produce f_intm {
+   for (f_intm.s0.u, 0, 9) {
+    let t30 = f.extent.0*f_intm.s0.u
+    for (f_intm.s0.x.rebased, 0, f.extent.0 + -1) {
+     f_intm[f_intm.s0.x.rebased + t30] = 0
+    }
+   }
+   let t31 = (in.min.1*in.stride.1) + in.min.0
+   for (f_intm.s1.x.rebased, 0, f.extent.0 + -1) {
+    for (f_intm.s1.u, 0, 9) {
+     let t33 = (f_intm.s1.u*in.stride.1) - t31
+     let t32 = (f.extent.0*f_intm.s1.u) + f_intm.s1.x.rebased
+     for (f_intm.s1.r$x, 0, 9) {
+      f_intm[t32] = (f_intm[t32] + (int32(in[f_intm.s1.r$x + t33])*100)) + f_intm.s1.r$x
+     }
+    }
+   }
+  }
+ }
+ produce f {
+  for (f.s0.x.rebased, 0, f.extent.0 + -1) {
+   f[f.s0.x.rebased] = 0
+  }
+  consume f_intm {
+   if ((uint1)p0) {
+    let t34 = (f.extent.0 + 3)/4
+    let t35 = (in.min.1*in.stride.1) + in.min.0
+    for (f.s1.x.xo, 0, t34 + -1) {
+     let t36 = f.s1.x.xo*4
+     for (f.s1.x.xi, 0, 3) {
+      let t37 = f.s1.x.xi + t36
+      for (f.s1.r$y, 0, 9) {
+       let t38 = (f.s1.r$y*in.stride.1) - t35
+       for (f.s1.r$x_1, 0, 9) {
+        f[t37] = (f[t37] + (int32(in[f.s1.r$x_1 + t38])*100)) + f.s1.r$x_1
+       }
+      }
+     }
+    }
+   } else {
+    for (f.s1.x.rebased, 0, f.extent.0 + -1) {
+     for (f.s1.r$y, 0, 9) {
+      f[f.s1.x.rebased] = f[f.s1.x.rebased] + f_intm[(f.extent.0*f.s1.r$y) + f.s1.x.rebased]
+     }
+    }
+   }
+  }
+  free f_intm
+ }
+}
+}
+
+
