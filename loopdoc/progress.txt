@@ -51,6 +51,11 @@ Marking convention:
 
 [✅] `rfactor` (factor a reduction for parallelism)
     NOTES:
+      * rfactor x specialize interaction covered by rfactor_specialize.cpp (added
+        during the specialize milestone): specializing the intermediate's
+        rfactor-built partial-reduction update stage is legal and its branches
+        interleave correctly in the rfactor'd realization. See the specialize
+        milestone NOTES.
 
 [✅] `in` (wrapper functions) and `clone_in`
     NOTES:
@@ -230,7 +235,8 @@ Marking convention:
       scaffolding). Examples COMPILE with micro; positives THROW at runtime
       pending the micro-agent. Legality (compute_with caller must have no
       specializations) is the micro-agent's to enforce once specialize is real.
-    * EXAMPLES (15 positive + 1 negative): specialize_basic (concat + order),
+    * EXAMPLES (16 positive + 1 negative; rfactor_specialize listed under the
+      adversarial confirm below): specialize_basic (concat + order),
       specialize_inherit (schedule-so-far copied), specialize_fallback_scope
       (post-specialize directive -> fallback only), specialize_nested (3 distinct
       branches), specialize_fail (drops fallback), specialize_producer_root (root
@@ -261,13 +267,23 @@ Marking convention:
       with child-injection keyed by base (f,stage,var); clone_in deep-copies the
       specialization tree; compute_with rejects a specialized caller.
       Harness independently re-run GREEN by the main agent. Main-agent adversarial
-      confirm (both MATCH micro==real, zero further micro changes):
-      specialize_middle_update, specialize_nested_update -> not overfit.
+      confirm (all MATCH micro==real, zero further micro changes):
+      specialize_middle_update, specialize_nested_update, and rfactor_specialize
+      (rfactor x specialize: specialize the intermediate's rfactor-built partial-
+      reduction update stage -> its branches interleave correctly in the rfactor'd
+      realization; f_intm init + merge f unaffected) -> not overfit.
 
 [ ] `vectorize`, `unroll`, `parallel`, `gpu`, `gpu_lanes`, `gpu_threads`, `gpu_blocks`, `gpu_tile`
     NOTES: micro_halide will not reason about bounds analysis so do
     not write negative examples that fail because of detected race conditions.
     Also skip the gpu_lanes requirement for 32 or fewer iterations.
+
+    Please briefly document the optional Expr and TailStrategy even though
+    there isn't (afaik) a way to really test the behavior without bounds analysis,
+    so these are ignored arguments in micro_halide.
+
+    There may be more complications about reasoning about legal/illegal examples
+    which we will have to decide together should be in-scope for micro_halide or not.
 
     Need to think about interaction with compute_with; what happens if
     the two fused stages don't have the same ForMode?
