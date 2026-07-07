@@ -18,9 +18,13 @@ A Halide program is built in two separable parts:
    is expressed by scheduling directives (`compute_root`, `compute_at`, …)
    attached to each `Func` (§§5–9).
 
-Crucially, the schedule never changes the *result*; it only changes the order
-of computation, the amount of redundant recomputation, and the temporary
-storage used. This document is only about how the program maps to a loop nest.
+Crucially, scheduling preserves **functional equivalence**, i.e., for a given
+algorithm and input state, the output state will always be the same regardless
+of scheduling decisions, except for changes due to roundoff or overflow.
+The schedule only changes the order of computation, the amount of redundant recomputation,
+and the temporary storage used.
+
+This document is only about how the program maps to a loop nest.
 
 This split drives the document's order: §§2–3 cover the loops implied by the
 **algorithm alone** (a single Func, possibly with update stages), and §§5–9
@@ -46,6 +50,8 @@ add the **schedule** that places and reshapes those loops across the pipeline.
       of that stage. The LHS/RHS are *seeded* by the definition you wrote, but
       they are **part of the mutable, per-stage scheduling state**, not a
       separate immutable "algorithm": it may be rewritten by `rfactor` (§12).
+      This modifies the LHS/RHS specified by the original algorithm,
+      but in a way that preserves functional equivalence.
     * the set of **other Funcs it reads from** (its *producers*), derived from
       the (current, possibly rewritten) right-hand sides (and update
       left-hand-side indices) of all its stages,
