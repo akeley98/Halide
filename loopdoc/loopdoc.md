@@ -45,13 +45,7 @@ add the **schedule** that places and reshapes those loops across the pipeline.
       index expressions and right-hand-side value expressions** — the "algorithm"
       of that stage. The LHS/RHS are *seeded* by the definition you wrote, but
       they are **part of the mutable, per-stage scheduling state**, not a
-      separate immutable "algorithm": some scheduling directives rewrite them.
-      In particular `rfactor` (§12) rewrites a stage's RHS to read a newly
-      created Func, and each `specialize` branch (§15) carries its **own copy**
-      of the stage (LHS/RHS included), which later directives — including
-      `rfactor` — can edit independently. So the clean "algorithm vs schedule"
-      split is a useful approximation, not an absolute: the RHS is schedulable
-      state keyed per `(specialization, stage)`.
+      separate immutable "algorithm": it may be rewritten by `rfactor` (§12).
     * the set of **other Funcs it reads from** (its *producers*), derived from
       the (current, possibly rewritten) right-hand sides (and update
       left-hand-side indices) of all its stages,
@@ -70,6 +64,9 @@ add the **schedule** that places and reshapes those loops across the pipeline.
       is true at runtime, then the fallback case constructed from the owner stage's
       schedule is executed, unless `specialize_fail` is used, which converts
       the fallback case to a runtime error.
+      Each specialization stage carries its own per-stage state; therefore,
+      they can be freely modified with scheduling directives like `rfactor`
+      without the change propagating back to the owner stage.
 
 * **`ImageParam`** — an input buffer. It is a *leaf*: it is never computed and
   never appears in the loop nest. A Func that reads an `ImageParam` simply has
