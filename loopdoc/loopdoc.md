@@ -82,8 +82,8 @@ add the **schedule** that places and reshapes those loops across the pipeline.
   definition (the RHS state above; a stage's RHS is a list of these — a `Tuple`
   Func has several). For loop-nest purposes the only thing that matters about an
   Expr is *which Funcs it reads*: that is what wires up the producer/consumer
-  graph. (A directive that rewrites the RHS — `rfactor`, §12 — therefore changes
-  which producers a stage has.)
+  graph. (A directive that rewrites a stage's LHS/RHS — `rfactor`, §12 —
+  therefore changes which producers a stage has.)
   Pointwise arithmetic, constants, `cast<T>(...)`, and the like are invisible
   in the loop nest — they live *inside* the `f(...) = ...` leaf line.
   Exception: 1-iteration loops are removed; this relies on bounds inference,
@@ -1121,17 +1121,24 @@ The preserved `RVar`s thus end up reduced in the *merge* (still `RVar`s in the
 original Func) and pure in the *intermediate* (the new `Var`s); the
 non-preserved `RVar`s are lifted entirely into the intermediate's reduction.
 
-<!-- PROTOTYPE (plan A): general "rfactor rewrites the RHS, per-(specialization,
-stage)" treatment, to be reviewed. The scaffold example + micro support for the
-branch case are pending. -->
-### `rfactor` rewrites a stage's RHS — a per-`(specialization, stage)` edit
+<!-- PROTOTYPE (plan A): general "rfactor rewrites the LHS/RHS (preserving
+functional equivalence), per-(specialization, stage)" treatment, to be reviewed.
+The scaffold example + micro support for the branch case are pending. -->
+### `rfactor` rewrites a stage's LHS/RHS — a per-`(specialization, stage)` edit
 
-Read the "rewrite" above as a concrete edit to the definition's **RHS state**
+Read the "rewrite" above as a concrete edit to the definition's **LHS/RHS state**
 (§1): `rfactor` creates a genuinely new Func — the intermediate is a real
 pipeline node, **not** a lazily-substituted wrapper like `in`/`clone_in` (§13) —
-and then **rewrites the chosen definition's value expressions** to read it.
-Rewriting the RHS is exactly what turns the intermediate into a producer of the
-original Func (§1: a stage's producers come from its current RHS).
+and then **rewrites the chosen definition's own left-hand-side index and
+right-hand-side value expressions** to route the reduction through it. This is a
+scheduling-directed edit of the algorithm's LHS/RHS that nonetheless **preserves
+functional equivalence** (§1): the reduction is re-associated, not changed. The
+RHS rewrite is what turns the intermediate into a producer of the original Func
+(§1: a stage's producers come from its current RHS). The LHS rewrite is a no-op
+for a plain reduction (whose output index was already the pure vars), but real
+for a data-dependent scatter — a histogram `g(f(r.x, r.y)) += 1` moves the
+scatter index `f(...)` onto the intermediate and leaves the merge's LHS the plain
+`g(x)`.
 
 The edit lands on **whichever definition the handle you called `rfactor` on
 addresses**, and a handle is specific to a `(specialization, stage)` pair:
@@ -1142,15 +1149,16 @@ addresses**, and a handle is specific to a `(specialization, stage)` pair:
   LHS/RHS included).
 
 So `rfactor` **composes with `specialize` orthogonally**: applied through a
-specialization handle it rewrites **only that branch's** RHS, leaving the other
-branches and the fallback with the RHS they already had. Different branches then
-run **different reduction algorithms** — the factored branch reads the
-intermediate (one reduction loop, over the preserved `RVar`s), the others reduce
-as before — and, because the intermediate is only referenced from the branch(es)
-that were factored, it is **computed only on the path(s) that use it** (its
-production is guarded by the branch condition). This is not a contradiction of
-"editing the algorithm": the RHS is per-branch scheduling state (§1), edited
-independently per branch.
+specialization handle it rewrites **only that branch's** LHS/RHS, leaving the
+other branches and the fallback with the definitions they already had. Different
+branches then run **different (but functionally equivalent) reduction
+algorithms** — the factored branch reads the intermediate (one reduction loop,
+over the preserved `RVar`s), the others reduce as before — and, because the
+intermediate is only referenced from the branch(es) that were factored, it is
+**computed only on the path(s) that use it** (its production is guarded by the
+branch condition). This is not a contradiction of "editing the algorithm": the
+LHS/RHS is per-branch scheduling state (§1), edited independently per branch and
+functional-equivalence-preserving each time.
 
 The common form is `f.update(n).specialize(cond).rfactor(...)` — factor one
 branch (e.g. a fast path) while the fallback stays the naive reduction. Other
@@ -1714,11 +1722,13 @@ stage — under one `produce f`). `f.specialize(cond)`:
 * returns a **handle** to that copy, so further scheduling on the handle affects
   the branch only.
 
-The forked copy is the **whole definition** — its LHS/RHS value expressions as
-well as its schedule (§1). So a directive that edits the RHS, applied through a
-branch handle, edits **only that branch**: `f.update(n).specialize(cond).rfactor(...)`
-factors that branch's reduction alone, leaving the other branches and the
-fallback with their original RHS (§12 "`rfactor` rewrites a stage's RHS").
+The forked copy is the **whole definition** — its LHS/RHS index and value
+expressions as well as its schedule (§1). So a directive that edits the LHS/RHS,
+applied through a branch handle, edits **only that branch**:
+`f.update(n).specialize(cond).rfactor(...)` factors that branch's reduction alone
+(functional-equivalence-preserving, §1), leaving the other branches and the
+fallback with their original definitions (§12 "`rfactor` rewrites a stage's
+LHS/RHS").
 
 Directives issued on `f` **after** a `specialize()` call modify the parent
 (fallback) schedule, not the already-forked specialization
