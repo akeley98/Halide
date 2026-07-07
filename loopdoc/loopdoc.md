@@ -41,10 +41,20 @@ add the **schedule** that places and reshapes those loops across the pipeline.
     * its ordered list of **stages**: an initial (pure) definition plus zero or
       more **update definitions** (§3). Each stage has its own ordered list of
       **loop dimensions** (the `Var`s/`RVar`s that drive its loops; the first
-      listed is the *innermost* loop — see §3),
+      listed is the *innermost* loop — see §3), **and its own left-hand-side
+      index expressions and right-hand-side value expressions** — the "algorithm"
+      of that stage. The LHS/RHS are *seeded* by the definition you wrote, but
+      they are **part of the mutable, per-stage scheduling state**, not a
+      separate immutable "algorithm": some scheduling directives rewrite them.
+      In particular `rfactor` (§12) rewrites a stage's RHS to read a newly
+      created Func, and each `specialize` branch (§15) carries its **own copy**
+      of the stage (LHS/RHS included), which later directives — including
+      `rfactor` — can edit independently. So the clean "algorithm vs schedule"
+      split is a useful approximation, not an absolute: the RHS is schedulable
+      state keyed per `(specialization, stage)`.
     * the set of **other Funcs it reads from** (its *producers*), derived from
-      the right-hand sides (and update left-hand-side indices) of all its
-      stages,
+      the (current, possibly rewritten) right-hand sides (and update
+      left-hand-side indices) of all its stages,
     * its **compute level** and **store level** — `inline` (the default),
       `root`, or `at(site func, var)` — set by the schedule (§§5–8). These apply to
       the Func as a whole (all stages move together).
@@ -66,8 +76,11 @@ add the **schedule** that places and reshapes those loops across the pipeline.
   one fewer producer to realize; the buffer is assumed already present.
 
 * **`Expr`** — a value expression appearing on the right-hand side of a
-  definition. For loop-nest purposes the only thing that matters about an Expr
-  is *which Funcs it reads*: that is what wires up the producer/consumer graph.
+  definition (the RHS state above; a stage's RHS is a list of these — a `Tuple`
+  Func has several). For loop-nest purposes the only thing that matters about an
+  Expr is *which Funcs it reads*: that is what wires up the producer/consumer
+  graph. (A directive that rewrites the RHS — `rfactor`, §12 — therefore changes
+  which producers a stage has.)
   Pointwise arithmetic, constants, `cast<T>(...)`, and the like are invisible
   in the loop nest — they live *inside* the `f(...) = ...` leaf line.
   Exception: 1-iteration loops are removed; this relies on bounds inference,
@@ -1105,6 +1118,45 @@ The preserved `RVar`s thus end up reduced in the *merge* (still `RVar`s in the
 original Func) and pure in the *intermediate* (the new `Var`s); the
 non-preserved `RVar`s are lifted entirely into the intermediate's reduction.
 
+<!-- PROTOTYPE (plan A): general "rfactor rewrites the RHS, per-(specialization,
+stage)" treatment, to be reviewed. The scaffold example + micro support for the
+branch case are pending. -->
+### `rfactor` rewrites a stage's RHS — a per-`(specialization, stage)` edit
+
+Read the "rewrite" above as a concrete edit to the definition's **RHS state**
+(§1): `rfactor` creates a genuinely new Func — the intermediate is a real
+pipeline node, **not** a lazily-substituted wrapper like `in`/`clone_in` (§13) —
+and then **rewrites the chosen definition's value expressions** to read it.
+Rewriting the RHS is exactly what turns the intermediate into a producer of the
+original Func (§1: a stage's producers come from its current RHS).
+
+The edit lands on **whichever definition the handle you called `rfactor` on
+addresses**, and a handle is specific to a `(specialization, stage)` pair:
+
+* `f.update(n)` addresses update stage *n*'s **base** definition;
+* `f.update(n).specialize(cond)` addresses **that branch's own copy** of update
+  stage *n*'s definition (§15 — each specialization forks the whole definition,
+  LHS/RHS included).
+
+So `rfactor` **composes with `specialize` orthogonally**: applied through a
+specialization handle it rewrites **only that branch's** RHS, leaving the other
+branches and the fallback with the RHS they already had. Different branches then
+run **different reduction algorithms** — the factored branch reads the
+intermediate (one reduction loop, over the preserved `RVar`s), the others reduce
+as before — and, because the intermediate is only referenced from the branch(es)
+that were factored, it is **computed only on the path(s) that use it** (its
+production is guarded by the branch condition). This is not a contradiction of
+"editing the algorithm": the RHS is per-branch scheduling state (§1), edited
+independently per branch.
+
+The common form is `f.update(n).specialize(cond).rfactor(...)` — factor one
+branch (e.g. a fast path) while the fallback stays the naive reduction. Other
+shapes follow the same rule: `rfactor` **then** `specialize` the returned
+intermediate ([examples/rfactor_specialize.cpp](examples/rfactor_specialize.cpp)
+specializes the intermediate's partial-reduction stage), or nesting
+`specialize → rfactor → specialize → rfactor` to give several branches their own
+factored (or unfactored) reductions.
+
 ### Scheduling the intermediate
 
 The intermediate is an ordinary Func returned to you, with its **own default
@@ -1658,6 +1710,12 @@ stage — under one `produce f`). `f.specialize(cond)`:
   before `specialize` is inherited by the branch, which then adds a `split`); and
 * returns a **handle** to that copy, so further scheduling on the handle affects
   the branch only.
+
+The forked copy is the **whole definition** — its LHS/RHS value expressions as
+well as its schedule (§1). So a directive that edits the RHS, applied through a
+branch handle, edits **only that branch**: `f.update(n).specialize(cond).rfactor(...)`
+factors that branch's reduction alone, leaving the other branches and the
+fallback with their original RHS (§12 "`rfactor` rewrites a stage's RHS").
 
 Directives issued on `f` **after** a `specialize()` call modify the parent
 (fallback) schedule, not the already-forked specialization
