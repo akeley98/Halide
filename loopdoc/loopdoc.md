@@ -61,14 +61,13 @@ add the **schedule** that places and reshapes those loops across the pipeline.
       **interleaved into another stage's**, the two sharing their outer loops;
       the connected set of stages so tied together forms a **fused group**.
       Unlike the compute/store level, this is set *per stage*, not whole-Func.
-    * a per-stage, ordered list of **specializations**, set by `specialize` (§15)
-      and *empty* by default. Each specialization pairs a condition with **its own
-      forked copy of the stage's definition** — the schedule (splits, levels, …)
-      *plus* that copy's own specialization list, which starts empty (so
-      specializations can nest; see §15 "How it becomes loops" for how nested and
-      sibling specializations combine). `specialize_fail` records a terminal
-      specialization with no fallback. Each becomes a conditional variant of the
-      stage's loop nest (§15).
+    * a per-stage, ordered list of **specializations**, set by `specialize` (§15).
+      This is empty by default, with each specialization being a (condition, stage)
+      pair. Each specialization becomes a conditional variant of the stage's
+      loop nest, constructed from the child stage's schedule. If no condition
+      is true at runtime, then the fallback case constructed from the owner stage's
+      schedule is executed, unless `specialize_fail` is used, which converts
+      the fallback case to a runtime error.
 
 * **`ImageParam`** — an input buffer. It is a *leaf*: it is never computed and
   never appears in the loop nest. A Func that reads an `ImageParam` simply has
