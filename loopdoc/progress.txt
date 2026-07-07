@@ -149,7 +149,7 @@ Marking convention:
             the human asked it to clarify the overwrite behavior; kept.]
         Until the harness change, it is intentionally RED on these two examples.
 
-[WIP] `specialize`
+[✅] `specialize`
     NOTES: may run into test harness bugs here with loop nest diffing.
     Micro-agent should stop and report problems back to the main agent
     if this is the case.
@@ -230,7 +230,7 @@ Marking convention:
       scaffolding). Examples COMPILE with micro; positives THROW at runtime
       pending the micro-agent. Legality (compute_with caller must have no
       specializations) is the micro-agent's to enforce once specialize is real.
-    * EXAMPLES (13 positive + 1 negative): specialize_basic (concat + order),
+    * EXAMPLES (15 positive + 1 negative): specialize_basic (concat + order),
       specialize_inherit (schedule-so-far copied), specialize_fallback_scope
       (post-specialize directive -> fallback only), specialize_nested (3 distinct
       branches), specialize_fail (drops fallback), specialize_producer_root (root
@@ -243,8 +243,26 @@ Marking convention:
       independently -> 4 nests under one produce f), specialize_clone_inherits
       (clone_in deep-copies specializations: the clone carries f's branches; an
       in() wrapper would not), specialize_tree (sibling cond_b + child cond_c of
-      cond_a -> 4-leaf tree; flat vs nested).
+      cond_a -> 4-leaf tree; flat vs nested), specialize_middle_update
+      (ADVERSARIAL: 3 stages, only the middle update specialized -> per-stage
+      indexing, neighbours unaffected), specialize_nested_update (ADVERSARIAL:
+      nested specialize tree ON an update stage -> branch-handle works off a
+      non-pure base stage).
       neg_compute_with_specialize (caller specialized -> illegal).
+    * MILESTONE CLOSED. A micro-agent (human-run) implemented specialize in
+      micro_halide.hpp from loopdoc.md alone (read only loopdoc + examples; not
+      ../src, src_doc/, probe/; no commits). Integrity clean: only
+      micro_halide.hpp changed (169+/20-); no doc/src_doc/harness/example edits;
+      reported NO doc gaps. Design (all doc-derivable): Specialization{condition,
+      forked StageData} tree per stage; a `branch` handle + stage() accessor so a
+      Stage can address a branch's forked schedule; flatten_specializations emits
+      one nest per leaf (DFS, branches first, fallback last, dropped on
+      specialize_fail) inside the single produce; emit_dim walks a branch's dims
+      with child-injection keyed by base (f,stage,var); clone_in deep-copies the
+      specialization tree; compute_with rejects a specialized caller.
+      Harness independently re-run GREEN by the main agent. Main-agent adversarial
+      confirm (both MATCH micro==real, zero further micro changes):
+      specialize_middle_update, specialize_nested_update -> not overfit.
 
 [ ] `vectorize`, `unroll`, `parallel`, `gpu`, `gpu_lanes`, `gpu_threads`, `gpu_blocks`, `gpu_tile`
     NOTES: micro_halide will not reason about bounds analysis so do

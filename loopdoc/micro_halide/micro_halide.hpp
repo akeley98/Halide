@@ -310,6 +310,22 @@ struct DimData
 // Halide::Internal::Function). Copying a Func shares this state.
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
+// Specialization (loopdoc.md section 15): one entry of a stage's ordered
+// specialization list -- a run-time condition paired with ITS OWN forked copy
+// of the stage's schedule (a full StageData, itself able to carry further
+// specializations, so the branches form a tree). specialize() appends one of
+// these and returns a handle to `schedule`. The condition is only carried for
+// fidelity to the API; print_loop_nest() never prints it (loopdoc.md section
+// 15: the printer walks into every branch with no if/else marker).
+// ---------------------------------------------------------------------------
+struct StageData;
+struct Specialization
+{
+    Expr condition;
+    std::shared_ptr<StageData> schedule;  // forked copy of the schedule so far
+};
+
+// ---------------------------------------------------------------------------
 // StageData: the per-STAGE state (mirrors Halide's Definition + StageSchedule).
 // Stage 0 is the pure / initial definition; stages 1.. are update definitions
 // (loopdoc.md section 10). Every stage -- pure or update -- has the SAME shape,
@@ -351,6 +367,22 @@ struct StageData
     std::shared_ptr<FuncContents> fuse_parent;  // the argument stage's Func
     int fuse_parent_stage = 0;                  // the argument stage index
     std::string fuse_var;                       // shared loop level name `v`
+
+    // specialize (loopdoc.md section 15): this stage's ordered list of
+    // conditional schedule variants. Empty by default. Each entry pairs a
+    // condition with a forked copy of the schedule (see Specialization); the
+    // list lowers to `if c0 {branch0} else if c1 {branch1} ... else {fallback}`
+    // in declaration order, and the printer emits one loop nest per branch
+    // (branches first, this stage's own dims as the fallback last), all inside
+    // the single `produce`. Calling specialize() again on the same handle
+    // appends a sibling here; calling it on a returned branch handle descends
+    // into that branch's own list (nesting), so the branches form a tree.
+    std::vector<Specialization> specializations;
+
+    // specialize_fail (loopdoc.md section 15): terminates the chain -- the final
+    // `else` is a run-time assertion carrying no loops, so the fallback nest
+    // (this stage's own dims) is NOT emitted, only the specialization branches.
+    bool specialize_failed = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -780,10 +812,25 @@ class FuncStageImpl
     std::shared_ptr<FuncContents> contents;
     int stage_index;  // 0 for pure stage, 1 + n for n-th update stage.
 
+    // specialize (loopdoc.md section 15): when non-null, this handle addresses a
+    // specialization BRANCH's forked schedule (returned by specialize()), not a
+    // base stage in `contents->stages`. Further scheduling on the handle then
+    // affects the branch only; specialize() on it nests a child branch. `stage()`
+    // hides the distinction: it returns the branch when set, else the base stage.
+    std::shared_ptr<StageData> branch;
+
     FuncStageImpl(std::shared_ptr<FuncContents> _contents, int _stage_index)
       : contents(std::move(_contents))
       , stage_index(_stage_index)
     {
+    }
+
+    // The StageData this handle schedules: a specialization branch if this is a
+    // branch handle (loopdoc.md section 15), otherwise the base stage
+    // (stages[0] pure; update i -> stage i+1).
+    StageData &stage()
+    {
+        return branch ? *branch : contents->stages[stage_index];
     }
 
     // split(old, outer, inner, factor): replace `old` with two dimensions --
@@ -843,7 +890,7 @@ class FuncStageImpl
     template <typename ParentDerived>
     Derived &compute_with(const FuncStageImpl<ParentDerived> &parent, const VarOrRVar &var)
     {
-        StageData &s = contents->stages[stage_index];
+        StageData &s = stage();
         s.has_fuse = true;
         s.fuse_parent = parent.contents;
         s.fuse_parent_stage = parent.stage_index;
@@ -856,7 +903,7 @@ class FuncStageImpl
     // THIS stage's loops. RVars sit in the list just like Vars.
     std::vector<DimData> &dims()
     {
-        return contents->stages[stage_index].dims; // stages[0] is pure; update i -> stage i+1
+        return stage().dims; // base stage, or a specialization branch (section 15)
     }
     const std::string &owner() const
     {
@@ -1020,6 +1067,18 @@ class Stage: public FuncStageImpl<Stage>
     {
     }
 
+    // Branch-handle constructor (loopdoc.md section 15): addresses a
+    // specialization branch's forked schedule `br` rather than a base stage.
+    // `stage_idx` is the OWNING base stage index (already 0-based over
+    // contents->stages), kept only so owner()/legality can find the Func; all
+    // scheduling goes through `branch`. Distinguished from the 2-arg update
+    // constructor by arity (it does not apply the +1 update offset).
+    Stage(std::shared_ptr<FuncContents> f, int stage_idx, std::shared_ptr<StageData> br)
+      : FuncStageImpl(std::move(f), stage_idx)
+    {
+        branch = std::move(br);
+    }
+
     // rfactor (loopdoc.md section 12): factor THIS update stage's associative
     // reduction into a new intermediate Func plus a rewritten merge stage. It
     // CREATES a new Func (returned) and MUTATES this stage. This is a STUB
@@ -1043,20 +1102,38 @@ inline Stage Func::update(int i) const
     return Stage(contents, i);
 }
 
-// specialize / specialize_fail STUBS (loopdoc.md section 15), defined ONCE for
-// both Func and Stage on the FuncStageImpl base (defined here, out of line,
-// because they return Stage which is only complete now). The API compiles so
-// examples build; the per-branch schedule fork and the concatenated branch
-// emission are the micro-agent's task. They throw until implemented.
+// specialize / specialize_fail (loopdoc.md section 15), defined ONCE for both
+// Func and Stage on the FuncStageImpl base (out of line, because they return
+// Stage which is only complete now).
+//
+// specialize(cond) appends a specialization to THIS handle's stage (its base
+// stage, or -- when this is itself a branch handle -- that branch's own list,
+// giving nesting). The new branch's schedule is a COPY OF THE SCHEDULE SO FAR
+// (all directives issued before this call: the current dims, collapse set,
+// producers, fuse edge), but with an EMPTY specialization list of its own
+// (loopdoc.md section 1: each fork is a full definition starting fresh). A
+// handle to that fork is returned, so later directives on it affect the branch
+// only; directives on the original handle after this call modify the parent
+// (fallback) instead. The condition is stored but never printed.
 template <typename Derived>
-inline Stage FuncStageImpl<Derived>::specialize(const Expr &)
+inline Stage FuncStageImpl<Derived>::specialize(const Expr &condition)
 {
-    throw CompileError("micro_halide: TODO specialize (loopdoc.md section 15)");
+    StageData &s = stage();
+    auto fork = std::make_shared<StageData>(s);  // copy the schedule so far
+    fork->specializations.clear();               // the fork starts with none (section 1)
+    fork->specialize_failed = false;
+    s.specializations.push_back(Specialization{condition, fork});
+    return Stage(contents, stage_index, fork);
 }
+
+// specialize_fail(msg) terminates THIS handle's specialization chain: the final
+// `else` becomes a run-time assertion, so the fallback nest is dropped and only
+// the specialization branches print (loopdoc.md section 15). Nothing may be
+// specialized after it (not enforced here; no example exercises it).
 template <typename Derived>
 inline void FuncStageImpl<Derived>::specialize_fail(const std::string &)
 {
-    throw CompileError("micro_halide: TODO specialize_fail (loopdoc.md section 15)");
+    stage().specialize_failed = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -1161,14 +1238,37 @@ inline Func Func::in()
     return w;
 }
 
+// Recursively deep-copy a stage's schedule, INCLUDING its specialization tree
+// (loopdoc.md sections 13, 15): a clone is an independent copy, so its branches
+// must be fresh StageData objects, not shared_ptrs aliasing the source's. The
+// default StageData copy would share the branch shared_ptrs; this rebuilds them.
+inline StageData deep_copy_stage(const StageData &s)
+{
+    StageData out = s;             // copies dims/collapse/producers/rvars/fuse/bools
+    out.specializations.clear();   // rebuild the branch subtree independently
+    for (const Specialization &sp : s.specializations)
+    {
+        out.specializations.push_back(
+            Specialization{sp.condition,
+                           std::make_shared<StageData>(deep_copy_stage(*sp.schedule))});
+    }
+    return out;
+}
+
 inline Func Func::clone_in(const std::vector<Func> &consumers)
 {
-    // An independent clone: a COPY of f's entire definition (all stages and the
-    // producer set), but the callees are SHARED (the copied stages reference the
-    // same producer shared_ptrs). The clone therefore reads f's inputs, not f
-    // (loopdoc.md section 13).
+    // An independent clone: a COPY of f's entire definition (all stages, their
+    // specializations, and the producer set), but the callees are SHARED (the
+    // copied stages reference the same producer shared_ptrs). The clone reads
+    // f's inputs, not f (loopdoc.md section 13). The stage copy is DEEP through
+    // the specialization tree (loopdoc.md section 15): the clone carries an
+    // independent copy of f's branches, unlike an in() wrapper, which is a fresh
+    // pointwise Func with no specializations.
     Func w(contents->name + "_clone_in");
-    w.contents->stages = contents->stages;       // copy all stages (shared callees)
+    for (const StageData &st : contents->stages)   // deep-copy each stage + branches
+    {
+        w.contents->stages.push_back(deep_copy_stage(st));
+    }
     w.contents->producers = contents->producers; // same callees, shared
     w.contents->defined = true;
     // A clone must NOT inherit f's wrapper registry (those wrappers wrap f, not
@@ -1610,6 +1710,21 @@ struct LoopNestPrinter
                 FuncContents *p = child.fuse_parent.get();
                 int ps = child.fuse_parent_stage;
                 const std::string &v = child.fuse_var;
+
+                // The Func that CALLS compute_with must have no specializations
+                // (loopdoc.md section 15 Legality): a fused group is emitted as
+                // one shared, unconditional loop nest, with no room for a
+                // member's per-branch variants. The restriction is on the caller
+                // f, not the target p (which may be specialized).
+                for (int ss = 0; ss < num_stages(f); ss++)
+                {
+                    if (!f->stages[ss].specializations.empty() ||
+                        f->stages[ss].specialize_failed)
+                    {
+                        fail(f, "compute_with: the Func that calls compute_with "
+                                "must not have any specializations");
+                    }
+                }
 
                 // No producer/consumer dependency between the fused Funcs.
                 if (reaches(f, p) || reaches(p, f))
@@ -2911,11 +3026,45 @@ struct LoopNestPrinter
     {
         for (int s = 0; s < num_stages(f); s++)
         {
-            emit_dim(f, s, (int)stage_dims(f, s).size() - 1, indent);
+            // A stage's specialization list (loopdoc.md section 15) lowers to
+            // one loop nest per branch, emitted back to back inside the single
+            // `produce`: branches in declaration order, then this stage's own
+            // dims as the fallback last (dropped by specialize_fail). flatten
+            // walks the branch TREE, so a nested specialization contributes its
+            // own branches before its fallback. With no specializations this is
+            // just the stage itself, so unspecialized Funcs are unchanged.
+            std::vector<const StageData *> nests;
+            flatten_specializations(&f->stages[s], nests);
+            for (const StageData *sd : nests)
+            {
+                emit_dim(f, s, *sd, (int)sd->dims.size() - 1, indent);
+            }
         }
     }
 
-    void emit_dim(FuncContents *f, int stage, int dim, int indent)
+    // Flatten a stage's specialization tree (loopdoc.md section 15) into the
+    // ordered list of schedules to emit: for each specialization, recurse into
+    // its branch (nested branches expand depth-first), then append THIS node's
+    // own dims as the fallback -- unless specialize_fail dropped it.
+    void flatten_specializations(const StageData *sd, std::vector<const StageData *> &out)
+    {
+        for (const Specialization &sp : sd->specializations)
+        {
+            flatten_specializations(sp.schedule.get(), out);
+        }
+        if (!sd->specialize_failed)
+        {
+            out.push_back(sd);
+        }
+    }
+
+    // Emit one loop nest for stage `stage` of `f`, walking the dimension list of
+    // schedule `sd` (a base stage, or one specialization branch's forked copy --
+    // loopdoc.md section 15). Child-injection and store-node lookups stay keyed
+    // by the BASE (f, stage) so a compute_at producer filed at this stage is
+    // injected into EACH branch, resolved against that branch's own dims (each
+    // branch inherits the same loop names, so the by-name lookup lands correctly).
+    void emit_dim(FuncContents *f, int stage, const StageData &sd, int dim, int indent)
     {
         if (dim < 0)
         {
@@ -2935,13 +3084,13 @@ struct LoopNestPrinter
             out << pad(indent) << f->name << "(...) = ...\n";
             return;
         }
-        const std::string &var = stage_dims(f, stage)[dim].name();
+        const std::string &var = sd.dims[dim].name();
 
         // An elided ("collapsed") loop prints no `for` line and does not
         // indent its body, but is still a valid injection site for any
         // compute_at children filed at this level (see the "compute_at at an
         // elided loop level" example).
-        bool elided = stage_collapsed(f, stage).count(var) != 0;
+        bool elided = sd.collapsed.count(var) != 0;
         int body_indent = indent;
         if (!elided)
         {
@@ -2954,7 +3103,7 @@ struct LoopNestPrinter
         std::vector<FuncContents *> empty;
         const std::vector<FuncContents *> &kids = (it == children_at.end()) ? empty : it->second;
 
-        auto deeper = [this, f, stage, dim](int ind) { emit_dim(f, stage, dim - 1, ind); };
+        auto deeper = [this, f, stage, &sd, dim](int ind) { emit_dim(f, stage, sd, dim - 1, ind); };
         auto inject = [this, &kids, &deeper](int ind) {
             emit_realizations(kids, 0, ind, deeper, /*has_cont=*/true);
         };
