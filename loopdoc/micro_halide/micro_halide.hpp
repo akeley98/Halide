@@ -1315,7 +1315,15 @@ inline Func Stage::rfactor(const std::vector<std::pair<RVar, Var>> &preserved)
     }
 
     FuncContents *orig = contents.get();
-    StageData &update = orig->stages[stage_index];
+    // The definition rfactor edits is whichever the handle ADDRESSES: a
+    // specialization branch's forked copy when this is a branch handle
+    // (g.update(n).specialize(cond).rfactor(...) factors only that branch),
+    // otherwise the base stage (loopdoc.md section 12 "the edit lands on
+    // whichever definition the handle addresses"; section 15; section 1). Using
+    // stage() (not contents->stages[stage_index]) makes rfactor compose with
+    // specialize orthogonally: the branch's LHS/RHS is rewritten while the base
+    // fallback and sibling branches keep their original definitions.
+    StageData &update = stage();
 
     // Map preserved RVar name -> new pure Var name, and the set of preserved
     // RVar names (to decide which dims are dropped in the merge).
