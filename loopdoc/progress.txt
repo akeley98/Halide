@@ -280,6 +280,11 @@ Marking convention:
       reduction update stage -> its branches interleave correctly in the rfactor'd
       realization; f_intm init + merge f unaffected) -> not overfit.
 
+[WIP] `specialize` + `rfactor`
+    Update doc to properly describe the interaction between two said features.
+
+    NOTES:
+
 [ ] `vectorize`, `unroll`, `parallel`, `gpu`, `gpu_lanes`, `gpu_threads`, `gpu_blocks`, `gpu_tile`
     NOTES: micro_halide will not reason about bounds analysis so do
     not write negative examples that fail because of detected race conditions.
