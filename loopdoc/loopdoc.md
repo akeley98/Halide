@@ -409,6 +409,28 @@ order they appear in the defining expression**:
 > **first-visitation order**, then by full name. The "prefix" is the name with any
 > `$n` uniqueness suffix and any trailing digits removed.
 
+**The sort key is applied per-consumer, not globally.** Realization order is not
+a single global sort of all Funcs by name; it is the **post-order of a
+depth-first walk from the output(s)**. At each Func, its *direct callees* are
+visited in the sorted order above (prefix, then first-visitation, then full
+name), the walk descends into each, and the Func is appended to the order only
+*after* its whole callee subtree. The name key therefore only orders the
+**direct-callee list of one consumer** — it does **not** globally hoist an
+alphabetically-early Func to the front.
+
+The consequence catches people out: a producer reachable only through an
+alphabetically-*later* sibling is realized *after* that sibling's entire
+subtree, even if the producer's own name sorts earlier. In
+[examples/realization_order_dfs.cpp](examples/realization_order_dfs.cpp),
+`out(x) = f(x) + keep(x)` with `keep` inline reading a root Func `a`: `out`'s
+callee list sorts to `[f, keep]` (`f` < `keep`), so the walk realizes all of
+`f`'s subtree (`mid`, `f`) before it ever reaches `a` through `keep`. The order
+is `mid, f, a, out` — **`a` is realized after `f` despite `"a" < "f"`**, because
+`a` is gated behind `keep` in `out`'s callee list, not because of any global
+name comparison. (A naïve global name-keyed topological sort would wrongly put
+`a` first.) This is also why, when an inline consumer keeps a producer alive, the
+producer follows the consumer's realized siblings rather than leading them.
+
 The "walk the pipeline" that defines first-visitation order is a pre-order
 depth-first traversal from the output(s): record each Func the first time it is
 reached, then descend into the Funcs it calls — in the order those calls first
@@ -711,6 +733,24 @@ nest is produced.
 inline** schedule has and a single `compute_at` does not — which is why the
 inline default of a non-pure Func cannot, in general, be rewritten as one
 `compute_at`; §11.)
+
+**"A read of `f`" is any read in the *realized* loop nest, reached through the
+site func's callees — not only reads written literally in the site func's own
+definition.** There are two notions of "consumes" and this rule uses the loop-nest
+one. To find where `f` is actually read, expand the site func's dependencies
+through the funcs it calls: a *pure inline* callee is substituted in, so its
+reads of `f` become reads inside the site func; a *realized* callee (one given a
+`produce` block — e.g. a Func with an update definition, which cannot be inlined
+and defaults to being computed at its consumer's innermost loop, §11) contributes
+the reads of `f` inside *its* realization, which sits wherever that callee is
+placed. Either way the level must enclose those reads. So `f.compute_at(site, v)`
+is legal when `f` is read only by a callee that is itself realized inside the
+site's nest — the callee's `produce` block (and the read of `f` within it) lies
+inside the chosen `v` loop
+([examples/compute_at_inline_dependence.hpp](examples/compute_at_inline_dependence.hpp):
+`p.compute_at(out, y)` is legal in all three of the pure-inline, update-inline,
+and `compute_root`-intermediate cases, because in each the intermediate reading
+`p` is realized — or inlined — inside `out`'s `y` loop).
 
 The ways `(g, v)` falls outside the surviving set:
 
@@ -1318,6 +1358,36 @@ redirects the direct caller `g`) prints `f` → `f_in_h` → `g` → `h` — `f`
 now read by the wrapper — whereas `f.clone_in(h)` prints `f_clone_in_h` → `g` →
 `h` with `f` **absent**, because `g` now reads the clone and the clone reads
 `f`'s own inputs rather than `f`.
+
+### Every listed consumer must actually call the wrapped Func
+
+`f.in(g)` / `f.clone_in(g)` **requires each named consumer `g` to actually call
+`f`** at the moment the redirection is resolved. There is nothing to redirect in
+a consumer that never reads `f`, and Halide rejects it outright rather than
+silently producing a dead wrapper:
+
+> `Cannot wrap "f" in "g" because "g" does not call "f"`
+
+This is a rule specific to `in`/`clone_in`; it does **not** follow from the
+general realization/`compute_at` rules, so it must be checked separately. Two
+ways to trip it:
+
+* **A consumer that plainly never reads `f`** — e.g. `out.clone_in(g)` when `g`
+  reads `f` but not `out`
+  ([examples/clone_in_unused.cpp](examples/clone_in_unused.cpp), a negative
+  example).
+* **A consumer whose call to `f` is removed by a *later* directive.** Scheduling
+  is imperative and order-sensitive (§1). If you `f.clone_in({g, h})` and then
+  `rfactor` `h`'s update, the `rfactor` rewrites `h`'s reduction so the read of
+  `f` moves into the new intermediate `h_intm` — after which `h` no longer calls
+  `f`, and the clone's redirection of `h` is invalid. The fix is to clone the
+  Func that *does* read `f`: `rfactor` first, then
+  `f.clone_in({g, h_intm})`. (`clone_spec_a{0,1,2}_b2.cpp` are the negative
+  form; `clone_spec_a{0,1,2}_b3.cpp` the corrected positive.) Symmetrically, the
+  redirection *does* reach a listed consumer that is itself a derived Func such
+  as an `rfactor` intermediate — it is redirected like any other named consumer,
+  so `h_intm` then reads the clone and the original `f` keeps only its
+  non-redirected readers.
 
 ### Examples
 
