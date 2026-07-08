@@ -22,8 +22,10 @@ graph at `in()`/`clone_in()` *call* time, and (c) because the wrapper is pinned
 onto a shared *intermediate*, it redirects that intermediate **for every one of
 its consumers**, not only the one you named. The last line of the header comment
 gestures at (c) in passing; this note makes all three precise, with source. It
-also explains the `c3` situation and the double-clone crash left in
-[../examples/clone_in_but_inlined.hpp](../examples/clone_in_but_inlined.hpp).
+also explains the `c3` situation (probe `../probe/probe_clone_c3_sharing.cpp`;
+the wrapper analogue is the committed example
+[../examples/in_but_inlined.hpp](../examples/in_but_inlined.hpp)) and the
+double-clone crash (probe `../probe/probe_clone_double_crash.cpp`).
 
 ### The resolution algorithm (call time)
 
@@ -96,9 +98,8 @@ reads the version whose body calls the wrapper. The wrapper does not know or car
 which consumer "asked" for it.
 
 This is the crux the header comment states only in passing. Worked example
-(reproduced in `../probe/probe_clone_c3_sharing.cpp`; mirrors
-[../examples/clone_in_but_inlined.hpp](../examples/clone_in_but_inlined.hpp) with
-`no_c3=false`):
+(reproduced in `../probe/probe_clone_c3_sharing.cpp`; the committed wrapper
+analogue is [../examples/in_but_inlined.hpp](../examples/in_but_inlined.hpp)):
 
 ```
 common(x,y)        = in(x,y)

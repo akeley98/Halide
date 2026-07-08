@@ -76,9 +76,10 @@ enclosing rule); this is a micro fix.
 
 **5. "Is B2 a new in/clone_in rule?"** Yes — new and **not** derivable from the
 general realization/compute_at rules. But the rule is subtler than "the named
-consumer must call `f`" (my first cut, which `clone_in_but_inlined` disproves —
+consumer must call `f`" (my first cut, which the transitive case disproves —
 `common.clone_in(c1)` works even though `c1` reaches `common` only through
-`maybe_inlined`). The actual mechanism (`src/Func.cpp` `resolve_transitive_callers`
+`maybe_inlined`; probe `probe/probe_clone_c3_sharing.cpp`, wrapper example
+`examples/in_but_inlined.hpp`). The actual mechanism (`src/Func.cpp` `resolve_transitive_callers`
 + `src/WrapCalls.cpp`): `in`/`clone_in` walks *down* from each named consumer to
 `f` and pins the wrapper onto the **direct caller of `f` on that path**
 (transitive reach through intermediates is fine, and the pinned caller can even
@@ -91,7 +92,8 @@ is `h_intm`, not `f` — a **stale pin**, not a claim `h` can't reach `f` (b2). 
 pin on the Func that will call `f` in the final graph — `rfactor` first, then
 `clone_in({g, h_intm})` (b3). Documented in **§13** (subsection "The redirected
 caller must still call the wrapped Func at lowering"). *(Corrected after you
-flagged `clone_in_but_inlined`.)*
+flagged the clone_in_but_inlined example — since rewritten to wrappers as
+in_but_inlined.hpp.)*
 
 
 ## Doc changes made this pass (main agent territory; no micro/harness edits)
