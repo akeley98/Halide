@@ -284,7 +284,7 @@ struct DimData
     std::string _name;
     bool _is_rvar;
 
-    DimData(std::string n, bool is_rvar=false) : _name(std::move(n)), _is_rvar(is_rvar)
+    DimData(std::string n, bool is_rvar) : _name(std::move(n)), _is_rvar(is_rvar)
     {
     }
 
@@ -298,13 +298,20 @@ struct DimData
         return _is_rvar;
     }
 
+    DimData with_name(std::string new_name) const
+    {
+        DimData _new = *this;
+        _new._name = std::move(new_name);  // So old _new._name is wasted, but this is just a quick experiment.
+        return _new;
+    }
+
     template <typename VarList>
     static std::vector<DimData> from_pure_var_list(const VarList& lst)
     {
         std::vector<DimData> result;
         result.reserve(lst.size());
         for (const auto& var : lst) {
-            result.emplace_back(var.name());
+            result.emplace_back(var.name(), false);
         }
         return result;
     }
@@ -487,9 +494,10 @@ inline void split(std::vector<DimData> &a, const std::string &owner,
         throw CompileError("micro_halide: split: \"" + owner +
                            "\" has no dimension \"" + old_var.name() + "\"");
     }
+    const DimData old_dim = a[pos];
     a.erase(a.begin() + pos);
-    a.insert(a.begin() + pos, DimData(outer.name())); // outer goes to old's slot first ...
-    a.insert(a.begin() + pos, DimData(inner.name())); // ... then inner pushed inside it
+    a.insert(a.begin() + pos, old_dim.with_name(outer.name())); // outer goes to old's slot first ...
+    a.insert(a.begin() + pos, old_dim.with_name(inner.name())); // ... then inner pushed inside it
 }
 
 inline void fuse(std::vector<DimData> &a, const std::string &owner,
@@ -509,12 +517,12 @@ inline void fuse(std::vector<DimData> &a, const std::string &owner,
         throw CompileError("micro_halide: fuse: \"" + owner +
                            "\" has no dimension \"" + outer.name() + "\"");
     }
-    int hi = std::max(ipos, opos);
-    int lo = std::min(ipos, opos);
-    a.erase(a.begin() + hi);
-    a.erase(a.begin() + lo);
-    int insert_pos = (opos < ipos) ? ipos - 1 : ipos;
-    a.insert(a.begin() + insert_pos, DimData(fused.name()));
+    // TODO do we inherit state from inner or outer position?
+    // For is_rvar it doesn't matter since they'll match, but what about GPU etc.
+    const DimData old_dim = a[ipos];
+    // The fused dim is placed where the inner dim was. The outer dim is deleted.
+    a[ipos] = old_dim.with_name(fused.name());
+    a.erase(a.begin() + opos);
 }
 
 inline void reorder(std::vector<DimData> &a, const std::string &owner,
@@ -691,7 +699,7 @@ class FuncRef
         }
         for (const Var &v : pure_args)
         {
-            u.dims.push_back(DimData(v.name()));
+            u.dims.push_back(DimData(v.name(), false));
         }
         // Union this stage's producers into the Func's overall producer set
         // (used for realization order and cross-stage legality).
@@ -1356,7 +1364,7 @@ inline Func Stage::rfactor(const std::vector<std::pair<RVar, Var>> &preserved)
     intm_pure.dims = orig->stages[0].dims;
     for (const auto &p : preserved)
     {
-        intm_pure.dims.push_back(DimData(p.second.name()));
+        intm_pure.dims.push_back(DimData(p.second.name(), false));
     }
     // The pure init reads nothing (it is `= 0`).
 
@@ -1369,7 +1377,7 @@ inline Func Stage::rfactor(const std::vector<std::pair<RVar, Var>> &preserved)
         if (it != rvar_to_var.end())
         {
             // A preserved RVar becomes a pure Var in the intermediate.
-            intm_update.dims.push_back(DimData(it->second));
+            intm_update.dims.push_back(DimData(it->second, false));
         }
         else
         {
@@ -1466,7 +1474,7 @@ inline Func repeat_edge(const ImageParam &im)
     StageData s0; // stage 0: pure definition, no producers
     for (int i = 0; i < im.dimensions(); i++)
     {
-        s0.dims.push_back(DimData("_" + std::to_string(i)));
+        s0.dims.push_back(DimData("_" + std::to_string(i), false));
     }
     f.contents->stages.push_back(std::move(s0));
     f.contents->defined = true;
