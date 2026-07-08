@@ -202,6 +202,22 @@ in Halide's suite: cloning a **clone result** (`a.clone_in({b,e})` then
 `.clone_in(e)` on the *returned* Func, `func_clone.cpp:254-256`) is fine, because
 the clone wrapper starts with an empty `wrappers` map — it is the *original*
 already-wrapped Func that cannot be re-cloned.
+
+**Known upstream, still open, unfixed** (web search, 2026-07-08). This is not a
+fork artifact — it is tracked by two open `halide/Halide` issues, both quoting
+the same `copied_func.defined()` assert in `FuncSchedule::deep_copy` (the line
+number drifts across versions, `Schedule.cpp:336`→`:348`→`:372`):
+[#6476 "Cannot `clone_in()` two different functions"](https://github.com/halide/Halide/issues/6476)
+(the exact two-distinct-consumers case) and
+[#3661 "Applying `clone_in` to a same function twice causes an internal error"](https://github.com/halide/Halide/issues/3661).
+The #6476 thread reaches the same root cause (the first `clone_in` mutates the
+wrapped Func's schedule, so the second's `deep_copy` cannot remap the pre-existing
+wrapper). Neither issue has a linked fix; the nearest merged work,
+[PR #9117](https://github.com/halide/Halide/pull/9117) (makes `in`/`clone_in`
+transitive — see the resolution walk above), does **not** touch the `copied_map`
+seeding and does not close either issue. So the fix (seed `copied_map` with the
+wrapped Func's existing `wrappers` entries) would be a genuine upstream
+contribution.
 (It is out of scope for micro_halide, which does not model group-level deep copy;
 the relevant micro behavior is the call-time resolution and the shared-
 intermediate rewrite above.)
