@@ -1349,11 +1349,19 @@ in two phases:
     schedule is rejected.
 
 The consumer Funcs are untouched at call time; only the record on `f` changes
-(see the Implementation note). Corollary used repeatedly below: **the order of
-`in`/`clone_in` calls among themselves does not matter** — each only records a
-deferred rewrite, so it does not change the graph a later call's search reads —
-but an **eager** rewrite of a definition (notably `rfactor`, §12) *does* change
-that graph, so its order relative to a wrap matters.
+(see the Implementation note). Two ordering facts follow, and both have sharp
+exceptions covered in the surprises below:
+
+- A deferred rewrite does not change the call **graph**, so it does not change the
+  pin-*set* a later call's search computes. It *does* change `f`'s recorded
+  **wrapper map**, and a later call **reuses/validates against that map** (keyed
+  on its first pin, `get_wrapper` in `src/Func.cpp`). So wrap-vs-wrap order is
+  free only when the two calls' resolved pin-sets are **equal or disjoint**;
+  when they **overlap but are unequal**, order is observable — it can reject or
+  silently under-wrap (colliding-pin-sets surprise).
+- An **eager** rewrite of a definition (notably `rfactor`, §12) *does* change the
+  call graph, so its order relative to a wrap changes the pin-set itself
+  (stale-pin surprise).
 
 ### Which Funcs are pinned: the recursive search
 
@@ -1415,12 +1423,40 @@ rfactor(h) THEN clone_in({g,h}): search sees h → h_intm → f, pins h_intm   (
 clone_in({g,h}) THEN rfactor(h): pins h (h→f then); rfactor makes h→h_intm  (stale pin → the error above)
 ```
 
-This is exactly why wrap-vs-wrap order is free (both deferred) while
-wrap-vs-`rfactor` order is not: `rfactor` is an eager rewrite of the graph the
-search reads. Fix: `rfactor` first, then wrap.
+`rfactor` is an eager rewrite of the graph the search reads, so its order versus
+a wrap changes the pin-set. Fix: `rfactor` first, then wrap.
 (`clone_specialize_matrix_impl.hpp` choiceB=2 is the stale negative, choiceB=3 the
 working order — the stale pin is not a claim `h` can't reach `f`; it still does,
 via `h_intm`, but the pin was taken on `h`.)
+
+### Surprise: colliding pin-sets — wrap order *can* matter
+
+Two `in`/`clone_in` calls whose resolved pin-sets **overlap but are unequal** are
+order-dependent, even though both are lazy wraps and neither changes the call
+graph. `get_wrapper` decides reuse from the call's **first** pin (`fs[0]`) and
+`validate_wrapper` (`src/Func.cpp`) demands the reused wrapper's recorded consumer
+set match *exactly*. With `a → common1`, `b → common1`, and `out1 → {common2, mid}`,
+`out2 → {common2}` both funnelling to `common1` (pin-sets `{common2, mid}` and
+`{common2}`, overlapping on `common2`):
+
+```
+in(out1) then in(out2): out1 registers {common2→w, mid→w}; out2 reuses via common2,
+                        but mid shares w and is not in out2's set  -> CompileError
+in(out2) then in(out1): out2 registers {common2→w}; out1 reuses via common2 and
+                        SILENTLY drops the extra key mid           -> mid keeps reading the original
+```
+
+Which failure you get even depends on which pin sorts first alphabetically (it
+becomes `fs[0]`): a different sort routes the same collision through
+`get_wrapper`'s other reject path ("… already has a wrapper while … doesn't").
+So *equal* pin-sets are order-free (the second call is an idempotent reuse — only
+the wrapper's generated name follows the first call) and *disjoint* pin-sets are
+order-free (two independent wrappers,
+[probe/probe_in_two_wrappers_levels.cpp](probe/probe_in_two_wrappers_levels.cpp)
+schedules them at different levels), but *overlapping-unequal* sets are not.
+Two consumers funnelling into `f` through a shared intermediate therefore cannot
+be given separate wrappers. (Source walk + both orders:
+[probe/probe_in_key_set_collision.cpp](probe/probe_in_key_set_collision.cpp).)
 
 ### Surprise: the search is blind to pending rewrites — a clone can feed a consumer you didn't name
 

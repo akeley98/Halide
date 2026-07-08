@@ -86,6 +86,48 @@ Func** (`src/Function.cpp` ~1229): `wrapped.func_schedule.wrappers()[caller] =
 wrapper`. The named consumers' own `FunctionContents` are never touched at call
 time (see [in_clone_in.md](in_clone_in.md) part (b)).
 
+### Reuse and validation: overlapping pin-sets make wrap order matter
+
+`get_wrapper` (`src/Func.cpp` ~2242) does not always build a new wrapper. It keys
+the decision on the resolved set's **first** element `fs[0]`:
+
+```
+iter = wrappers.find(fs[0].name())
+if not found:                        # build a NEW wrapper
+    for i in 1..fs.size():           #   but first assert the other pins are unwrapped
+        user_assert(wrappers.count(fs[i]) == 0)
+            "... already has a wrapper while fs[0] doesn't"
+    create wrapper; add_wrapper(f, wrapper) for every f in fs
+else:                                # REUSE the existing wrapper for fs[0]
+    validate_wrapper(wrappers, fs, iter->second)   # exact-match check
+    return iter->second              #   (no add_wrapper — extra pins are NOT registered)
+```
+
+`validate_wrapper` (~2143) requires the reused wrapper's recorded consumers to
+match `fs` exactly: every existing entry in `fs` must map to this wrapper, and
+every existing entry **not** in `fs` must not. Consequences (probe
+`../probe/probe_in_key_set_collision.cpp`), for two calls whose pin-sets overlap
+but differ, e.g. `{common2, mid}` and `{common2}`:
+
+- **superset first, then subset**: the subset call reuses via `fs[0]=common2`, but
+  `mid` shares the wrapper and is not in the subset → `validate_wrapper` rejects
+  ("… `mid` shares the same wrapper but is not part of the redefinition").
+- **subset first, then superset**: the superset call reuses via `fs[0]=common2`;
+  the only recorded entry is `common2` (`==fs[0]`, skipped) → passes, returns the
+  wrapper, and **never registers the extra key** `mid` — so `mid` silently keeps
+  reading the original.
+- which reject path fires can even flip on the **alphabetical** order of the pins
+  (whichever sorts first becomes `fs[0]`): if the non-shared pin sorts first, the
+  reuse `find(fs[0])` misses and the *create-branch* assert ("already has a
+  wrapper while … doesn't") fires instead.
+
+So wrap order is order-free only when the two calls' pin-sets are **equal**
+(idempotent reuse; only the generated name follows the first call) or **disjoint**
+(two independent wrappers — `../probe/probe_in_two_wrappers_levels.cpp` schedules
+two disjoint-pin wrappers at different loop levels). **Overlapping-but-unequal**
+pin-sets are order-sensitive. (This corrects an earlier over-broad "wrap order
+never matters" claim, which the collision probe falsifies.)
+
 ### The rewrite is on the intermediate, so it is shared
 
 Deferred application happens in `wrap_func_calls` (`src/WrapCalls.cpp`), which
