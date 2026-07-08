@@ -1398,13 +1398,15 @@ subsection says, `in`/`clone_in` resolves each named consumer *down its call
 graph* to the **direct caller of `f` on the path to it**, and pins the wrapper
 onto that caller (stopping at the first Func that directly calls `f`). Reaching
 `f` only through intermediates is therefore fine — in
-[examples/clone_in_but_inlined.hpp](examples/clone_in_but_inlined.hpp),
-`common.clone_in(c1)` where `c1` reads `common` only through `maybe_inlined`
+[examples/in_but_inlined.hpp](examples/in_but_inlined.hpp),
+`common.in(c1)` where `c1` reads `common` only through `maybe_inlined`
 resolves the path `c1 → maybe_inlined → common` and pins the wrapper onto
-**`maybe_inlined`** (which is why the example's comment notes "`maybe_inlined`
-will use the cloned `common`"). It is likewise fine to name a consumer that is
+**`maybe_inlined`**, so every consumer of `maybe_inlined` reads the wrapper. It
+is likewise fine to name a consumer that is
 itself a *derived* Func, such as an `rfactor` intermediate: it is resolved and
-redirected like any other.
+redirected like any other. (Because `in` can wrap a Func repeatedly, that same
+example adds a *second* wrapper `common.in(c3)` for `c3`'s direct reads — legal
+for `in`, whereas the clone form crashes, per the clone limitation above.)
 
 What Halide *does* require is that the Func the wrapper gets pinned to **still
 directly calls `f` when the wrapper is resolved at lowering**. It checks this and
