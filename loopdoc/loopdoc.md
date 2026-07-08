@@ -1377,35 +1377,49 @@ now read by the wrapper — whereas `f.clone_in(h)` prints `f_clone_in_h` → `g
 `h` with `f` **absent**, because `g` now reads the clone and the clone reads
 `f`'s own inputs rather than `f`.
 
-### Every listed consumer must actually call the wrapped Func
+### The redirected caller must still call the wrapped Func at lowering
 
-`f.in(g)` / `f.clone_in(g)` **requires each named consumer `g` to actually call
-`f`** at the moment the redirection is resolved. There is nothing to redirect in
-a consumer that never reads `f`, and Halide rejects it outright rather than
-silently producing a dead wrapper:
+A named consumer does **not** have to call `f` *directly*. As the previous
+subsection says, `in`/`clone_in` resolves each named consumer *down its call
+graph* to the **direct caller of `f` on the path to it**, and pins the wrapper
+onto that caller (stopping at the first Func that directly calls `f`). Reaching
+`f` only through intermediates is therefore fine — in
+[examples/clone_in_but_inlined.hpp](examples/clone_in_but_inlined.hpp),
+`common.clone_in(c1)` where `c1` reads `common` only through `maybe_inlined`
+resolves the path `c1 → maybe_inlined → common` and pins the wrapper onto
+**`maybe_inlined`** (which is why the example's comment notes "`maybe_inlined`
+will use the cloned `common`"). It is likewise fine to name a consumer that is
+itself a *derived* Func, such as an `rfactor` intermediate: it is resolved and
+redirected like any other.
+
+What Halide *does* require is that the Func the wrapper gets pinned to **still
+directly calls `f` when the wrapper is resolved at lowering**. It checks this and
+rejects the schedule outright rather than emit a dead wrapper:
 
 > `Cannot wrap "f" in "g" because "g" does not call "f"`
 
-This is a rule specific to `in`/`clone_in`; it does **not** follow from the
-general realization/`compute_at` rules, so it must be checked separately. Two
-ways to trip it:
+This is specific to `in`/`clone_in` — it does not follow from the general
+realization/`compute_at` rules — and there are two ways to trip it:
 
-* **A consumer that plainly never reads `f`** — e.g. `out.clone_in(g)` when `g`
-  reads `f` but not `out`
+* **No path from the named consumer to `f` at all.** Then there is no direct
+  caller to resolve to, so the wrapper pins on the consumer itself, and at
+  lowering that consumer does not call `f` — `out.clone_in(g)` when `g` reads
+  `f` but not `out`
   ([examples/clone_in_unused.cpp](examples/clone_in_unused.cpp), a negative
   example).
-* **A consumer whose call to `f` is removed by a *later* directive.** Scheduling
-  is imperative and order-sensitive (§1). If you `f.clone_in({g, h})` and then
-  `rfactor` `h`'s update, the `rfactor` rewrites `h`'s reduction so the read of
-  `f` moves into the new intermediate `h_intm` — after which `h` no longer calls
-  `f`, and the clone's redirection of `h` is invalid. The fix is to clone the
-  Func that *does* read `f`: `rfactor` first, then
-  `f.clone_in({g, h_intm})`. (`clone_spec_a{0,1,2}_b2.cpp` are the negative
-  form; `clone_spec_a{0,1,2}_b3.cpp` the corrected positive.) Symmetrically, the
-  redirection *does* reach a listed consumer that is itself a derived Func such
-  as an `rfactor` intermediate — it is redirected like any other named consumer,
-  so `h_intm` then reads the clone and the original `f` keeps only its
-  non-redirected readers.
+* **A later directive severs the pinned caller's call to `f`.** The pin is fixed
+  at `in`/`clone_in` time and is **not** re-resolved afterward, so an order-
+  sensitive (§1) rewrite can invalidate it. `f.clone_in({g, h})` pins the
+  wrapper on `h` because `h`'s update calls `f` *then*; a subsequent
+  `rfactor` of `h`'s update moves that read of `f` into a new intermediate
+  `h_intm`, so at lowering `h`'s only callee is `h_intm` and `h` "does not call
+  `f`". (This is a *stale-pin* error, not a claim that `h` can no longer reach
+  `f` — it still reaches it through `h_intm`; the wrapper was simply pinned to
+  `h`, not to `h_intm`.) The fix is to pin the wrapper on the Func that *will*
+  call `f` in the final graph: `rfactor` first, then `f.clone_in({g, h_intm})`.
+  (`clone_spec_a{0,1,2}_b2.cpp` are the negative form; `clone_spec_a{0,1,2}_b3.cpp`
+  the corrected positive, where `h_intm` reads the clone and the original `f`
+  keeps only its non-redirected readers.)
 
 ### Examples
 

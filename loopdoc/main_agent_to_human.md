@@ -16,7 +16,7 @@ rules were already (or are now) in loopdoc.md.
 | # reds | Examples | Cause | Kind |
 |---|---|---|---|
 | 3 | `clone_spec_a{0,1,2}_b3` | **(A)** `clone_in({g, hintm})` redirection does not reach the rfactor **intermediate** consumer `hintm`; micro leaves `hintm` reading the original `p`, dragging `p` to root. | micro bug (doc clarified) |
-| 4 | `clone_spec_a{0,1,2}_b2`, `clone_in_unused` | **(B)** `in`/`clone_in` requires every *listed* consumer to actually call the wrapped Func; `rfactor` after the clone removes `h`'s call. | **doc gap — FIXED** + micro must reject |
+| 4 | `clone_spec_a{0,1,2}_b2`, `clone_in_unused` | **(B)** `in`/`clone_in` pins the wrapper on the *direct caller of `f`* on the path to the named consumer (transitive reach is fine); it errors at lowering if that pinned caller no longer calls `f` — no path (`clone_in_unused`), or `rfactor` after the clone moves `h`'s read into `h_intm` so the pin on `h` goes stale (b2). | **doc gap — FIXED** + micro must reject |
 | 3 | `specialize_then_rfactor_each{,_tiled}`, `specialize_tree_rfactor_mix` | **(C)** two rfactor intermediates share the name `g_intm`; micro orders them by the wrong visitation counter (visits the specialization branch before the base/fallback). | micro bug (§6 already documents base-before-branch) |
 | 1 | `compute_at_inline_dependence_update_inline` | **(D)** an update-def Func can't inline; it auto-realizes at its consumer's innermost loop, so `p.compute_at(out,y)` above it is legal. Micro rejects it. | micro bug (§11+§7 documented; §7 clarified) |
 
@@ -75,15 +75,23 @@ at the innermost consumer loop. Doc facts already present (§11 placement, §7
 enclosing rule); this is a micro fix.
 
 **5. "Is B2 a new in/clone_in rule?"** Yes — new and **not** derivable from the
-general realization/compute_at rules. The rule: *every consumer named in
-`in`/`clone_in` must actually call the wrapped Func when the redirection is
-resolved.* `clone_in_unused.cpp` trips it directly (`g` never calls `out`); B2
-trips it because `rfactor` on `h`'s update moves the read of the clone into
-`h_intm`, so `h` no longer calls it. I documented this in **§13** (new subsection
-"Every listed consumer must actually call the wrapped Func"), covering both the
-plain case and the rfactor-removes-the-call case, and noting that redirection
-*does* reach a derived consumer such as an rfactor intermediate (the B3 fix
-direction).
+general realization/compute_at rules. But the rule is subtler than "the named
+consumer must call `f`" (my first cut, which `clone_in_but_inlined` disproves —
+`common.clone_in(c1)` works even though `c1` reaches `common` only through
+`maybe_inlined`). The actual mechanism (`src/Func.cpp` `resolve_transitive_callers`
++ `src/WrapCalls.cpp`): `in`/`clone_in` walks *down* from each named consumer to
+`f` and pins the wrapper onto the **direct caller of `f` on that path**
+(transitive reach through intermediates is fine, and the pinned caller can even
+be a derived Func such as an rfactor intermediate). At lowering it errors if that
+pinned caller no longer directly calls `f`. Two ways: no path exists so the pin
+stays on the consumer, which doesn't call `f` (`clone_in_unused`, `g`↛`out`); or
+a later directive severs the pinned caller's call — `clone_in({g, h})` pins on
+`h`, then `rfactor` moves `h`'s read into `h_intm`, so at lowering `h`'s callee
+is `h_intm`, not `f` — a **stale pin**, not a claim `h` can't reach `f` (b2). Fix:
+pin on the Func that will call `f` in the final graph — `rfactor` first, then
+`clone_in({g, h_intm})` (b3). Documented in **§13** (subsection "The redirected
+caller must still call the wrapped Func at lowering"). *(Corrected after you
+flagged `clone_in_but_inlined`.)*
 
 
 ## Doc changes made this pass (main agent territory; no micro/harness edits)
