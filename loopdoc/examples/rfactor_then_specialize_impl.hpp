@@ -24,13 +24,9 @@ using namespace Halide;
 //           the INNER half rxi (the tiled-histogram shape). This exercises
 //           rfactor of an RVar produced by split.
 //
-// NOTE: only the tile_reduction=false member has a committed .cpp. The
-// tile_reduction=true member (rfactor_then_specialize_tiled) is HELD: it hits
-// the deferred RVar-split gap (progress.txt [open] rfactor -- micro's RVar
-// tracking is not updated by split, so rfactor's merge-drop cannot recognise the
-// split halves and emits an extra reduction loop). It is verified RED against
-// real Halide and is ready to add once RVar-splitting is tackled. Its failure is
-// about RVar tracking, not the scheduling-state aliasing this family targets.
+// Both members are GREEN. The tile_reduction=true member exercises rfactor of a
+// split-produced RVar; it works now that split/fuse preserve DimData::is_rvar
+// (human fix a09d33c6d) plus the iuo collapse annotation below.
 [[nodiscard]] int main_impl(bool tile_reduction) {
     Var x("x"), u("u"), xo("xo"), xi("xi"), ixo("ixo"), iuo("iuo"), ixi("ixi"), iui("iui");
     RVar rxo("rxo"), rxi("rxi");
@@ -49,6 +45,12 @@ using namespace Halide;
     }
     // Schedule the rfactor output; it is aliased by both specialize branches.
     intm.compute_root().tile(x, u, ixo, iuo, ixi, iui, 4, 4);
+    if (tile_reduction) {
+        // In the tiled member u = rxi has extent 4 (= the split factor), so the
+        // u-outer tile loop iuo has extent 1 and elides (§7). In the non-tiled
+        // member u = r.y has extent 8, so iuo survives -- no collapse there.
+        micro_halide_collapses(intm, {iuo});
+    }
 
     Param<bool> cond;
     g.update(0).specialize(cond).split(x, xo, xi, 4);  // distinct branches, both read intm
