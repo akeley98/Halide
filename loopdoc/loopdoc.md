@@ -413,7 +413,14 @@ The "walk the pipeline" that defines first-visitation order is a pre-order
 depth-first traversal from the output(s): record each Func the first time it is
 reached, then descend into the Funcs it calls — in the order those calls first
 appear in its definition — skipping any Func already recorded. A Func's
-visitation index is its position in that record. (This is only a tie-break for
+visitation index is its position in that record. For a multi-stage Func (§3) the
+stages are walked in order (pure, then each update); and **within a stage the
+base definition's calls are visited before any specialization branch's calls** —
+first the stage's right-hand-side reads, then its left-hand-side index reads,
+then each `specialize` branch's calls in declaration order (nested branches
+recursively). So a producer read only in a specialization branch (§15) is visited
+*after* a producer read in the base definition of that same stage. (This mirrors
+how the compiler walks a definition: values, then args, then specializations.) (This is only a tie-break for
 equal prefixes; the topological producer-before-consumer constraint and the
 prefix comparison dominate it.)
 
