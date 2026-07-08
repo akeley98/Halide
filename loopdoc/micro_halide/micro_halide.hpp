@@ -32,11 +32,18 @@ namespace micro_halide
 {
 
 // Added by human to support handwritten harness rule change.
-// Use this to report all exceptions.
+// Use these to report all exceptions.
 class CompileError: public std::runtime_error
 {
   public:
     CompileError(std::string what) : std::runtime_error(std::move(what))
+    {
+    }
+};
+class InternalError: public std::runtime_error
+{
+  public:
+    InternalError(std::string what) : std::runtime_error(std::move(what))
     {
     }
 };
@@ -568,7 +575,7 @@ inline bool is_rvar_name(const std::vector<DimData> &a, const std::string &name)
             return d.is_rvar();
         }
     }
-    throw std::runtime_error("Internal micro_halide_error @ is_rvar_name " + name);
+    throw InternalError("Internal micro_halide_error @ is_rvar_name " + name);
 }
 } // namespace dimlist
 
