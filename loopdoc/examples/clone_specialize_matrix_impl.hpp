@@ -8,25 +8,26 @@ using namespace micro_halide;
 using namespace Halide;
 #endif
 
-// Task 4 family: clone_in × specialize, all combinations of Choice A × Choice B
-// (loopdoc.md §13/§15). `p` is cloned FOR TWO consumers via the list form
-// p.clone_in({g, h}); g is pure and reads the clone pointwise, h is impure and
-// reads the clone in an update (a stencil reduction). The ORIGINAL p is kept
-// alive and non-trivially used by `keep` (so both p and the clone pc realize and
-// we can see which one carries a specialization).
+// Task 4 family: clone_in × specialize, all non-impossible combinations of
+// Choice A × Choice B (loopdoc.md §13/§15). `p` is cloned for two consumers via
+// the list form; `g` is pure and reads the clone pointwise, `h` is impure and
+// reads the clone in a stencil-reduction update. The ORIGINAL `p` is kept alive
+// and non-trivially used by `keep`.
 //
-// choiceA (WHAT is specialized, relative to the clone):
-//   0 — specialize p BEFORE clone_in  (the clone should DEEP-COPY p's spec)
-//   1 — clone_in, then specialize the ORIGINAL p  (only p gets branches)
-//   2 — clone_in, then specialize the CLONE pc     (only pc gets branches)
+// choiceA (what is specialized, relative to the clone):
+//   0 — specialize p BEFORE clone_in  (the clone deep-copies p's spec)
+//   1 — clone_in, then specialize the ORIGINAL p
+//   2 — clone_in, then specialize the CLONE pc
 // The specialization splits x, so "has branches" is structurally visible.
 //
-// choiceB (how g, h, and the clone are scheduled):
-//   0 — g and h fused with compute_with
-//   1 — g and h are producers of f; the clone pc is compute_at(f, y)
-//   2 — like 1, but h is rfactor'd so the rfactor intermediate consumes pc
-//   3 — ILLEGAL (negative): pc compute_at g's inner loop, but h also reads pc
-//       outside g, so pc cannot enclose all its uses.
+// choiceB (structure of g, h, and the clone):
+//   0 — g and h fused with compute_with                              (positive)
+//   1 — g and h producers of f; the clone pc is compute_at(f, y)     (positive)
+//   2 — clone_in({g,h}) then rfactor(h): the rfactor moves h's read of the clone
+//       into h_intm, so h no longer calls the wrapped Func           (NEGATIVE)
+//   3 — corrected: rfactor(h) FIRST, then clone_in({g, h_intm}) so the rfactor
+//       output directly consumes the clone                           (positive)
+//   4 — pc compute_at(g, x) while h also reads pc: invalid location  (NEGATIVE)
 [[nodiscard]] int main_impl(int choiceA, int choiceB) {
     Var x("x"), y("y"), xo("xo"), xi("xi"), u("u");
     ImageParam in(type_of<uint8_t>(), 2, "in");
@@ -34,23 +35,27 @@ using namespace Halide;
     Param<bool> cond;
 
     Func p("p");
-    p(x, y) = cast<int32_t>(in(x, y));          // original (pure)
-    p.compute_root();                            // realized (kept by `keep`); also required to specialize it
-
+    p(x, y) = cast<int32_t>(in(x, y));
+    p.compute_root();
     if (choiceA == 0) p.specialize(cond).split(x, xo, xi, 4);   // specialize BEFORE clone
 
     Func g("g"), h("h");
     g(x, y) = p(x, y) + 1;                        // pure consumer of the clone
     h(x, y) = 0;
-    h(x, y) += p(x + r.x, y + r.y);               // impure consumer: stencil reduction over the clone
+    h(x, y) += p(x + r.x, y + r.y);               // impure consumer: stencil reduction
 
-    Func pc = p.clone_in({g, h});                 // g and h now read the clone
+    // choiceB==3: rfactor h BEFORE the clone, and clone for {g, h_intm}.
+    Func hintm;
+    const bool rfactor_first = (choiceB == 3);
+    if (rfactor_first) hintm = h.update(0).rfactor(r.y, u);
+
+    Func pc = rfactor_first ? p.clone_in({g, hintm}) : p.clone_in({g, h});
 
     if (choiceA == 1) p.specialize(cond).split(x, xo, xi, 4);   // specialize the ORIGINAL after clone
     if (choiceA == 2) pc.specialize(cond).split(x, xo, xi, 4);  // specialize the CLONE after clone
 
     Func keep("keep");
-    keep(x, y) = p(x, y) * 2;                     // non-trivial use of the original p
+    keep(x, y) = p(x, y) * 2;                     // non-trivial use of the original
 
     Func f("f"), out("out");
     f(x, y) = g(x, y) + h(x, y);
@@ -65,25 +70,25 @@ using namespace Halide;
         g.compute_at(f, y);
         h.compute_at(f, y);
         pc.compute_at(f, y);
-        // g and h are computed at f.y, so their own y is a single point and
-        // elides (declared, §7). pc keeps its y (the stencil in h reads a y
-        // range). h's update stage collapses y too.
         micro_halide_collapses(g, {y});
         micro_halide_collapses(h, {y});
         micro_halide_collapses(h.update(0), {y});
-    } else if (choiceB == 2) {                    // + h rfactor'd; the intermediate consumes pc
-        // FLAGGED / not exercised by a committed .cpp (main_agent_to_human.md):
-        // clone_in({g,h}) then rfactor(h) breaks the wrap -- after rfactor, h
-        // calls hintm (not p), so Halide errors "h does not call p". Making the
-        // rfactor output consume the clone needs clone-AFTER-rfactor targeting
-        // {g, hintm}, which conflicts with this family's clone-then-schedule
-        // order. Left here to document the intended combo + the finding.
+    } else if (choiceB == 2) {                    // NEGATIVE: clone then rfactor breaks the wrap
         g.compute_at(f, y);
         h.compute_at(f, y);
-        Func hintm = h.update(0).rfactor(r.y, u);
+        pc.compute_at(f, y);
+        (void)h.update(0).rfactor(r.y, u);        // h no longer calls the wrapped Func -> error
+    } else if (choiceB == 3) {                    // corrected: rfactor output consumes the clone
+        g.compute_at(f, y);
+        h.compute_at(f, y);
         hintm.compute_at(f, y);
         pc.compute_at(f, y);
-    } else {                                      // ILLEGAL: pc at g.x, but h reads pc too
+        micro_halide_collapses(g, {y});
+        micro_halide_collapses(h, {y});
+        micro_halide_collapses(h.update(0), {y});
+        micro_halide_collapses(hintm, {y});
+        micro_halide_collapses(hintm.update(0), {y});
+    } else {                                      // NEGATIVE: invalid pc location
         g.compute_at(f, y);
         h.compute_at(f, y);
         pc.compute_at(g, x);
