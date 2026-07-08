@@ -37,27 +37,27 @@ choose a direction.
         variants for now?  *(Recommendation: keep deferred — it tests RVar
         tracking, not the aliasing question this batch is about.)*
 
-- [ ] **Task 2 — specialize then rfactor EACH branch** (built + diagnosed, files
-      removed so the harness stays clean).
-      * Intent: two branches each rfactor'd into their OWN intermediate, scheduled
-        differently → tests that branch/base handles route to DISTINCT, non-aliased
-        state.
-      * Finding: micro gets the STATE right — it makes two distinct intermediates
-        and applies the split to the correct one (no aliasing bug). BUT both
-        rfactor intermediates print as `g_intm` (rfactor names every intermediate
-        `<orig>_intm`), so the name-based canonicalizer merges them into one id and
-        cannot tell them apart. The only residual signal is their REALIZATION
-        ORDER, which micro orders opposite to real Halide. So the example is red
-        for a same-name + §6-tie-break reason, not the state question it targets.
-      * Because rfactor auto-names both intermediates identically, ANY "rfactor
-        each branch of one Func" example inherently hits this.
-      * **[DECIDE #2] Task 2 approach:** (a) treat as an ill-posed test / known
-        canonicalizer limitation (funcs identified by printed name) and skip;
-        (b) I dig into Halide's realization-order tie-break for same-named funcs,
-        document it in §6, and make micro match; or (c) reshape the example to
-        avoid two same-named intermediates (hard — can't easily rename rfactor
-        outputs).  *(Recommendation: (a) — document the canonicalizer limitation;
-        micro's actual state handling is correct here.)*
+- [x] **Task 2 — specialize then rfactor EACH branch** — RESOLVED as a real doc
+      gap (NOT a harness limitation — you were right). Two branches each rfactor'd
+      into their OWN intermediate; micro gets the state right (two distinct
+      intermediates, correct schedules) but realizes them in the wrong ORDER, and
+      since both print as `g_intm` the order is the only observable — so if the
+      order were right the test would pass. Root cause: §6 first-visitation order.
+      Within a stage, real Halide visits the base definition's calls before the
+      specialization branches' calls (src: `DefinitionContents::accept` —
+      predicate, values, args, THEN specializations), so the fallback's
+      intermediate is realized outer, the branch's inner. §6 didn't spell this
+      out.
+      * DOC FIXED: §6 "first-visitation order" now states multi-stage funcs walk
+        stages in order and, within a stage, base-definition calls precede
+        specialization-branch calls (branches in declaration order, recursive).
+      * RED SCAFFOLD committed: `specialize_then_rfactor_each.cpp` (+ `_tiled`,
+        `_impl.hpp`) — compile under micro, MISMATCH real purely on the two
+        intermediates' order. progress.txt `[open] specialize x rfactor
+        REALIZATION ORDER` has the full write-up + micro fix (visit base-def
+        producers before specialization-branch producers).
+      * Micro-agent fix is doc-derivable from §6 — same pattern as the earlier
+        specialize×rfactor gap. **No decision needed; ready for a micro-agent.**
 
 
 ## NOT STARTED
@@ -91,5 +91,11 @@ itself) are tracked in `progress.txt`.
 
 ## Suggested order once you decide
 1. DECIDE #3 → do Task 4 subset (highest independent value).
-2. DECIDE #2 → resolve Task 2 (likely document-and-skip).
-3. DECIDE #1 → if reopening RVar-split, do it, then Task 1 member 2 + Task 3.
+2. DECIDE #1 → if reopening RVar-split, do it, then Task 1 member 2 + Task 3.
+(DECIDE #2 is resolved: Task 2 is a §6 doc gap, now fixed + RED scaffold committed,
+ready for a micro-agent.)
+
+## Harness state
+Currently 2 intentional REDs: specialize_then_rfactor_each{,_tiled} (Task 2
+realization-order scaffolds). Everything else green. A micro-agent that fixes the
+§6 base-before-specialization visitation order flips both to green.
