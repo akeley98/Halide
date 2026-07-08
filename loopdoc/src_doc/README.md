@@ -18,7 +18,8 @@ then walks the resulting IR `Stmt` with a small `IRVisitor`.
 - **§10** — [split / fuse / reorder / tile](transforms.md)
 - **§11** — [Update (reduction) definitions: stages](update_definitions.md)
 - **§12** — [rfactor](rfactor.md)
-- **§13** — [in() / clone_in(): wrappers and clones](in_clone_in.md)
+- **§13** — [in() / clone_in(): wrappers and clones](in_clone_in.md) ·
+  [transitivity: which Funcs are affected](in_clone_in_transitivity.md)
 - **§14** — compute_with: fused groups (split by topic):
   [fused_groups](compute_with/fused_groups.md) ·
   [growth](compute_with/growth.md) ·

@@ -108,7 +108,12 @@ mutated at call time is the **wrapped** Func, plus creation of the new wrapper:
    So `f.in(h)` where `h` reaches `f` only through `g` actually registers the
    wrapper under `g` (the direct caller). A Func with no static path to the
    wrapped Func is left as-is (the wrapper is registered under its own name and
-   simply never triggers).
+   simply never triggers). The walk **stops at the first direct caller on each
+   branch**, runs against the **current, un-wrapped** call graph, and — because
+   the pin lands on a shared intermediate — redirects that intermediate for
+   **all** its consumers, not just the named one. Those subtleties (and the
+   `c3` sharing plus the double-clone crash) are worked through in the companion
+   [in_clone_in_transitivity.md](in_clone_in_transitivity.md).
 
 ### When `fs` is actually rewired: `wrap_func_calls` at lower time
 
