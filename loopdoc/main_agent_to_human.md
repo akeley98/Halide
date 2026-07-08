@@ -1,101 +1,85 @@
 # Main agent → human: open items & decisions
 
-Status of the adversarial-example batch requested in `human_to_main_agent.md`
-(the "scheduling metaprogramming is not pure-functional / aliased-vs-forked
-state" families). Working tree is clean; harness is green except where noted.
-
-Decisions are marked **[DECIDE]**. Nothing below is blocking a green harness — the
-held items were deliberately *not* committed so the harness stays green until you
-choose a direction.
+Status of the adversarial-example batch from `human_to_main_agent.md`. All four
+tasks have been written (per your "work on all; keep REDs visible" instruction).
+Harness state summarised at the bottom.
 
 
-## DONE
+## Task status
 
-- [x] **Task 1, member 1 — rfactor before specialize** (commit f49f546ea).
-      `examples/rfactor_then_specialize.cpp` (+ `_impl.hpp`). GREEN (micro==real).
-      Tests the aliasing case: rfactor runs on the base BEFORE the specialize
-      fork, so both branches alias the ONE scheduled intermediate. This is the
-      on-target "shared scheduling state" test and it passes.
+- [x] **Task 1 — rfactor before specialize** (family `rfactor_then_specialize_impl.hpp`).
+      * member 1 (no tile): `rfactor_then_specialize.cpp` — GREEN. Both specialize
+        branches alias the one pre-fork intermediate.
+      * member 2 (tile the reduction, rfactor inner): `rfactor_then_specialize_tiled.cpp`
+        — **RED**. Reveals that `split()` doesn't set `is_rvar` on the halves
+        (your `DimData::_is_rvar` refactor is in place, but split/fuse/tile still
+        build the produced dims with `is_rvar=false`), so rfactor's merge-drop
+        misfires. See DECIDE #1.
 
+- [x] **Task 2 — specialize then rfactor each branch** (family
+      `specialize_then_rfactor_each_impl.hpp`): both members **RED** — the §6
+      base-before-specialization visitation-order gap (two intermediates print as
+      `g_intm`; micro orders them wrong). §6 doc already fixed; micro fix pending.
 
-## HELD (not committed; deliberate, pending a decision)
+- [x] **Task 3 — specialize tree × rfactor before/after × tile**
+      (`specialize_tree_rfactor_mix.cpp`): **RED** — same §6 visitation-order gap,
+      in a tree + tile context.
 
-- [ ] **Task 1, member 2 — tile the reduction then rfactor the inner half**
-      (`rfactor_then_specialize_tiled`, the `tile_reduction=true` branch of the
-      committed `.hpp`).
-      * Verified RED against real Halide, but ONLY because it hits the deferred
-        **RVar-split gap** (`progress.txt` `[open] rfactor`): micro's RVar
-        tracking is not updated by `split`, so rfactor's merge-drop can't
-        recognise the split halves and emits an extra reduction loop.
-      * This is about RVar tracking, NOT the state-aliasing this family targets.
-      * The `.hpp` keeps the parameter + a note so this member is one `.cpp` away
-        once RVar-split is tackled.
-      * **[DECIDE #1] RVar-split gap:** reopen it now (a real chunk of micro work
-        — teach `split` to track RVar-ness so the split halves are recognised as
-        RVars), which would unblock every "tile the reduction + rfactor inner"
-        variant (this, and Task 3's "tile")? Or keep it deferred and skip those
-        variants for now?  *(Recommendation: keep deferred — it tests RVar
-        tracking, not the aliasing question this batch is about.)*
-
-- [x] **Task 2 — specialize then rfactor EACH branch** — RESOLVED as a real doc
-      gap (NOT a harness limitation — you were right). Two branches each rfactor'd
-      into their OWN intermediate; micro gets the state right (two distinct
-      intermediates, correct schedules) but realizes them in the wrong ORDER, and
-      since both print as `g_intm` the order is the only observable — so if the
-      order were right the test would pass. Root cause: §6 first-visitation order.
-      Within a stage, real Halide visits the base definition's calls before the
-      specialization branches' calls (src: `DefinitionContents::accept` —
-      predicate, values, args, THEN specializations), so the fallback's
-      intermediate is realized outer, the branch's inner. §6 didn't spell this
-      out.
-      * DOC FIXED: §6 "first-visitation order" now states multi-stage funcs walk
-        stages in order and, within a stage, base-definition calls precede
-        specialization-branch calls (branches in declaration order, recursive).
-      * RED SCAFFOLD committed: `specialize_then_rfactor_each.cpp` (+ `_tiled`,
-        `_impl.hpp`) — compile under micro, MISMATCH real purely on the two
-        intermediates' order. progress.txt `[open] specialize x rfactor
-        REALIZATION ORDER` has the full write-up + micro fix (visit base-def
-        producers before specialization-branch producers).
-      * Micro-agent fix is doc-derivable from §6 — same pattern as the earlier
-        specialize×rfactor gap. **No decision needed; ready for a micro-agent.**
+- [x] **Task 4 — clone_in × specialize matrix** (family
+      `clone_specialize_matrix_impl.hpp`): 9 of 12 combos committed, ALL PASSING.
+      * choiceA {p-before-clone, p-after-clone, clone} × choiceB0 (compute_with):
+        GREEN ×3.
+      * choiceA × choiceB1 (g,h,clone compute_at f.y): GREEN ×3 (after declaring
+        the g/h y-elision).
+      * choiceA × choiceB3 (illegal pc location): NEGATIVE ×3 (both backends
+        reject).
+      * choiceB2 (rfactor output consumes the clone): **FLAGGED, not committed** —
+        see the finding below.
 
 
-## NOT STARTED
+## RED scaffolds (kept visible per your instruction; each has a documented fix)
 
-- [ ] **Task 3 — mix of Tasks 1&2 + non-trivial specialize tree + tile**
-      ("rfactor before some specialize branches and after others; tile at some
-      point"). The "tile" almost certainly re-hits the RVar-split gap; the
-      rfactor-each-branch part re-hits the Task-2 same-name issue. Blocked on
-      DECIDE #1 and #2.
+1. `rfactor_then_specialize_tiled` — RVar-split: `split` must propagate `is_rvar`.
+2. `specialize_then_rfactor_each` + `_tiled` — §6 visitation order.
+3. `specialize_tree_rfactor_mix` — §6 visitation order.
 
-- [ ] **Task 4 — clone_in + specialize matrix.** The biggest single item:
-      choice A (3 options) × choice B (4 options) = up to **12 examples**, each a
-      2-Func `clone_in({g, h})` (g pure, h uses the clone in an update) combined
-      with a compute_with / compute_at / rfactor / illegal structure, with the
-      original `this`-of-`clone_in` also non-trivially used. Largely independent
-      of the rfactor tie-break issues above (clones are named `<orig>_clone_in`,
-      distinct from the original, so the same-name problem likely does NOT bite).
-      * **[DECIDE #3] Task 4 scope:** generate the full 12-combo matrix, or a
-        representative subset (~4–5) first for structure review before expanding?
-        *(Recommendation: subset first, confirm structure, then expand.)*
+They cluster into just TWO micro fixes (see decisions), so the RED count is
+larger than the amount of work to clear them.
 
 
-## Cross-cutting note
+## Findings surfaced by this batch
 
-The tile/RVar-split variants and the Task-2 same-name issue are the two recurring
-blockers; Task 4 is mostly orthogonal to both and is where the most new,
-green-able coverage likely lives. Pre-existing deferred `[open]` gaps unrelated to
-this batch (per-branch elision, compute_with dim-KIND, and the RVar-split gap
-itself) are tracked in `progress.txt`.
+- **`clone_in` wrap does not follow `rfactor` (Task 4 B2).** `p.clone_in({g,h})`
+  then `h.update(0).rfactor(...)` errors "h does not call p": the rfactor moves
+  h's read of the clone into the intermediate `hintm`, so `h` no longer calls the
+  wrapped Func and the wrap can't attach. To make the rfactor output consume the
+  clone you must clone AFTER rfactor, targeting `{g, hintm}` — which conflicts
+  with this family's clone-then-schedule order.
+  **[DECIDE #2] Task 4 B2:** (a) leave it flagged/omitted; (b) I add a separate
+  mini-example doing clone-after-rfactor (`{g, hintm}`) as the "working" form; or
+  (c) commit clone-then-rfactor as a NEGATIVE documenting the ordering constraint.
+  *(Recommendation: (b) — a small positive that shows the supported ordering.)*
 
 
-## Suggested order once you decide
-1. DECIDE #3 → do Task 4 subset (highest independent value).
-2. DECIDE #1 → if reopening RVar-split, do it, then Task 1 member 2 + Task 3.
-(DECIDE #2 is resolved: Task 2 is a §6 doc gap, now fixed + RED scaffold committed,
-ready for a micro-agent.)
+## Decisions
+
+- **[DECIDE #1] RVar-split (`split` propagate `is_rvar`).** Now a small, specific
+  micro fix: `split`/`fuse`/`tile` in `micro_halide.hpp` must set `is_rvar` on the
+  produced `DimData` from the `VarOrRVar` kind (they currently default it to
+  false). This flips `rfactor_then_specialize_tiled` (and unblocks all
+  "tile-the-reduction + rfactor-inner" variants) to green. Trivial enough that
+  you may prefer to do it directly (as with the `DimData` refactor), or hand it to
+  a micro-agent. *(Not done by me — it's micro impl, and you asked to see state.)*
+
+- **§6 visitation-order fix (Tasks 2 & 3).** Doc-derivable micro fix: realization
+  order must visit a stage's base-definition producers before its
+  specialization-branch producers (loopdoc §6, now documented; `DefinitionContents::accept`
+  order). Flips the 3 visitation-order REDs to green. → a micro-agent task.
+
+- **[DECIDE #2]** above (Task 4 B2 shape).
+
 
 ## Harness state
-Currently 2 intentional REDs: specialize_then_rfactor_each{,_tiled} (Task 2
-realization-order scaffolds). Everything else green. A micro-agent that fixes the
-§6 base-before-specialization visitation order flips both to green.
+Reds are the 4 scaffolds above (Task 1 tiled + Task 2 ×2 + Task 3). Two micro
+fixes (RVar-split `is_rvar` propagation; §6 base-before-specialization visitation)
+clear all of them. Task 4's 9 committed combos are green/negative.
