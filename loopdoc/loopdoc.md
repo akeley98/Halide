@@ -418,6 +418,24 @@ name), the walk descends into each, and the Func is appended to the order only
 **direct-callee list of one consumer** — it does **not** globally hoist an
 alphabetically-early Func to the front.
 
+This is a walk over the pipeline **DAG**, not a tree, so a shared producer is
+reached by more than one path. The walk carries a single **visited** set and
+appends each Func **exactly once**, on the *first* time it is reached (its
+post-order return); later arrivals find it already visited and are skipped — they
+do not re-emit or reorder it. (An arrival at a Func that is visited but *not yet
+appended* means the walk is on a back-edge, i.e. a dependency cycle, which is an
+error.) Because the first arrival appends the producer before appending the
+consumer it descended from, and every other consumer is appended later still, a
+shared producer always precedes **all** of its consumers — it is realized once,
+ahead of every reader. `f(x) = g1(x) + g2(x)` with both `g1` and `g2` reading a
+shared `h`: the walk descends `f`'s callee list `[g1, g2]`, reaches `h` under
+`g1`, emits `h` there, and the later descent through `g2` finds `h` done — order
+`h, g1, g2, f`. Which consumer's path reaches `h` first (here `g1`, by the sorted
+callee list) only affects `h`'s slot relative to *unrelated* Funcs; it never
+changes that `h` precedes both `g1` and `g2`. The minimal shared-producer case is
+[examples/diamond_root.cpp](examples/diamond_root.cpp) (one producer, two
+readers, realized once).
+
 The consequence catches people out: a producer reachable only through an
 alphabetically-*later* sibling is realized *after* that sibling's entire
 subtree, even if the producer's own name sorts earlier. In
