@@ -120,6 +120,57 @@ precisely because `c3`'s direct reads keep it alive. This is the "weird `c3`"
 the example flags — it is not weird once you see that the pin is on the shared
 `maybe_inlined`, not on a per-consumer edge.
 
+### Partial routing: "clone for `g`" ≠ "everything `g` computes uses the clone"
+
+The most counter-intuitive consequence is that naming a consumer does **not**
+route all of that consumer's transitive uses of the wrapped Func through the
+clone — only the reads on the **first-direct-caller frontier** are redirected,
+and any use reached *past* that frontier keeps the original. `print_loop_nest`
+cannot show this (the RHS is elided); the reproducer
+`../probe/probe_clone_partial_routing.cpp` dumps `compile_to_lowered_stmt` so the
+actual loads are visible. The DAG:
+
+```
+maybe_inline → clone_me → c1 → c2 → out
+                      \-------→ c2      (c2 ALSO reads clone_me directly)
+```
+
+with `clone_me`, the clone, and `c2` all `compute_root` and `c1` computed at
+`c2`. `clone_me.clone_in(target)` for the three reachable targets gives:
+
+| `target` | wrapper pinned on | reads the **clone** | reads the **original `clone_me`** |
+|---|---|---|---|
+| `c1` | `c1` | `c1` (so `c2` via `c1`) | `c2`'s *direct* reads |
+| `c2` | `c2` | `c2`'s *direct* reads | `c1` (so `c2` via `c1`) |
+| `out` | **`c2`** | `c2`'s *direct* reads | `c1` |
+
+Two things fall out, both verified in the lowered stmts:
+
+* **The named consumer is often not the Func that is modified, and its uses are
+  split.** `clone_in(out)` is *identical* to `clone_in(c2)`: the walk from `out`
+  finds `out` does not call `clone_me` directly, descends to `c2`, stops at the
+  first direct caller, and pins there. The clone is *named* `clone_me_clone_in_out`
+  yet `out` itself is untouched, and `out`'s dependence on `clone_me` is served by
+  a **mix** — the clone through `c2`'s direct reads, the original through
+  `c2 → c1`. So "clone for `out`" did not make all of `out`'s `clone_me` reads go
+  through the clone.
+* **Shadowing.** In the `c2` case, `c2`'s own direct read of `clone_me` stops the
+  walk at `c2`, so the deeper `c1` never gets the clone — even though `c1` is on a
+  path from `c2` to `clone_me`. Remove `c2`'s direct read and the walk would
+  descend to `c1` and redirect it instead. A closer direct caller **shadows** the
+  ones behind it.
+
+(And the shared-body bleed-through from the previous subsection still applies:
+in the `c1` case the clone was requested for `c1`, but `c2` reads `c1`, so `c2`
+picks up the clone through that edge too — unrequested — on top of its own direct
+reads of the original.)
+
+The mental correction: **`f.in(g)` / `f.clone_in(g)` means "redirect the first
+Funcs that directly call `f` on the paths down from `g`," not "make `g` and
+everything under it use the wrapper/clone."** Partial routing, the named-consumer
+not being touched, shadowing, and unnamed-consumer bleed-through are all the same
+fact seen from different angles.
+
 ### Legality re-check at lowering (why a resolved pin can still fail)
 
 `validate_custom_wrapper` (`src/WrapCalls.cpp` ~53) runs **after** substitution
