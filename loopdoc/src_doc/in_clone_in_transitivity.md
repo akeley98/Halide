@@ -164,30 +164,44 @@ never put `common_clone_in_c1` into `copied_map` — so the lookup yields an
 undefined `FunctionPtr` and the assert trips (the doubled `$0$0` suffix is
 `deep_copy` re-suffixing the already-suffixed wrapper name).
 
-**This is general, not specific to the `c3` "paradox."** The trigger is only
-that `create_clone_wrapper` deep-copies the wrapped Func's schedule and that
-schedule already holds *some* wrapper — so it fires for **any** second
-wrapper-creating call whose second call is a `clone_in`, regardless of arguments
-or overlap. Verified (`../probe/probe_clone_double_crash.cpp` for the `c3` shape;
-`../probe/probe_clone_combos.cpp` for disjoint consumers), four sequences on one
-wrapped Func `f` with unrelated consumers `a`, `b`:
+**This is general, not specific to the `c3` "paradox" — but it is gated on
+`create_clone_wrapper` actually *running*.** The crash trigger is only that
+`create_clone_wrapper` deep-copies the wrapped Func's schedule while that
+schedule already holds *some* wrapper; it does not depend on the consumer
+arguments or on any overlap. The subtlety is *when a `clone_in` call reaches
+`create_clone_wrapper` at all*: `get_wrapper` first resolves the consumer(s) to
+their key(s) and, **if a wrapper for that key already exists, returns the cached
+one without building anything** (`src/Func.cpp` ~2288, the `iter != end` branch).
+So a repeat `clone_in` for an *already-registered* consumer set is idempotent and
+safe; only a `clone_in` that must create a wrapper for a **new** consumer key
+hits the deep copy. Verified (`../probe/probe_clone_double_crash.cpp` for the
+`c3` shape; `../probe/probe_clone_combos.cpp` and `../probe/probe_clone_idempotent.cpp`
+for the rest), sequences on one wrapped Func `f` with consumers `a`, `b`:
 
 | sequence | result | why |
 |---|---|---|
-| `f.clone_in(a); f.clone_in(b);` | **crash** | 2nd (clone) deep-copies `f`'s schedule, now holding the 1st wrapper |
-| `f.in(a); f.clone_in(b);` | **crash** | same — the pre-existing wrapper came from `in()`, still in the schedule |
-| `f.clone_in(a); f.in(b);` | OK | `in()` (`create_in_wrapper`) builds a fresh pointwise Func; no deep copy |
+| `f.clone_in(a); f.clone_in(a);` | OK | 2nd resolves to the existing key `a` → cached wrapper returned, no deep copy |
+| `f.clone_in(a); f.clone_in(b);` | **crash** | 2nd is a new key → `create_clone_wrapper` deep-copies `f`'s now-wrapper-bearing schedule |
+| `f.in(a); f.clone_in(b);` | **crash** | same — the pre-existing wrapper came from `in()`, still in `f`'s schedule |
+| `f.clone_in(a); f.in(b);` | OK | `in()` (`create_in_wrapper`) builds a fresh pointwise Func; never deep-copies |
 | `f.in(a); f.in(b);` | OK | neither call deep-copies |
 
-So the rule is: the **first** wrapper-creating call on a Func is unrestricted,
-but a **subsequent `clone_in` on the same wrapped Func cannot be built at all**
-(it aborts internally) — it is *not* merely "the same arguments twice." Cloning
-is a single-shot operation per wrapped Func. `in()` has no such restriction
-because it never deep-copies the wrapped Func. The single-Func clone path simply
-does not cooperate with the whole-pipeline `deep_copy` free function (which
-pre-seeds `copied_map` with *every* Func, [in_clone_in.md](in_clone_in.md)
-verdict) that would make the wrapper remap resolvable. This is a Halide
-limitation, not a schedule the user got wrong; the example rightly sets it aside.
+So the rule is: a Func may carry **at most one distinct `clone_in`/`in`-created
+wrapper without breaking a later clone**. Re-requesting an already-registered
+consumer set is fine (idempotent — this is what Halide's own
+`test/correctness/func_clone.cpp:43-44` exercises, with reordered-but-equal
+consumer lists). What is unsupported is a `clone_in` that must build a **second,
+distinct** wrapper on a Func that already has one: it aborts internally. `in()`
+has no such restriction because it never deep-copies the wrapped Func. The
+single-Func clone path simply does not cooperate with the whole-pipeline
+`deep_copy` free function (which pre-seeds `copied_map` with *every* Func,
+[in_clone_in.md](in_clone_in.md) verdict) that would make the wrapper remap
+resolvable. This is a Halide limitation, not a schedule the user got wrong; the
+example rightly sets it aside. Note the distinct, non-crashing case that *is*
+in Halide's suite: cloning a **clone result** (`a.clone_in({b,e})` then
+`.clone_in(e)` on the *returned* Func, `func_clone.cpp:254-256`) is fine, because
+the clone wrapper starts with an empty `wrappers` map — it is the *original*
+already-wrapped Func that cannot be re-cloned.
 (It is out of scope for micro_halide, which does not model group-level deep copy;
 the relevant micro behavior is the call-time resolution and the shared-
 intermediate rewrite above.)
