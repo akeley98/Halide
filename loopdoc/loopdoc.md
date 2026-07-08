@@ -1289,12 +1289,10 @@ below therefore assume the new Func has been scheduled (e.g. `compute_root`).
 ### `f.in(g)` — an identity *wrapper*
 
 `f.in(g)` returns a new Func (printed `f_in_g`) whose definition is the pointwise
-identity `f_in_g(args) = f(args)`, and it makes `g` read `f_in_g` where it used
-to read `f`. The wrapper reads `f`; `f`'s *other* consumers are untouched. The
-wrapper is pure, so left at its default it inlines straight back (the nest is
-just `f` → `g`, as if the `in` were not there). Once you give it a compute level
-(here `f_in_g.compute_root()`) it becomes a distinct node between `f` and `g`
-(realization order `f` → `f_in_g` → `g`):
+identity `f_in_g(args) = f(args)`; `g` reads `f_in_g` where it used to read `f`,
+and `f`'s other consumers are untouched. The wrapper is pure, so at its default
+it inlines straight back (the nest is just `f` → `g`); give it a compute level to
+make it a distinct node (realization order `f` → `f_in_g` → `g`):
 
 ```
 produce f:
@@ -1307,197 +1305,176 @@ consume f:
       ...
 ```
 
-The wrapper is schedulable like any Func (`f_in_g.compute_root()`,
-`f_in_g.compute_at(g, …)`, …). Two common uses: give a shared producer a
-per-consumer staging point (each consumer reads `f` through its own wrapper at
-its own level), and repair the "two consumers force `f` to `root`" situation
-(§7, [neg_compute_at_two_consumers.cpp](examples/neg_compute_at_two_consumers.cpp)):
-wrap `f` separately per consumer so each wrapper has a single consumer and can be
-computed inside it. Variants: `f.in(g)`, `f.in({g1, g2, …})` (one shared wrapper
-for several named consumers), and `f.in()` (a single **global** wrapper used by
-every consumer that has no custom wrapper of its own, either defined before or
-after the `f.in()`).
-
-A global wrapper coexists with custom ones. When `f` has both a custom wrapper
-(for some consumers) and a global wrapper, a consumer with its own custom wrapper
-uses that (**custom takes precedence**), and every other consumer uses the
-global wrapper — **except `f`'s own wrappers, which keep reading `f`**. A wrapper
-is created precisely to read `f`, so the global redirect never applies to `f`'s
-custom or global wrappers themselves: each of them reads `f`, and they sit as
-siblings both consuming `f` (see
-[examples/in_custom_and_global.cpp](examples/in_custom_and_global.cpp): `g1`'s
-custom wrapper and the global wrapper both read `f`, neither reads the other).
+Forms: `f.in(g)`, `f.in({g1, g2, …})` (one shared wrapper for several named
+consumers), and `f.in()` (a single **global** wrapper used by every consumer that
+has no custom wrapper of its own). A global wrapper coexists with custom ones: a
+consumer with its own custom wrapper uses that (**custom takes precedence**),
+everyone else uses the global one — **except `f`'s own wrappers, which always
+read `f`** ([in_custom_and_global.cpp](examples/in_custom_and_global.cpp): `g1`'s
+custom wrapper and the global wrapper are siblings, both reading `f`). Common
+uses: a per-consumer staging point for a shared producer, and repairing the "two
+consumers force `f` to `root`" situation (§7,
+[neg_compute_at_two_consumers.cpp](examples/neg_compute_at_two_consumers.cpp)) by
+wrapping `f` separately per consumer.
 
 ### `f.clone_in(g)` — an independent *clone*
 
 `f.clone_in(g)` returns a new Func that is a **copy of `f`'s entire definition**
-(all stages and schedule), and makes `g` read the clone. Unlike a wrapper, the
-clone *recomputes* `f`'s work rather than reading `f`'s result, so `f` and the
-clone are independent and may be scheduled differently.
+(all stages, schedule, and specializations), and makes `g` read the clone. Unlike
+a wrapper, the clone *recomputes* `f`'s work rather than reading `f`'s result, so
+`f` and the clone are independent and may be scheduled differently.
 
-A clone duplicates `f` itself but **not `f`'s inputs**: the clone reads the
-*same* producer Funcs that `f` reads — callees are **shared, not copied**. This
-has a sharp scheduling consequence. If `f` reads a producer `p`, then after
-`f.clone_in(g)` the Func `p` is read in two places — inside `f` and inside the
-clone — so the only level enclosing *both* uses is `root`. A schedule that
-computes `p` *inside* `f` (e.g. `p.compute_at(f, x)`) becomes **illegal**: Halide
-reports `p` "is used in" both `f` and `f_clone_in_g` and lists
-`p.compute_root()` as the only legal location. To give a clone genuinely private
-inputs you must clone those inputs too. (The `Func::clone_in` doc's phrase about
-"intermediate Funcs along the path" refers to the transitive *caller* chain
-between the consumers and `f`, **not** to `f`'s callees; the callees are shared.
-See [src_doc: in/clone_in](src_doc/in_clone_in.md) for the verification.)
+Each wrapper/clone is a **distinct** Func with its own auto-generated name
+(`f_in_g`, `f_clone_in_g`, plus an internal `$n` suffix the printer strips) — a
+separate node in the nest (§10 normalizes names to positional ids), never "the
+same Func twice."
 
-**Limitation — a Func can only be cloned once.** `clone_in` cannot be called
-successfully on a Func that already carries a wrapper or clone (from a prior
-`in()` or `clone_in()`), *unless* the call merely returns an already-existing
-clone for the same consumer(s): building a *second, distinct* clone of such a
-Func aborts Halide with an internal error (`copied_func.defined()` in
-`FuncSchedule::deep_copy`), because cloning deep-copies the wrapped Func's
-schedule but not the wrapper entries it now holds. So `f.clone_in(a)` then
-`f.clone_in(a)` is fine (the second returns the first clone), but `f.clone_in(a)`
-then `f.clone_in(b)`, or `f.in(a)` then `f.clone_in(b)`, crashes. `in()` has no
-such limit (it never deep-copies `f`). This is a known, still-open upstream bug
-([halide/Halide#6476](https://github.com/halide/Halide/issues/6476),
-[#3661](https://github.com/halide/Halide/issues/3661)); it is undocumented in the
-`clone_in` API comment. See [src_doc: in/clone_in transitivity](src_doc/in_clone_in_transitivity.md).
+### Two phases: eager at call time, deferred at lowering
 
-### Identity in the output, and which consumers are redirected
+Almost every surprise in this section comes from `in`/`clone_in` doing their work
+in two phases:
 
-Each wrapper or clone is a **distinct** Func with its own auto-generated name
-(`f_in_g`, `f_clone_in_g`, plus an internal uniqueness suffix the printer
-strips); the harness treats it as a separate node (§10 — names are normalized to
-positional ids, so what matters is that it is one more distinct Func). They are
-*not* "the same Func appearing twice." Only the **named** consumers are
-redirected — and, transitively, the *direct callers* on each path down to `f`
-(so `f.in(h)` where `h` reaches `f` only through `g` actually redirects `g`); a
-global `f.in()` redirects every other consumer.
+- **Call time (eager)** — the moment you call `f.in(g)` / `f.clone_in(g)`:
+  * the new Func is built. An `in` wrapper is a fresh identity `wrapper(args) =
+    f(args)`. A **clone deep-copies `f`'s *current* contents** — definition,
+    schedule, specializations — so it **freezes** whatever `f`'s body reads right
+    now (its callees are *shared*, not copied — see the shared-inputs surprise).
+  * the **recursive search** (next subsection) picks which Funcs to redirect and
+    records `{pinned Func → new Func}` on `f`. **This pin set is frozen here and
+    never recomputed.**
+- **Lowering (deferred)** — when the nest is built:
+  * each pinned Func's calls to `f` are rewritten to the new Func (the only point
+    a consumer's body changes);
+  * each pin is re-checked — the pinned Func must *still* call `f`, else the
+    schedule is rejected.
 
-Redirecting a caller means that caller reads the wrapper/clone in place of `f`,
-so `f` keeps only the consumers that were *not* redirected. The two directives
-then differ in whether `f` survives:
+The consumer Funcs are untouched at call time; only the record on `f` changes
+(see the Implementation note). Corollary used repeatedly below: **the order of
+`in`/`clone_in` calls among themselves does not matter** — each only records a
+deferred rewrite, so it does not change the graph a later call's search reads —
+but an **eager** rewrite of a definition (notably `rfactor`, §12) *does* change
+that graph, so its order relative to a wrap matters.
 
-* an **`in` wrapper always keeps `f` in the pipeline** — the wrapper reads `f`,
-  so `f` still has a consumer (and is then realized or inlined per `f`'s own
-  schedule, as always);
-* a **clone reads `f`'s *inputs*, not `f`** (callees are shared, above), so if
-  *every* consumer of `f` ends up redirected to the clone, `f` has no remaining
-  reader, becomes unreachable from the output (§1), and **drops out of the nest
-  entirely** — the clone takes its place.
+### Which Funcs are pinned: the recursive search
 
-So for the chain `h` → `g` → `f` with no other reader of `f`: `f.in(h)` (which
-redirects the direct caller `g`) prints `f` → `f_in_h` → `g` → `h` — `f` stays,
-now read by the wrapper — whereas `f.clone_in(h)` prints `f_clone_in_h` → `g` →
-`h` with `f` **absent**, because `g` now reads the clone and the clone reads
-`f`'s own inputs rather than `f`.
+The named consumers are not necessarily the Funcs that get redirected. For each
+named consumer, Halide walks **down the current call graph** toward `f` and pins
+the **first Func that directly calls `f`** on each branch:
 
-### The redirected caller must still call the wrapped Func at lowering
+```
+pin_targets(f, consumer):
+    descend `consumer`'s direct calls in the CURRENT graph:
+        if this Func directly calls f  ->  pin it; stop descending this branch
+        else                            ->  recurse into each direct callee
+    if no Func on any branch calls f    ->  pin `consumer` itself
+                                            (this pin will fail the lowering re-check)
+global f.in()  ->  pin every consumer of f, except f's own wrappers
+```
 
-A named consumer does **not** have to call `f` *directly*. As the previous
-subsection says, `in`/`clone_in` resolves each named consumer *down its call
-graph* to the **direct caller of `f` on the path to it**, and pins the wrapper
-onto that caller (stopping at the first Func that directly calls `f`). Reaching
-`f` only through intermediates is therefore fine — in
-[examples/in_but_inlined.hpp](examples/in_but_inlined.hpp),
-`common.in(c1)` where `c1` reads `common` only through `maybe_inlined`
-resolves the path `c1 → maybe_inlined → common` and pins the wrapper onto
-**`maybe_inlined`**, so every consumer of `maybe_inlined` reads the wrapper. It
-is likewise fine to name a consumer that is
-itself a *derived* Func, such as an `rfactor` intermediate: it is resolved and
-redirected like any other. (Because `in` can wrap a Func repeatedly, that same
-example adds a *second* wrapper `common.in(c3)` for `c3`'s direct reads — legal
-for `in`, whereas the clone form crashes, per the clone limitation above.)
+Two properties of this walk drive the surprises below:
 
-What Halide *does* require is that the Func the wrapper gets pinned to **still
-directly calls `f` when the wrapper is resolved at lowering**. It checks this and
-rejects the schedule outright rather than emit a dead wrapper:
+- It reads the graph **as written now** and is **blind to wrappers/clones** — the
+  deferred rewrites are invisible to it, so it plans against *pre-rewrite* edges.
+- A pin lands on a **shared** Func; rewriting that one body redirects it for
+  **every** consumer of it, not only the consumer you named.
+
+([src_doc: in/clone_in transitivity](src_doc/in_clone_in_transitivity.md) traces
+the search and its lowering-time application in source.)
+
+### Surprise: the named consumer is usually not the Func modified
+
+The search pins the *first direct caller* of `f`, so naming `g` redirects
+whatever sits on the frontier below `g`, not `g` itself — and because that Func
+is shared, its *other* consumers get redirected too. In
+[in_but_inlined.hpp](examples/in_but_inlined.hpp), `common.in(c1)` where `c1`
+reads `common` only through `maybe_inlined` pins the wrapper on **`maybe_inlined`**;
+a sibling `c3` that also reads `maybe_inlined` then reads the wrapper as well
+(unrequested), while `c3`'s own *direct* reads of `common` stay on the original.
+So "wrap for `g`" means "redirect the first direct callers of `f` beneath `g`,"
+not "make `g` and everything under it use the wrapper." (A derived Func such as an
+`rfactor` intermediate can be a pin target like any other; the full
+partial-routing table is in the [src_doc](src_doc/in_clone_in_transitivity.md).)
+
+### Surprise: pins freeze at call time — `rfactor` order matters (wrap order doesn't)
+
+The lowering re-check rejects a pin whose Func no longer calls `f`:
 
 > `Cannot wrap "f" in "g" because "g" does not call "f"`
 
-This is specific to `in`/`clone_in` — it does not follow from the general
-realization/`compute_at` rules — and there are two ways to trip it:
+Two ways to hit it:
 
-* **No path from the named consumer to `f` at all.** Then there is no direct
-  caller to resolve to, so the wrapper pins on the consumer itself, and at
-  lowering that consumer does not call `f` — `out.clone_in(g)` when `g` reads
-  `f` but not `out`
-  ([examples/clone_in_unused.cpp](examples/clone_in_unused.cpp), a negative
-  example).
-* **A later directive severs the pinned caller's call to `f`.** The pin is fixed
-  at `in`/`clone_in` time and is **not** re-resolved afterward, so an order-
-  sensitive (§1) rewrite can invalidate it. `f.clone_in({g, h})` pins the
-  wrapper on `h` because `h`'s update calls `f` *then*; a subsequent
-  `rfactor` of `h`'s update moves that read of `f` into a new intermediate
-  `h_intm`, so at lowering `h`'s only callee is `h_intm` and `h` "does not call
-  `f`". (This is a *stale-pin* error, not a claim that `h` can no longer reach
-  `f` — it still reaches it through `h_intm`; the wrapper was simply pinned to
-  `h`, not to `h_intm`.) The fix is to pin the wrapper on the Func that *will*
-  call `f` in the final graph: `rfactor` first, then `f.clone_in({g, h_intm})`.
-  (`clone_spec_a{0,1,2}_b2.cpp` are the negative form; `clone_spec_a{0,1,2}_b3.cpp`
-  the corrected positive, where `h_intm` reads the clone and the original `f`
-  keeps only its non-redirected readers.)
-
-### The walk plans on the pre-wrap call graph (it ignores earlier wrappers)
-
-The transitive walk reads the call graph *as written*, before any `in`/`clone_in`
-rewrite is applied (rewrites are lazy — resolved only when the nest is built, see
-the Implementation note below). So the pin is chosen against edges an *earlier*
-`in`/`clone_in` may already have redirected. Consequence: the clone/wrapper can
-end up feeding a consumer you did not name, and *not* feeding the one you did.
-
-Worked case ([examples/indirectly_reached_clone.hpp](examples/indirectly_reached_clone.hpp)),
-consumer → producer edges:
-
-- `f → common`; `g → f`; `h → f`; `out → g, h`.
-- `f.clone_in(g)` — final graph: `g → f_clone_in_g`, `h → f` (only `h` still reads `f`).
-- then `common.clone_in(g)`, resolved on the *pre-wrap* graph:
+- **No path to `f` at all** — the search falls back to pinning the named consumer
+  itself, which never calls `f` (`out.clone_in(g)` when `g` reads `f` but not
+  `out` — [clone_in_unused.cpp](examples/clone_in_unused.cpp), a negative example).
+- **A later eager rewrite severs the pinned call.** The pin is frozen at call
+  time; `rfactor` (§12) then rewrites the definition, moving the read of `f` into
+  a new intermediate, so the pin goes *stale*:
 
 ```
-walk from g:  g → f (pre-wrap edge)  →  f → common  →  pin on f
-             (never sees that g will actually read f_clone_in_g)
-lowering:    rewrite f's read of common → common_clone_in_g
-             f_clone_in_g is a copy of f's body → still reads the original common
+rfactor(h) THEN clone_in({g,h}): search sees h → h_intm → f, pins h_intm   (legal; naming h_intm is redundant)
+clone_in({g,h}) THEN rfactor(h): pins h (h→f then); rfactor makes h→h_intm  (stale pin → the error above)
 ```
 
-Outcome — inverted from the name: **the clone requested "for `g`" is read by `h`,
-while `g` reads the original `common`.**
+This is exactly why wrap-vs-wrap order is free (both deferred) while
+wrap-vs-`rfactor` order is not: `rfactor` is an eager rewrite of the graph the
+search reads. Fix: `rfactor` first, then wrap.
+(`clone_specialize_matrix_impl.hpp` choiceB=2 is the stale negative, choiceB=3 the
+working order — the stale pin is not a claim `h` can't reach `f`; it still does,
+via `h_intm`, but the pin was taken on `h`.)
 
-- so `common_clone_in_g.compute_at(g, y)` is *illegal* (g never reads it) and
-  `compute_at(h, y)` is *legal* — the `swap`/no-`swap` members of the example.
-- order is irrelevant: the copy of `f` and the `common`-rewrite are both lazy, so
-  `f_clone_in_g` reads the original `common` whichever clone comes first.
-- `common.clone_in(h)` gives the *same* result: `g` and `h` both route through `f`
-  pre-wrap, so the pin is always `f`, and post-wrap `f` feeds only `h`.
-- micro_halide matches Halide on every combination here, though this behavior is
-  not derivable from the "which consumers are redirected" rule alone — the
-  pre-wrap-graph detail above is what makes it predictable. See
-  [src_doc: in/clone_in transitivity](src_doc/in_clone_in_transitivity.md).
+### Surprise: the search is blind to pending rewrites — a clone can feed a consumer you didn't name
 
-### Examples
+Because the search ignores earlier wraps' deferred rewrites, it can pin on a Func
+the named consumer will not actually read in the final graph. With `f.clone_in(g)`
+already recorded (final graph `g → f_clone_in_g`, `h → f`), calling
+`common.clone_in(g)` still walks the *pre-wrap* `g → f → common` and pins on `f`:
 
-* [in_basic.cpp](examples/in_basic.cpp) — `f.in(g)` scheduled `compute_root`
-  (`f` → `f_in_g` → `g`); [in_unscheduled.cpp](examples/in_unscheduled.cpp) — the
-  same wrapper left at its default inlines away (nest is just `f` → `g`).
-* [in_compute_at.cpp](examples/in_compute_at.cpp) — the wrapper computed inside
-  its consumer (`f_in_g.compute_at(g, y)`).
-* [in_multi.cpp](examples/in_multi.cpp) — `f.in({g1, g2})`, one shared wrapper
-  for two named consumers; [in_global.cpp](examples/in_global.cpp) — `f.in()`,
-  one global wrapper redirecting every consumer.
-* [in_two_consumers_fix.cpp](examples/in_two_consumers_fix.cpp) — the positive
-  fix for [neg_compute_at_two_consumers.cpp](examples/neg_compute_at_two_consumers.cpp):
-  a per-consumer wrapper can be computed inside its single consumer.
-* [clone_basic.cpp](examples/clone_basic.cpp) — `f.clone_in(g)` with `f` kept by
-  another consumer; the clone and `f` share the callee `p` (one `produce p`).
-  [neg_clone_shared_callee.cpp](examples/neg_clone_shared_callee.cpp) — the
-  shared-callee gotcha: `p.compute_at(f, x)` is illegal once the clone also reads
-  `p`.
-* [in_transitive.cpp](examples/in_transitive.cpp) vs
-  [clone_transitive.cpp](examples/clone_transitive.cpp) — `h` → `g` → `f`: the
-  `in` wrapper keeps `f`; the clone makes `f` drop out.
-* [tiebreak_visitation_order.cpp](examples/tiebreak_visitation_order.cpp) — two
-  same-prefix producers of one consumer, where the realization-order tie-break's
-  *visitation-order* secondary key (§6) decides — the case that arises once
-  several wrappers/clones share a name prefix.
+```
+walk from g:  g → f (pre-wrap) → common     ⇒ pin f
+lowering:     f's read of common → common_clone_in_g
+              f_clone_in_g is a frozen copy of f's body ⇒ still reads the original common
+```
+
+so the clone requested "for `g`" is read by **`h`** (the only post-wrap reader of
+`f`), while `g` reads the original `common`: `common_clone_in_g.compute_at(h, y)`
+is legal, `compute_at(g, y)` is not
+([indirectly_reached_clone.hpp](examples/indirectly_reached_clone.hpp);
+order-independent, and `common.clone_in(h)` gives the same result since both `g`
+and `h` route through `f`).
+
+### Surprise: a clone shares `f`'s inputs (callees are not copied)
+
+The deep copy duplicates `f` but reads the **same** producers `f` reads. So if
+`f` reads `p`, then after `f.clone_in(g)` the Func `p` is read in two places (`f`
+and the clone) and the only level enclosing both is `root`: `p.compute_at(f, x)`
+becomes **illegal** — Halide lists `p` "used in" both, with only
+`p.compute_root()` legal
+([neg_clone_shared_callee.cpp](examples/neg_clone_shared_callee.cpp)). To give a
+clone private inputs, clone those too. (`Func::clone_in`'s "intermediate Funcs
+along the path" is the *caller* chain between the consumers and `f`, not `f`'s
+callees.)
+
+### Surprise: a clone can delete `f`; a wrapper never does
+
+A redirected caller reads the new Func instead of `f`, so `f` keeps only its
+non-redirected readers. A wrapper reads `f`, so **`f` always survives an `in`**.
+A clone reads `f`'s *inputs*, so if **every** reader of `f` is redirected to the
+clone, `f` becomes unreachable (§1) and **drops out of the nest**. For the chain
+`h → g → f` with no other reader: `f.in(h)` prints `f → f_in_h → g → h` (`f`
+stays); `f.clone_in(h)` prints `f_clone_in_h → g → h` with `f` absent
+([in_transitive.cpp](examples/in_transitive.cpp) vs
+[clone_transitive.cpp](examples/clone_transitive.cpp)).
+
+### Limitation: a Func can be cloned only once
+
+`clone_in` deep-copies `f`'s schedule but not the wrapper entries that schedule
+now holds, so a **second, distinct** clone/wrap on an already-wrapped Func aborts
+(`copied_func.defined()` in `FuncSchedule::deep_copy`). `f.clone_in(a)` then
+`f.clone_in(a)` is fine (returns the first clone); `f.clone_in(a)` then
+`f.clone_in(b)`, or `f.in(a)` then `f.clone_in(b)`, crashes. `in()` is exempt (it
+never deep-copies). Known, still-open upstream bug
+([#6476](https://github.com/halide/Halide/issues/6476),
+[#3661](https://github.com/halide/Halide/issues/3661)), undocumented in the API.
 
 ### Interaction with `specialize`
 
@@ -1521,6 +1498,28 @@ copy of those branches
 **`in` wrapper**, by contrast, is a *fresh* pointwise Func (`wrapper(args) =
 f(args)`) with its own empty schedule — it does **not** inherit `f`'s
 specializations.
+
+### Misc examples
+
+(Examples for the specific surprises above are cited inline in each subsection.)
+
+* [in_basic.cpp](examples/in_basic.cpp) — `f.in(g)` scheduled `compute_root`
+  (`f` → `f_in_g` → `g`); [in_unscheduled.cpp](examples/in_unscheduled.cpp) — the
+  same wrapper left at its default inlines away (nest is just `f` → `g`).
+* [in_compute_at.cpp](examples/in_compute_at.cpp) — the wrapper computed inside
+  its consumer (`f_in_g.compute_at(g, y)`).
+* [in_multi.cpp](examples/in_multi.cpp) — `f.in({g1, g2})`, one shared wrapper
+  for two named consumers; [in_global.cpp](examples/in_global.cpp) — `f.in()`,
+  one global wrapper redirecting every consumer.
+* [in_two_consumers_fix.cpp](examples/in_two_consumers_fix.cpp) — the positive
+  fix for [neg_compute_at_two_consumers.cpp](examples/neg_compute_at_two_consumers.cpp):
+  a per-consumer wrapper can be computed inside its single consumer.
+* [clone_basic.cpp](examples/clone_basic.cpp) — `f.clone_in(g)` with `f` kept by
+  another consumer; the clone and `f` share the callee `p` (one `produce p`).
+* [tiebreak_visitation_order.cpp](examples/tiebreak_visitation_order.cpp) — two
+  same-prefix producers of one consumer, where the realization-order tie-break's
+  *visitation-order* secondary key (§6) decides — the case that arises once
+  several wrappers/clones share a name prefix.
 
 ### Implementation note
 
