@@ -1437,6 +1437,42 @@ realization/`compute_at` rules — and there are two ways to trip it:
   the corrected positive, where `h_intm` reads the clone and the original `f`
   keeps only its non-redirected readers.)
 
+### The walk plans on the pre-wrap call graph (it ignores earlier wrappers)
+
+The transitive walk reads the call graph *as written*, before any `in`/`clone_in`
+rewrite is applied (rewrites are lazy — resolved only when the nest is built, see
+the Implementation note below). So the pin is chosen against edges an *earlier*
+`in`/`clone_in` may already have redirected. Consequence: the clone/wrapper can
+end up feeding a consumer you did not name, and *not* feeding the one you did.
+
+Worked case ([examples/indirectly_reached_clone.hpp](examples/indirectly_reached_clone.hpp)),
+consumer → producer edges:
+
+- `f → common`; `g → f`; `h → f`; `out → g, h`.
+- `f.clone_in(g)` — final graph: `g → f_clone_in_g`, `h → f` (only `h` still reads `f`).
+- then `common.clone_in(g)`, resolved on the *pre-wrap* graph:
+
+```
+walk from g:  g → f (pre-wrap edge)  →  f → common  →  pin on f
+             (never sees that g will actually read f_clone_in_g)
+lowering:    rewrite f's read of common → common_clone_in_g
+             f_clone_in_g is a copy of f's body → still reads the original common
+```
+
+Outcome — inverted from the name: **the clone requested "for `g`" is read by `h`,
+while `g` reads the original `common`.**
+
+- so `common_clone_in_g.compute_at(g, y)` is *illegal* (g never reads it) and
+  `compute_at(h, y)` is *legal* — the `swap`/no-`swap` members of the example.
+- order is irrelevant: the copy of `f` and the `common`-rewrite are both lazy, so
+  `f_clone_in_g` reads the original `common` whichever clone comes first.
+- `common.clone_in(h)` gives the *same* result: `g` and `h` both route through `f`
+  pre-wrap, so the pin is always `f`, and post-wrap `f` feeds only `h`.
+- micro_halide matches Halide on every combination here, though this behavior is
+  not derivable from the "which consumers are redirected" rule alone — the
+  pre-wrap-graph detail above is what makes it predictable. See
+  [src_doc: in/clone_in transitivity](src_doc/in_clone_in_transitivity.md).
+
 ### Examples
 
 * [in_basic.cpp](examples/in_basic.cpp) — `f.in(g)` scheduled `compute_root`

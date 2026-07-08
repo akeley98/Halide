@@ -171,6 +171,36 @@ everything under it use the wrapper/clone."** Partial routing, the named-consume
 not being touched, shadowing, and unnamed-consumer bleed-through are all the same
 fact seen from different angles.
 
+### Blind to earlier wrappers: the walk uses the pre-wrap graph
+
+`collect_direct_callers_of` calls `find_direct_calls` on the in-memory
+definitions, and wrapper rewrites are applied lazily at lowering (not at call
+time). So the walk plans against the call graph *before* any earlier
+`in`/`clone_in` redirection — it cannot see that a consumer will, post-wrap, read
+a different Func. The pin can therefore land on a caller that the named consumer
+no longer routes through, stranding the clone on some *other* consumer.
+
+Worked case ([../examples/indirectly_reached_clone.hpp](../examples/indirectly_reached_clone.hpp);
+lowered-graph reproducer would mirror `probe_clone_partial_routing.cpp`). Edges
+consumer → producer: `f → common`, `g → f`, `h → f`, `out → g, h`.
+
+```
+f.clone_in(g)          => post-wrap: g → f_clone_in_g,  h → f
+common.clone_in(g):
+   walk from g (PRE-wrap): g → f → common  => pin on f
+   lowering: f's read of common → common_clone_in_g
+             f_clone_in_g is a copy of f's body → reads the ORIGINAL common
+   net: h (via f) reads common_clone_in_g;  g (via f_clone_in_g) reads common
+```
+
+- The clone requested for `g` is consumed by `h`, not `g` — inverted.
+  `common_clone_in_g.compute_at(g, y)` is illegal; `compute_at(h, y)` is legal.
+- Order-independent (both the `f`-copy and the `common`-rewrite are lazy).
+- `common.clone_in(h)` is identical (both paths go through `f` pre-wrap → pin
+  always `f` → `f` feeds only `h`).
+- micro_halide matches Halide on all combinations of the example, but this is not
+  derivable from "which consumers are redirected" without the pre-wrap-graph fact.
+
 ### Legality re-check at lowering (why a resolved pin can still fail)
 
 `validate_custom_wrapper` (`src/WrapCalls.cpp` ~53) runs **after** substitution
