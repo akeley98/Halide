@@ -1348,6 +1348,20 @@ inputs you must clone those inputs too. (The `Func::clone_in` doc's phrase about
 between the consumers and `f`, **not** to `f`'s callees; the callees are shared.
 See [src_doc: in/clone_in](src_doc/in_clone_in.md) for the verification.)
 
+**Limitation — a Func can only be cloned once.** `clone_in` cannot be called
+successfully on a Func that already carries a wrapper or clone (from a prior
+`in()` or `clone_in()`), *unless* the call merely returns an already-existing
+clone for the same consumer(s): building a *second, distinct* clone of such a
+Func aborts Halide with an internal error (`copied_func.defined()` in
+`FuncSchedule::deep_copy`), because cloning deep-copies the wrapped Func's
+schedule but not the wrapper entries it now holds. So `f.clone_in(a)` then
+`f.clone_in(a)` is fine (the second returns the first clone), but `f.clone_in(a)`
+then `f.clone_in(b)`, or `f.in(a)` then `f.clone_in(b)`, crashes. `in()` has no
+such limit (it never deep-copies `f`). This is a known, still-open upstream bug
+([halide/Halide#6476](https://github.com/halide/Halide/issues/6476),
+[#3661](https://github.com/halide/Halide/issues/3661)); it is undocumented in the
+`clone_in` API comment. See [src_doc: in/clone_in transitivity](src_doc/in_clone_in_transitivity.md).
+
 ### Identity in the output, and which consumers are redirected
 
 Each wrapper or clone is a **distinct** Func with its own auto-generated name
