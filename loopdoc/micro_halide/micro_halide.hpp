@@ -282,9 +282,9 @@ class VarOrRVar
 struct DimData
 {
     std::string _name;
-    // HUMAN: hint for micro-agent: probably need to propagate is_rvar here.
+    bool _is_rvar;
 
-    DimData(std::string n) : _name(std::move(n))
+    DimData(std::string n, bool is_rvar=false) : _name(std::move(n)), _is_rvar(is_rvar)
     {
     }
 
@@ -293,8 +293,13 @@ struct DimData
         return _name;
     }
 
+    bool is_rvar() const
+    {
+        return _is_rvar;
+    }
+
     template <typename VarList>
-    static std::vector<DimData> from_var_list(const VarList& lst)
+    static std::vector<DimData> from_pure_var_list(const VarList& lst)
     {
         std::vector<DimData> result;
         result.reserve(lst.size());
@@ -349,13 +354,6 @@ struct StageData
     // Funcs read by THIS stage (deduped). Per-stage so the section-10 legal-site
     // rule can tell which specific stage of a reader uses a producer.
     std::vector<std::shared_ptr<FuncContents>> producers;
-
-    // Names of THIS stage's dimensions that are RVar (reduction) loops, as
-    // opposed to free Vars. Needed because a 1-D RDom's RVar name has no "$"
-    // suffix and so is indistinguishable from a Var by name alone -- rfactor
-    // (loopdoc.md section 12) must know which dims are RVars to decide which to
-    // drop in the merge stage. The pure stage has none.
-    std::set<std::string> rvars;
 
     // compute_with (loopdoc.md section 14): if this stage has been fused into a
     // PARENT stage, this records the fuse edge -- the parent Func, the parent's
@@ -552,6 +550,18 @@ inline void reorder(std::vector<DimData> &a, const std::string &owner,
         a[slots[i]] = requested[i];
     }
 }
+
+inline bool is_rvar_name(const std::vector<DimData> &a, const std::string &name)
+{
+    for (const DimData &d : a)
+    {
+        if (name == d.name())
+        {
+            return d.is_rvar();
+        }
+    }
+    throw std::runtime_error("Internal micro_halide_error @ is_rvar_name " + name);
+}
 } // namespace dimlist
 
 // Declaration rank of an RVar within its RDom (innermost first): r.x < r.y <
@@ -676,8 +686,8 @@ class FuncRef
                          });
         for (const std::string &n : ordered_rvars)
         {
-            u.dims.push_back(DimData(n));
-            u.rvars.insert(n); // mark this dim as an RVar (reduction) loop
+            // true marks this dim as an RVar (reduction) loop
+            u.dims.push_back(DimData(n, true));
         }
         for (const Var &v : pure_args)
         {
@@ -714,7 +724,7 @@ class FuncRef
         // args, and its reads are the producers. pure_args mirrors dims for
         // uniformity with update stages (no RVars in a pure definition).
         StageData s0;
-        s0.dims = DimData::from_var_list(vars);
+        s0.dims = DimData::from_pure_var_list(vars);
         s0.producers = collect_producers(rhs);
         func->stages.push_back(std::move(s0));
         func->producers = func->stages[0].producers;
@@ -1363,12 +1373,10 @@ inline Func Stage::rfactor(const std::vector<std::pair<RVar, Var>> &preserved)
         }
         else
         {
-            intm_update.dims.push_back(d);
             // A non-preserved RVar stays a reduction loop here.
-            if (update.rvars.count(d.name()))
-            {
-                intm_update.rvars.insert(d.name());
-            }
+            DimData dim_copy(d);
+            dim_copy._is_rvar = dimlist::is_rvar_name(update.dims, d.name());
+            intm_update.dims.push_back(dim_copy);
         }
     }
     // It reads whatever the original update read.
@@ -1384,19 +1392,16 @@ inline Func Stage::rfactor(const std::vector<std::pair<RVar, Var>> &preserved)
     std::set<std::string> merged_rvars;
     for (const DimData &d : update.dims)
     {
-        bool is_rvar = update.rvars.count(d.name()) != 0;
+        bool is_rvar = dimlist::is_rvar_name(update.dims, d.name());
         if (is_rvar && !preserved_rvars.count(d.name()))
         {
             continue; // non-preserved RVar: lifted into the intermediate
         }
-        merged.push_back(d); // free Var, or preserved RVar (stays an RVar here)
-        if (is_rvar)
-        {
-            merged_rvars.insert(d.name());
-        }
+        DimData dim_copy(d);
+        dim_copy._is_rvar = is_rvar;
+        merged.push_back(dim_copy); // free Var, or preserved RVar (stays an RVar here)
     }
     update.dims = std::move(merged);
-    update.rvars = std::move(merged_rvars);
     // The merge now reads only the intermediate.
     update.producers = {intm.contents};
 
