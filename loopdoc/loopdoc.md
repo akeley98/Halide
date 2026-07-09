@@ -2109,17 +2109,23 @@ The whole loop nest follows from the rules above, assembled into one procedure:
 1. **Force the output to `root`** — the Func you call `print_loop_nest()` on is
    always computed at the outermost level (§5, §6).
 
-2. **Compute the realization order** — topologically sort the pipeline so every
-   producer precedes its consumers, breaking ties by name (§6). All Funcs remain
+2. **Compute the realization order** — order the pipeline so every producer
+   precedes its consumers, by the exact procedure in §6 ("Realization order in
+   detail" — a post-order DFS from the output, not a global sort). All Funcs remain
    in this order so they can pass dependencies along; a **pure inline** Func
    (§4) is never realized and drops out of the steps below (§5), but a non-pure
    inline Func *is* realized (§11) and keeps its slot. An `rfactor` intermediate
    (§12), and any `in`/`clone_in` wrapper or clone (§13), are likewise ordinary
    Funcs in this order — a wrapper/clone sits between the wrapped Func and the
    consumers it was created for — with whatever schedule each was given. A
-   **fused group** (§14) is ordered as a *unit*: the sort treats the group as one
-   node (placed by the realization order of the whole group), and **within** the
-   group the members take consecutive slots in §14's within-group order — a
+   **fused group** (§14) is ordered as a *unit*: the sort collapses the whole
+   group to a **single node whose inputs are the union of every member's external
+   producers** (producers of any member that are not themselves in the group), so
+   the DFS places that one node — hence the whole group — after everything any
+   member reads and before anything that reads any member's output. (No non-member
+   Func can land between two members: only the collapsed node is orderable.)
+   **Within** the group the members then take consecutive slots in §14's
+   within-group order — a
    *second* topological sort, over the group's **fuse edges** (each child before
    the parent it fuses into, §6 tie-break), since the members have no
    producer/consumer dependency to order them. The whole group realizes as one
