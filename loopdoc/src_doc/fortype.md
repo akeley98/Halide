@@ -108,6 +108,16 @@ normalized away.)
 Each sets both `for_type` and `device_api` (default `Default_GPU`). `gpu_tile`
 is sugar over `split` + block/thread typing (outer=block, inner=thread), backing
 `fortype_gpu_blocks_threads.cpp` (explicit) and `fortype_gpu_tile.cpp` (sugar).
+`gpu_single_thread()` adds an extent-1 block+thread pair around the existing
+loops (`fortype_gpu_single_thread.cpp`); those two GPU loops survive because
+their device is non-`None` (the extent-1 gate below), so the printed nest is
+`gpu_block / gpu_thread / for x / leaf`.
+
+`for_type` and `device_api` are independent fields, and no directive resets
+`device_api`: `set_dim_type` (non-GPU directives) leaves any device untouched,
+so re-typing a GPU dim keeps its device — `gpu_threads(x)` then `vectorize(x)`
+prints `vectorized x<Default_GPU>`. Real Halide rejects such a schedule in GPU
+lowering (skipped here); reproducing that error is out of scope.
 
 ### Extent-1 collapse is gated on device (documented, not tested)
 
