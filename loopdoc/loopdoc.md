@@ -1863,7 +1863,7 @@ compute_at rule:
   `Var` in one and an `RVar` in the other. The paired loops must also share the
   same **loop type** and device (§17): fusing a `parallel` dim with a `vectorized`
   one is rejected
-  ([examples/neg_compute_with_formode_mismatch.cpp](examples/neg_compute_with_formode_mismatch.cpp)),
+  ([examples/neg_compute_with_fortype_mismatch.cpp](examples/neg_compute_with_fortype_mismatch.cpp)),
   and the surviving shared loop carries that one type. Loops below `v` and all extents may
   differ — different `split` factors or matching `tile`s fuse fine
   ([examples/compute_with_tile.cpp](examples/compute_with_tile.cpp)), but a
@@ -2272,10 +2272,10 @@ default and prints as plain `for`; `serial(v)` resets a dimension back to it.
 `f.parallel(v)`, `f.vectorize(v)`, `f.unroll(v)`, `f.serial(v)` set the type of
 an existing dimension `v` in place — no new loop. They apply **per stage** like
 the §9 transforms (`f.update(i).parallel(v)` types update stage `s(i+1)` only).
-See [examples/formode_parallel.cpp](examples/formode_parallel.cpp),
-[examples/formode_vectorize.cpp](examples/formode_vectorize.cpp),
-[examples/formode_unroll.cpp](examples/formode_unroll.cpp), and
-[examples/formode_update_stage.cpp](examples/formode_update_stage.cpp) (only the
+See [examples/fortype_parallel.cpp](examples/fortype_parallel.cpp),
+[examples/fortype_vectorize.cpp](examples/fortype_vectorize.cpp),
+[examples/fortype_unroll.cpp](examples/fortype_unroll.cpp), and
+[examples/fortype_update_stage.cpp](examples/fortype_update_stage.cpp) (only the
 update stage's loop is typed).
 
 ### The factor form implies a `split` — and marks a *different* half
@@ -2293,8 +2293,8 @@ This is where §9's "split inner/outer order is invisible" stops being true: the
 two halves now carry different tokens, so the order is observable. `vectorize(x, 8)`
 prints `for … : vectorized …:` while `parallel(x, 8)` prints `parallel …: for …:`
 — structurally distinct nests.
-[examples/formode_vectorize_split.cpp](examples/formode_vectorize_split.cpp) and
-[examples/formode_parallel_split.cpp](examples/formode_parallel_split.cpp) are
+[examples/fortype_vectorize_split.cpp](examples/fortype_vectorize_split.cpp) and
+[examples/fortype_parallel_split.cpp](examples/fortype_parallel_split.cpp) are
 that contrast. (The `TailStrategy` argument only affects the split's boundary
 handling, which needs bounds — out of scope, see below.)
 
@@ -2306,11 +2306,11 @@ that carries a device.
 
 * `gpu_blocks(v[, v2, v3])`, `gpu_threads(...)`, `gpu_lanes(v)` type existing
   dimensions `GPUBlock`/`GPUThread`/`GPULane` — no split.
-  ([examples/formode_gpu_blocks_threads.cpp](examples/formode_gpu_blocks_threads.cpp).)
+  ([examples/fortype_gpu_blocks_threads.cpp](examples/fortype_gpu_blocks_threads.cpp).)
 * `gpu_tile(v, vo, vi, n, ...)` is sugar: it `split`s (or `tile`s, in the
   multi-dim overloads) and then makes the block loop(s) `GPUBlock` and the tile
   loop(s) `GPUThread` — outer `gpu_block`, inner `gpu_thread`.
-  ([examples/formode_gpu_tile.cpp](examples/formode_gpu_tile.cpp).)
+  ([examples/fortype_gpu_tile.cpp](examples/fortype_gpu_tile.cpp).)
 * `gpu(bx, tx, ...)` maps already-existing dims to blocks and threads (no split);
   `gpu_single_thread()` wraps the stage in extent-1 block+thread loops.
 
@@ -2328,16 +2328,16 @@ Because the type is a property of the dimension, the §9 transforms carry it:
 * **`split` / `tile`**: both produced loops **inherit** the source dimension's
   type and device — splitting a `parallel` dim yields two `parallel` loops;
   splitting a `vectorized` dim yields two `vectorized` loops
-  ([examples/formode_split_inherit.cpp](examples/formode_split_inherit.cpp)).
+  ([examples/fortype_split_inherit.cpp](examples/fortype_split_inherit.cpp)).
 * **`fuse(inner, outer, fused)`**: the fused loop takes the **inner** dimension's
   type and device; the outer's type is dropped. Fusing a `parallel` outer with a
   serial inner gives a plain `for`; fusing a `vectorized` inner with a serial
   outer gives a `vectorized` loop
-  ([examples/formode_fuse_inner_wins.cpp](examples/formode_fuse_inner_wins.cpp)).
+  ([examples/fortype_fuse_inner_wins.cpp](examples/fortype_fuse_inner_wins.cpp)).
 * **`reorder`**: the type stays attached to its dimension as it moves. This is
   the promised second way `reorder` becomes observable (§9): reorder a typed loop
   outward and the token moves with it
-  ([examples/formode_reorder_typed.cpp](examples/formode_reorder_typed.cpp)).
+  ([examples/fortype_reorder_typed.cpp](examples/fortype_reorder_typed.cpp)).
 
 ### Extent-1 loops collapse — *unless* they are GPU (documented, not tested)
 
@@ -2363,7 +2363,7 @@ dimensions down to the fuse level must have the **same** type (and device) — t
 per-pair check compares `for_type`/`device_api`, not just name and count.
 Fusing a `parallel` dim with a `vectorized` one is rejected at schedule time
 (*"Invalid compute_with: for types of dim N … do not match"*),
-[examples/neg_compute_with_formode_mismatch.cpp](examples/neg_compute_with_formode_mismatch.cpp);
+[examples/neg_compute_with_fortype_mismatch.cpp](examples/neg_compute_with_fortype_mismatch.cpp);
 when they match, the shared loop carries that one type.
 
 ### Out of scope
