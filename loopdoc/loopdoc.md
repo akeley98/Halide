@@ -2312,7 +2312,9 @@ that carries a device.
   loop(s) `GPUThread` — outer `gpu_block`, inner `gpu_thread`.
   ([examples/fortype_gpu_tile.cpp](examples/fortype_gpu_tile.cpp).)
 * `gpu(bx, tx, ...)` maps already-existing dims to blocks and threads (no split);
-  `gpu_single_thread()` wraps the stage in extent-1 block+thread loops.
+  `gpu_single_thread()` wraps the stage in a single (extent-1) block+thread loop
+  pair around the existing loops
+  ([examples/fortype_gpu_single_thread.cpp](examples/fortype_gpu_single_thread.cpp)).
 
 `print_loop_nest` shows GPU loops **raw** — it does *not* run the GPU-specific
 lowering passes (`CanonicalizeGPUVars`, `FuseGPUThreadLoops`), so what you
@@ -2320,6 +2322,14 @@ schedule is what prints. GPU legality (a block loop must enclose a thread loop,
 warp-size limits on `gpu_lanes`, thread-count bounds) is enforced only during GPU
 lowering, which this path skips — so it is **out of scope** here (and needs
 bounds analysis micro does not do).
+
+The type and the device are **independent** fields on the dimension: a non-GPU
+directive (`serial`/`parallel`/`vectorize`/`unroll`) changes only the type and
+leaves any device in place, and there is no directive that clears a device. So
+re-typing a GPU dim does *not* undo the GPU-ness — `gpu_threads(x)` then
+`vectorize(x)` prints `vectorized x<Default_GPU>`, a typed loop still carrying its
+device. (Real Halide would reject such a schedule during GPU lowering, which this
+path skips; reproducing that error is out of scope.)
 
 ### The type rides the dimension through `split` / `fuse` / `reorder`
 
@@ -2348,13 +2358,18 @@ loop **survives** (a `gpu_block`/`gpu_thread` with a single lane still prints).
 That is why `gpu_single_thread()` shows its extent-1 block and thread loops
 rather than eliding them.
 
-This rule is **documented but not tested** in micro: micro has no bounds analysis,
-so it never *discovers* that a loop has extent 1 — collapse is declared per
-example via `micro_halide_collapses` (§7), which is already the answer key. A
-GPU-survival example would either annotate nothing (exercising no rule) or
-annotate the loop (wrongly collapsing it), so there is no honest test to write.
+This *survival rule* is **documented but not tested** in micro: micro has no
+bounds analysis, so it never *discovers* that a loop has extent 1 — collapse is
+declared per example via `micro_halide_collapses` (§7), which is already the
+answer key. A test of the rule would either annotate nothing (exercising no rule)
+or annotate the loop (wrongly collapsing it), so there is no honest test to write.
 CPU extent-1 collapse remains testable exactly as the `loop_elide_*` examples do
-it — the annotation drives a structural change both sides agree on.
+it — the annotation drives a structural change both sides agree on. Note the
+`gpu_single_thread` example above is *not* a test of this rule: it checks that the
+directive emits a block+thread+serial structure, and both sides show those loops
+for different reasons (real Halide because the device survives; micro because it
+renders every non-collapsed dim), so they coincide without micro reasoning about
+extents at all.
 
 ### `compute_with` requires matching types on the fused dimensions
 

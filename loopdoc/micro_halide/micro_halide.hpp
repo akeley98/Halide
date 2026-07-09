@@ -960,6 +960,7 @@ class FuncStageImpl
     {
         (void)x; (void)bx; (void)tx; (void)factor; throw InternalError("todo");
     }
+    Derived &gpu_single_thread() { throw InternalError("todo"); }
 
     // compute_with (loopdoc.md section 14): record a per-stage fuse edge from
     // THIS (child) stage into `parent` at loop level `var`, sharing the loops
