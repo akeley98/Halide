@@ -422,6 +422,9 @@ is:
 
 > **prefix**, then **first-visitation index**, then **full name** — where the
 > prefix is the name with any `$n` uniqueness suffix and trailing digits removed.
+> The first-visitation index is **unique per Func**, so it always settles a prefix
+> tie; the third field, full name, is only a deterministic total-order fallback
+> and is never actually the deciding field.
 
 This ranks only *one consumer's* producers; it is not a global sort, and not the
 left-to-right order of the defining expression
@@ -451,13 +454,14 @@ Func's whole definition, in this order:
 
 - **Stages first-to-last** — the pure (init) definition, then each update stage in
   order (§3), so a producer read only in a later update is stamped later.
-- **Within a stage, right-hand side before left-hand side** — calls in the *value*
-  expressions (the RHS, what the stage computes) before calls in the *index*
-  expressions (the LHS, where it stores). A Func read **only on the LHS** — a
-  data-dependent scatter index, e.g. `hist(idx(x)) += 1` — is still visited and
-  still gets an index; it is just stamped *after* that stage's RHS reads. (It is a
-  genuine producer: `idx` must be computed before the stage can run, so it needs a
-  slot like any other.)
+- **Within a stage, in the compiler's definition order**: first the RDom
+  **predicate** reads (a reduction's `where`-clause, if any — rarely the deciding
+  read, and not modelled by micro_halide), then the **RHS** value reads (what the
+  stage computes), then the **LHS** index reads (where it stores). A Func read
+  **only on the LHS** — a data-dependent scatter index, e.g. `hist(idx(x)) += 1` —
+  is still visited and still gets an index; it is just stamped *after* that
+  stage's predicate and RHS reads. (It is a genuine producer: `idx` must be
+  computed before the stage can run, so it needs a slot like any other.)
 - **Then the stage's `specialize` branches**, in declaration order, recursively
   (§15) — so a producer read only in a branch is stamped after the base
   definition's reads of the *same* stage.
