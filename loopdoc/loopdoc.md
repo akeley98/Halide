@@ -45,7 +45,12 @@ add the **schedule** that places and reshapes those loops across the pipeline.
     * its ordered list of **stages**: an initial (pure) definition plus zero or
       more **update definitions** (§3). Each stage has its own ordered list of
       **loop dimensions** (the `Var`s/`RVar`s that drive its loops; the first
-      listed is the *innermost* loop — see §3), **and its own left-hand-side
+      listed is the *innermost* loop — see §3). Each dimension also carries a
+      **loop type** (`serial` by default, else `parallel`/`vectorized`/`unrolled`/
+      `gpu_block`/`gpu_thread`/`gpu_lane`) and, for the GPU types, a **device**
+      (`DeviceAPI`) — set per stage by `parallel`/`vectorize`/`unroll`/`serial`
+      and the `gpu_*` directives (§17), and carried along by `split`/`fuse`/
+      `reorder`. It also has **its own left-hand-side
       index expressions and right-hand-side value expressions** — the "algorithm"
       of that stage. The LHS/RHS are *seeded* by the definition you wrote, but
       they are **part of the mutable, per-stage scheduling state**, not a
@@ -87,7 +92,8 @@ add the **schedule** that places and reshapes those loops across the pipeline.
   Pointwise arithmetic, constants, `cast<T>(...)`, and the like are invisible
   in the loop nest — they live *inside* the `f(...) = ...` leaf line.
   Exception: 1-iteration loops are removed; this relies on bounds inference,
-  which depends more deeply on the contents of an Expr. See §7.
+  which depends more deeply on the contents of an Expr. See §7 (and only for
+  non-GPU loops — a 1-iteration GPU loop survives, §17).
 
 * **`RDom` / `RVar`** — a *reduction domain* and its *reduction variables*. An
   `RDom r(min, extent, …)` declares one or more `RVar`s (`r.x`, `r.y`, …, or
@@ -115,7 +121,7 @@ indentation:
 ```
 produce <f>:        # contains a region computing (storing into) Func f
 consume <f>:        # contains a region that reads f's stored values
-for <var>:          # a loop over one dimension
+for <var>:          # a loop over one dimension (changing ForType, §17, replaces the "for")
 <f>(...) = ...      # the leaf: store one point of f (arguments and RHS elided)
 store <f>:          # f's storage scope, shown only when it differs from compute (§8)
 ```
@@ -131,8 +137,8 @@ the leaf.
 Two cosmetic details are *not* part of the model and are normalized away by the
 test harness (`../canonicalize.py`): the exact loop-variable names, and constant
 loop bounds (`for x in [0, 7]`). What *is* significant: the produce/consume
-nesting, the number and nesting of `for` loops, their order, and (in later
-revisions) their type (`parallel`, `vectorized`, …).
+nesting, the number and nesting of `for` loops, their order, and their type
+(`parallel`, `vectorized`, `gpu_block`, …; §17).
 
 ---
 
@@ -1034,8 +1040,8 @@ site-func loops fall inside that producer's block.
 consumer's dimensions so the producer's `compute_at` site moves to the innermost
 loop; contrast [examples/reorder_baseline.cpp](examples/reorder_baseline.cpp),
 the same pipeline without the `reorder`. (`reorder` also becomes directly
-visible once loops carry distinct *types* — `vectorize`/`parallel`/`unroll`, a
-later milestone — which the harness *does* keep.)
+visible once loops carry distinct *types* — `vectorize`/`parallel`/`unroll` (§17)
+— which the harness *does* keep.)
 
 ### `tile`
 
@@ -1854,7 +1860,11 @@ compute_at rule:
   stages at a shared reduction var is fine,
   [examples/compute_with_rvar.cpp](examples/compute_with_rvar.cpp)). In practice
   the kind follows from the name, since two stages rarely give the same name to a
-  `Var` in one and an `RVar` in the other. Loops below `v` and all extents may
+  `Var` in one and an `RVar` in the other. The paired loops must also share the
+  same **loop type** and device (§17): fusing a `parallel` dim with a `vectorized`
+  one is rejected
+  ([examples/neg_compute_with_formode_mismatch.cpp](examples/neg_compute_with_formode_mismatch.cpp)),
+  and the surviving shared loop carries that one type. Loops below `v` and all extents may
   differ — different `split` factors or matching `tile`s fuse fine
   ([examples/compute_with_tile.cpp](examples/compute_with_tile.cpp)), but a
   `reorder` that moves `v`'s depth does not.
@@ -2201,7 +2211,11 @@ The whole loop nest follows from the rules above, assembled into one procedure:
    `produce`, specialization branches first and the fallback last; the steps below
    describe building one such nest.) At each dimension:
      * if the dimension was declared **elided** (§7), skip its `for` line but keep
-       the level as a valid injection site;
+       the level as a valid injection site (a 1-iteration loop elides only when it
+       is not a GPU loop, §17);
+     * otherwise emit the loop line with the dimension's **type token** (§17) —
+       `for` by default, else `parallel`/`vectorized`/`unrolled`/`gpu_*` with any
+       `<device_api>` suffix;
      * **open a `store h:` node** for any item `h` whose store level is this level
        while its compute level is deeper (§8); everything below falls inside it.
        This is *per item*: in a fused group each member whose store level is outer
@@ -2228,6 +2242,138 @@ output's `y` loop; and `clamped` is inlined, so it never appears.
 [examples/many_store_at.cpp](examples/many_store_at.cpp) exercises the storage
 level: a `store_root` Func, a `store_at`-at-an-outer-loop Func (distinct
 `store`/compute levels), and a Func whose store level equals its compute level.
+
+---
+
+## 17. Loop types (`ForType`): `serial`, `parallel`, `vectorized`, `unrolled`, GPU
+
+Everything so far builds the loop *structure* — how many loops, their nesting,
+their order. Independently, each loop carries a **type** that decides how its
+iterations run. The type is a per-dimension property (it rides on the dimension,
+§3), and it is the first token on the loop line (§2):
+
+```
+for <var>:             # ForType::Serial   — the default
+parallel <var>:        # ForType::Parallel
+vectorized <var>:      # ForType::Vectorized
+unrolled <var>:        # ForType::Unrolled
+gpu_block <var><API>:  # ForType::GPUBlock  — plus a <device_api> suffix
+gpu_thread <var><API>: # ForType::GPUThread
+gpu_lane <var><API>:   # ForType::GPULane
+```
+
+The harness normalizes loop-variable names and constant bounds away (§2) but
+**keeps the type token and the `<device_api>` suffix**. So a loop's observable
+identity here is exactly `(type, device, position in the nest)`. Serial is the
+default and prints as plain `for`; `serial(v)` resets a dimension back to it.
+
+### Setting a whole dimension's type
+
+`f.parallel(v)`, `f.vectorize(v)`, `f.unroll(v)`, `f.serial(v)` set the type of
+an existing dimension `v` in place — no new loop. They apply **per stage** like
+the §9 transforms (`f.update(i).parallel(v)` types update stage `s(i+1)` only).
+See [examples/formode_parallel.cpp](examples/formode_parallel.cpp),
+[examples/formode_vectorize.cpp](examples/formode_vectorize.cpp),
+[examples/formode_unroll.cpp](examples/formode_unroll.cpp), and
+[examples/formode_update_stage.cpp](examples/formode_update_stage.cpp) (only the
+update stage's loop is typed).
+
+### The factor form implies a `split` — and marks a *different* half
+
+`f.vectorize(v, n)`, `f.unroll(v, n)`, `f.parallel(v, n)` first `split(v, v, vi, n)`
+(§9) and then type one of the two resulting loops. **Which half differs by
+directive:**
+
+* `vectorize(v, n)` and `unroll(v, n)` type the **inner** loop (the width-`n`
+  one): outer stays `for`, inner becomes `vectorized`/`unrolled`.
+* `parallel(v, n)` types the **outer** loop: outer becomes `parallel`, inner
+  stays `for`.
+
+This is where §9's "split inner/outer order is invisible" stops being true: the
+two halves now carry different tokens, so the order is observable. `vectorize(x, 8)`
+prints `for … : vectorized …:` while `parallel(x, 8)` prints `parallel …: for …:`
+— structurally distinct nests.
+[examples/formode_vectorize_split.cpp](examples/formode_vectorize_split.cpp) and
+[examples/formode_parallel_split.cpp](examples/formode_parallel_split.cpp) are
+that contrast. (The `TailStrategy` argument only affects the split's boundary
+handling, which needs bounds — out of scope, see below.)
+
+### GPU: type token *plus* a device
+
+The GPU directives set both the type and a `DeviceAPI` (default `Default_GPU`),
+which prints as a `<Default_GPU>` suffix on the loop line — the only loop type
+that carries a device.
+
+* `gpu_blocks(v[, v2, v3])`, `gpu_threads(...)`, `gpu_lanes(v)` type existing
+  dimensions `GPUBlock`/`GPUThread`/`GPULane` — no split.
+  ([examples/formode_gpu_blocks_threads.cpp](examples/formode_gpu_blocks_threads.cpp).)
+* `gpu_tile(v, vo, vi, n, ...)` is sugar: it `split`s (or `tile`s, in the
+  multi-dim overloads) and then makes the block loop(s) `GPUBlock` and the tile
+  loop(s) `GPUThread` — outer `gpu_block`, inner `gpu_thread`.
+  ([examples/formode_gpu_tile.cpp](examples/formode_gpu_tile.cpp).)
+* `gpu(bx, tx, ...)` maps already-existing dims to blocks and threads (no split);
+  `gpu_single_thread()` wraps the stage in extent-1 block+thread loops.
+
+`print_loop_nest` shows GPU loops **raw** — it does *not* run the GPU-specific
+lowering passes (`CanonicalizeGPUVars`, `FuseGPUThreadLoops`), so what you
+schedule is what prints. GPU legality (a block loop must enclose a thread loop,
+warp-size limits on `gpu_lanes`, thread-count bounds) is enforced only during GPU
+lowering, which this path skips — so it is **out of scope** here (and needs
+bounds analysis micro does not do).
+
+### The type rides the dimension through `split` / `fuse` / `reorder`
+
+Because the type is a property of the dimension, the §9 transforms carry it:
+
+* **`split` / `tile`**: both produced loops **inherit** the source dimension's
+  type and device — splitting a `parallel` dim yields two `parallel` loops;
+  splitting a `vectorized` dim yields two `vectorized` loops
+  ([examples/formode_split_inherit.cpp](examples/formode_split_inherit.cpp)).
+* **`fuse(inner, outer, fused)`**: the fused loop takes the **inner** dimension's
+  type and device; the outer's type is dropped. Fusing a `parallel` outer with a
+  serial inner gives a plain `for`; fusing a `vectorized` inner with a serial
+  outer gives a `vectorized` loop
+  ([examples/formode_fuse_inner_wins.cpp](examples/formode_fuse_inner_wins.cpp)).
+* **`reorder`**: the type stays attached to its dimension as it moves. This is
+  the promised second way `reorder` becomes observable (§9): reorder a typed loop
+  outward and the token moves with it
+  ([examples/formode_reorder_typed.cpp](examples/formode_reorder_typed.cpp)).
+
+### Extent-1 loops collapse — *unless* they are GPU (documented, not tested)
+
+The §7 loop-elision rule (a loop whose extent is 1 prints no `for` line) is gated
+in Halide's simplifier on `device_api == None`: a 1-iteration **serial /
+parallel / vectorized / unrolled** loop is removed, but a 1-iteration **GPU**
+loop **survives** (a `gpu_block`/`gpu_thread` with a single lane still prints).
+That is why `gpu_single_thread()` shows its extent-1 block and thread loops
+rather than eliding them.
+
+This rule is **documented but not tested** in micro: micro has no bounds analysis,
+so it never *discovers* that a loop has extent 1 — collapse is declared per
+example via `micro_halide_collapses` (§7), which is already the answer key. A
+GPU-survival example would either annotate nothing (exercising no rule) or
+annotate the loop (wrongly collapsing it), so there is no honest test to write.
+CPU extent-1 collapse remains testable exactly as the `loop_elide_*` examples do
+it — the annotation drives a structural change both sides agree on.
+
+### `compute_with` requires matching types on the fused dimensions
+
+When two stages are fused with `compute_with` (§14), each pair of shared
+dimensions down to the fuse level must have the **same** type (and device) — the
+per-pair check compares `for_type`/`device_api`, not just name and count.
+Fusing a `parallel` dim with a `vectorized` one is rejected at schedule time
+(*"Invalid compute_with: for types of dim N … do not match"*),
+[examples/neg_compute_with_formode_mismatch.cpp](examples/neg_compute_with_formode_mismatch.cpp);
+when they match, the shared loop carries that one type.
+
+### Out of scope
+
+* **`TailStrategy`** (on the factor forms and `gpu_tile`) — chooses how the split
+  tail is handled; observable only through bounds, which this path normalizes away.
+* **`atomic()` / `allow_race_conditions()`** and the race-condition legality of a
+  `parallel` `RVar` — a legality concern needing associativity/bounds analysis,
+  not a loop-nest-structure concern; micro does not model it.
+* **GPU legality** and **multiple device APIs** beyond the default (see above).
 
 ---
 
