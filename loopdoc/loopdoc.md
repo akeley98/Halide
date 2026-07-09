@@ -416,8 +416,9 @@ reachable only behind `keep` in `out`'s out-edges.
 #### The one degree of freedom: the order of a node's out-edges
 
 The walk's only choice is the order in which it descends a node's out-edges (its
-independent producers). Each edge is ranked by its **target (producer) Func's
-key**:
+independent producers). Give each edge a **label** — the key of the producer it
+points at — and the walk descends a node's out-edges in **label order**. The label
+is:
 
 > **prefix**, then **first-visitation index**, then **full name** — where the
 > prefix is the name with any `$n` uniqueness suffix and trailing digits removed.
@@ -425,43 +426,75 @@ key**:
 This ranks only *one consumer's* producers; it is not a global sort, and not the
 left-to-right order of the defining expression
 ([examples/tiebreak_realization_order.cpp](examples/tiebreak_realization_order.cpp):
-`a2d` before `b1d` though written `b1d(x) + a2d(x, y)`).
+`a2d` before `b1d` though written `b1d(x) + a2d(x, y)`). For an ordinary edge the
+label is just the target Func's key, so you can think "sort by target"; keeping it
+as an edge *label* rather than a property of the target vertex matters only for
+`compute_with`, below.
 
-The middle field — **first-visitation index — is itself structural, not a name**:
-it is a Func's position in a separate *pre-order* DFS from the output (record each
-Func on first reach, descend its calls in definition order). It, not the name, is
-the field that decides ties when producers share a prefix
+The middle field, **first-visitation index**, is a structural stamp (a separate
+pre-order DFS, detailed next) — *not* a name. It is the field that actually
+settles ties: when two producers share a prefix
 ([examples/tiebreak_visitation_order.cpp](examples/tiebreak_visitation_order.cpp):
-two `b`-prefixed producers ordered by which is *visited* first; and when both
-producers are literally the same name — two `rfactor` intermediates both printed
-`g_intm` — it is the *only* field that decides). For a multi-stage Func the
-pre-order walk takes the stages in order (pure, then each update), and **within a
-stage visits the base definition's calls before any `specialize` branch's** (RHS
-reads, then LHS-index reads, then branches in declaration order, recursive) — so a
-producer read only in a branch (§15) is visited after one read in that stage's
-base definition. This same ranking orders sibling producers filed at any single
+two `b`-prefixed producers go by which is *visited* first, not alphabetically),
+and *especially* when they share a full name — two `rfactor` intermediates both
+printed `g_intm`, so prefix and name tie and first-visitation is the **only**
+deciding field. This same ranking orders sibling producers filed at any single
 `compute_at` level, not just root (§7).
 
-#### Fused groups are one node (forward reference: `compute_with`, §14)
+#### First-visitation index
 
-`compute_with` (§14) ties several Funcs into a **fused group** that realizes as
-one block. For ordering, the group is **one node**: it is appended once, as a
-unit, and its out-edges are the **union of the members' external producers** — so
-the whole group realizes after everything *any* member reads and before *any*
-consumer of *any* member
-([examples/fused_group_consumer_interleave.cpp](examples/fused_group_consumer_interleave.cpp):
-the group precedes a consumer of one member even where that consumer would
-otherwise interleave between members).
+First-visitation order is a *pre-order* depth-first walk from the output(s),
+separate from the realization walk: on reaching a Func, **stamp it with the next
+index the first time it is seen**, then descend into the Funcs it calls, skipping
+any already stamped. "The Funcs it calls, in order" means the calls across the
+Func's whole definition, in this order:
 
-The collapse is **one-directional**, which is the subtle part: an edge *into* the
-group still targets the specific **member** a consumer reads and carries **that
-member's** key — the group node has no key of its own. So where the group sorts
-among a consumer's *other* producers is decided by the member that consumer
-reads, not by the group
-([examples/fused_group_edge_keyed_tiebreak.cpp](examples/fused_group_edge_keyed_tiebreak.cpp):
-flipping which member a consumer reads flips the group's position relative to a
-non-member). §14 covers the group's internal structure; for realization order,
-treat it as this one node — union-of-members out-edges, member-keyed in-edges.
+- **Stages first-to-last** — the pure (init) definition, then each update stage in
+  order (§3), so a producer read only in a later update is stamped later.
+- **Within a stage, right-hand side before left-hand side** — calls in the *value*
+  expressions (the RHS, what the stage computes) before calls in the *index*
+  expressions (the LHS, where it stores). A Func read **only on the LHS** — a
+  data-dependent scatter index, e.g. `hist(idx(x)) += 1` — is still visited and
+  still gets an index; it is just stamped *after* that stage's RHS reads. (It is a
+  genuine producer: `idx` must be computed before the stage can run, so it needs a
+  slot like any other.)
+- **Then the stage's `specialize` branches**, in declaration order, recursively
+  (§15) — so a producer read only in a branch is stamped after the base
+  definition's reads of the *same* stage.
+
+(This mirrors the compiler's own definition walk — predicate, then values, then
+args, then specializations — in `DefinitionContents::accept`.)
+
+#### Fused groups: one contracted vertex (forward reference: `compute_with`, §14)
+
+Because the tie-break lives on the **edge label**, `compute_with` (§14) is a plain
+graph operation: **contract the group's members into a single vertex**. Contraction
+in a *multigraph* keeps every edge — it never merges or relabels them — so the
+group vertex has:
+
+- **out-edges** = the union of the members' out-edges (to the members' producers),
+  labels intact — so the group is realized once, after everything *any* member
+  reads;
+- **in-edges** = the union of the members' in-edges (from consumers), **each still
+  carrying the label of the member it originally pointed at**.
+
+Those preserved in-edge labels are the whole subtlety, and they are ordinary
+multigraph edges — not a "half-collapse": a consumer that read member `a` has an
+edge into the group labelled with `a`'s key, a consumer that read member `z` has
+one labelled with `z`'s key. So the group vertex has **no key of its own** — where
+it sorts among a given consumer's other producers depends on *which member that
+consumer read*, i.e. on the edge label. Two consequences, both ordinary
+labelled-graph facts:
+
+- the group is one vertex, so it precedes every consumer of any member and follows
+  every producer of any member
+  ([examples/fused_group_consumer_interleave.cpp](examples/fused_group_consumer_interleave.cpp));
+- flipping which member a consumer reads relabels that consumer's edge into the
+  group, moving the group relative to the consumer's other producers
+  ([examples/fused_group_edge_keyed_tiebreak.cpp](examples/fused_group_edge_keyed_tiebreak.cpp)).
+
+§14 covers the group's internal structure; for realization order it is exactly
+this one contracted vertex, edges and labels preserved.
 
 ---
 
@@ -1603,12 +1636,13 @@ edges:
   group while `f` has two parents
   ([examples/compute_with_two_parents.cpp](examples/compute_with_two_parents.cpp)).
 
-For **realization order** the whole group is **one node** (§6 "Fused groups are
-one node"): its out-edges are the union of the members' external producers, so it
-is placed once, after everything any member reads and before any consumer of any
-member — but an edge *into* the group is keyed by the specific member a consumer
-reads, so the group has no realization key of its own. The rest of this section
-is the group's *internal* structure — member order and how the stages interleave.
+For **realization order** the whole group is **one contracted vertex** (§6 "Fused
+groups: one contracted vertex"): the members' out-edges (to their producers) and
+in-edges (from consumers) are all preserved with their labels, so the group is
+placed once — after everything any member reads, before any consumer of any
+member — while an in-edge still carries the label of the specific member a
+consumer read (the group has no label of its own). The rest of this section is the
+group's *internal* structure — member order and how the stages interleave.
 
 So "parent" is a property of each edge (the argument stage of that
 `compute_with`), not of the group: in general there is **no single group
@@ -2112,7 +2146,8 @@ The whole loop nest follows from the rules above, assembled into one procedure:
    (§12), and any `in`/`clone_in` wrapper or clone (§13), are likewise ordinary
    Funcs in this order — a wrapper/clone sits between the wrapped Func and the
    consumers it was created for — with whatever schedule each was given. A
-   **fused group** (§14) is a single node here (§6 "Fused groups are one node"):
+   **fused group** (§14) is a single contracted vertex here (§6 "Fused groups: one
+   contracted vertex"):
    the group is placed as a unit, then **within** the group the members take
    consecutive slots in §14's within-group order (a topological sort over the
    group's **fuse edges**, child before the parent it fuses into, §6-ranked among
