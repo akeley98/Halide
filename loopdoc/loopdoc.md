@@ -386,95 +386,82 @@ realizations that come after it.
 
 ### Realization order in detail
 
-Realization order is a topological sort of the *whole* graph — **every** Func in
-the pipeline gets a slot, including the ones that end up inlined (Halide computes
-this order over the full environment; inlining is decided separately, later).
-What makes inlined Funcs vanish from the *printed* nest is not their absence from
-this order but the fact that they are never **realized**: a pure inline Func is
-substituted into its callers rather than given a `produce` block (§5). Keeping
-them in the order is exactly what lets them **transmit dependencies**: if inlined
-`b` reads rooted `a`, then `b` sits between `a` and any consumer of `b` in the
-order, so `a` precedes that consumer. In `box_blur`, `output` inlines
-`blur_y`→`blur_x`→`input_16` (rooted), so `input_16` is realized before
-`output`.
+Picture the pipeline as a directed graph: **nodes are Funcs**, and each node has
+an **out-edge to every Func it reads** (consumer → producer). Every Func is a
+node, including those that end up inlined — inlining is decided later (§5), and
+keeping an inline Func as a node is what lets it **transmit dependencies** (inline
+`b` reading rooted `a` keeps `a` ahead of everything that reads `b`; in
+`box_blur`, `output` inlines `blur_y`→`blur_x`→`input_16`, so `input_16` precedes
+`output`).
 
-#### Tie-break: which sibling producer goes first
+**The order is the post-order of a depth-first walk from the output(s)**, with
+one shared *visited* set: at each node, descend its out-edges, then append the
+node *after* its whole subtree; a node already visited is skipped. Two properties
+fall straight out:
 
-A topological sort leaves freedom whenever a consumer reads two producers that
-do not depend on each other — e.g. `output(...) = g(...) + h(...)` with both `g`
-and `h` at root. Halide breaks the tie **deterministically by name, not by the
-order they appear in the defining expression**:
+- a producer is appended before the consumer that descended into it, so **every
+  producer precedes all its consumers**;
+- a shared producer is reached by several paths but appended **once**, on the
+  first — **realized once, ahead of every reader**
+  ([examples/diamond_root.cpp](examples/diamond_root.cpp)). (Reaching a node that
+  is visited but not yet appended is a back-edge = dependency cycle = error.)
 
-> Sibling producers are ordered by **name prefix** (alphabetically), then by
-> **first-visitation order**, then by full name. The "prefix" is the name with any
-> `$n` uniqueness suffix and any trailing digits removed.
+The name never reorders the graph globally. A producer reachable only through an
+alphabetically-*later* sibling realizes *after* that sibling's whole subtree even
+if its own name sorts earlier:
+[examples/realization_order_dfs.cpp](examples/realization_order_dfs.cpp) yields
+`mid, f, a, out` — **`a` after `f` despite `"a" < "f"`** — because `a` is
+reachable only behind `keep` in `out`'s out-edges.
 
-**The sort key is applied per-consumer, not globally.** Realization order is not
-a single global sort of all Funcs by name; it is the **post-order of a
-depth-first walk from the output(s)**. At each Func, its *direct callees* are
-visited in the sorted order above (prefix, then first-visitation, then full
-name), the walk descends into each, and the Func is appended to the order only
-*after* its whole callee subtree. The name key therefore only orders the
-**direct-callee list of one consumer** — it does **not** globally hoist an
-alphabetically-early Func to the front.
+#### The one degree of freedom: the order of a node's out-edges
 
-This is a walk over the pipeline **DAG**, not a tree, so a shared producer is
-reached by more than one path. The walk carries a single **visited** set and
-appends each Func **exactly once**, on the *first* time it is reached (its
-post-order return); later arrivals find it already visited and are skipped — they
-do not re-emit or reorder it. (An arrival at a Func that is visited but *not yet
-appended* means the walk is on a back-edge, i.e. a dependency cycle, which is an
-error.) Because the first arrival appends the producer before appending the
-consumer it descended from, and every other consumer is appended later still, a
-shared producer always precedes **all** of its consumers — it is realized once,
-ahead of every reader. `f(x) = g1(x) + g2(x)` with both `g1` and `g2` reading a
-shared `h`: the walk descends `f`'s callee list `[g1, g2]`, reaches `h` under
-`g1`, emits `h` there, and the later descent through `g2` finds `h` done — order
-`h, g1, g2, f`. Which consumer's path reaches `h` first (here `g1`, by the sorted
-callee list) only affects `h`'s slot relative to *unrelated* Funcs; it never
-changes that `h` precedes both `g1` and `g2`. The minimal shared-producer case is
-[examples/diamond_root.cpp](examples/diamond_root.cpp) (one producer, two
-readers, realized once).
+The walk's only choice is the order in which it descends a node's out-edges (its
+independent producers). Each edge is ranked by its **target (producer) Func's
+key**:
 
-The consequence catches people out: a producer reachable only through an
-alphabetically-*later* sibling is realized *after* that sibling's entire
-subtree, even if the producer's own name sorts earlier. In
-[examples/realization_order_dfs.cpp](examples/realization_order_dfs.cpp),
-`out(x) = f(x) + keep(x)` with `keep` inline reading a root Func `a`: `out`'s
-callee list sorts to `[f, keep]` (`f` < `keep`), so the walk realizes all of
-`f`'s subtree (`mid`, `f`) before it ever reaches `a` through `keep`. The order
-is `mid, f, a, out` — **`a` is realized after `f` despite `"a" < "f"`**, because
-`a` is gated behind `keep` in `out`'s callee list, not because of any global
-name comparison. (A naïve global name-keyed topological sort would wrongly put
-`a` first.) This is also why, when an inline consumer keeps a producer alive, the
-producer follows the consumer's realized siblings rather than leading them.
+> **prefix**, then **first-visitation index**, then **full name** — where the
+> prefix is the name with any `$n` uniqueness suffix and trailing digits removed.
 
-The "walk the pipeline" that defines first-visitation order is a pre-order
-depth-first traversal from the output(s): record each Func the first time it is
-reached, then descend into the Funcs it calls — in the order those calls first
-appear in its definition — skipping any Func already recorded. A Func's
-visitation index is its position in that record. For a multi-stage Func (§3) the
-stages are walked in order (pure, then each update); and **within a stage the
-base definition's calls are visited before any specialization branch's calls** —
-first the stage's right-hand-side reads, then its left-hand-side index reads,
-then each `specialize` branch's calls in declaration order (nested branches
-recursively). So a producer read only in a specialization branch (§15) is visited
-*after* a producer read in the base definition of that same stage. (This mirrors
-how the compiler walks a definition: values, then args, then specializations.) (This is only a tie-break for
-equal prefixes; the topological producer-before-consumer constraint and the
-prefix comparison dominate it.)
+This ranks only *one consumer's* producers; it is not a global sort, and not the
+left-to-right order of the defining expression
+([examples/tiebreak_realization_order.cpp](examples/tiebreak_realization_order.cpp):
+`a2d` before `b1d` though written `b1d(x) + a2d(x, y)`).
 
+The middle field — **first-visitation index — is itself structural, not a name**:
+it is a Func's position in a separate *pre-order* DFS from the output (record each
+Func on first reach, descend its calls in definition order). It, not the name, is
+the field that decides ties when producers share a prefix
+([examples/tiebreak_visitation_order.cpp](examples/tiebreak_visitation_order.cpp):
+two `b`-prefixed producers ordered by which is *visited* first; and when both
+producers are literally the same name — two `rfactor` intermediates both printed
+`g_intm` — it is the *only* field that decides). For a multi-stage Func the
+pre-order walk takes the stages in order (pure, then each update), and **within a
+stage visits the base definition's calls before any `specialize` branch's** (RHS
+reads, then LHS-index reads, then branches in declaration order, recursive) — so a
+producer read only in a branch (§15) is visited after one read in that stage's
+base definition. This same ranking orders sibling producers filed at any single
+`compute_at` level, not just root (§7).
 
-So in [examples/tiebreak_realization_order.cpp](examples/tiebreak_realization_order.cpp),
-even though the expression is written `b1d(x) + a2d(x, y)`, `a2d` is realized
-first because `"a2d" < "b1d"`. The left-to-right order of `+` is irrelevant. The
-first-visitation tie-break only matters when two prefixes are equal — e.g.
-auto-named or numbered Funcs sharing a prefix; in
-[examples/tiebreak_visitation_order.cpp](examples/tiebreak_visitation_order.cpp)
-two producers share the prefix `b`, and the one *visited* first is realized
-first even though it is alphabetically later. This same ordering decides the
-order of sibling producers filed at any single `compute_at` level, not just root
-(§7).
+#### Fused groups are one node (forward reference: `compute_with`, §14)
+
+`compute_with` (§14) ties several Funcs into a **fused group** that realizes as
+one block. For ordering, the group is **one node**: it is appended once, as a
+unit, and its out-edges are the **union of the members' external producers** — so
+the whole group realizes after everything *any* member reads and before *any*
+consumer of *any* member
+([examples/fused_group_consumer_interleave.cpp](examples/fused_group_consumer_interleave.cpp):
+the group precedes a consumer of one member even where that consumer would
+otherwise interleave between members).
+
+The collapse is **one-directional**, which is the subtle part: an edge *into* the
+group still targets the specific **member** a consumer reads and carries **that
+member's** key — the group node has no key of its own. So where the group sorts
+among a consumer's *other* producers is decided by the member that consumer
+reads, not by the group
+([examples/fused_group_edge_keyed_tiebreak.cpp](examples/fused_group_edge_keyed_tiebreak.cpp):
+flipping which member a consumer reads flips the group's position relative to a
+non-member). §14 covers the group's internal structure; for realization order,
+treat it as this one node — union-of-members out-edges, member-keyed in-edges.
 
 ---
 
@@ -1616,6 +1603,13 @@ edges:
   group while `f` has two parents
   ([examples/compute_with_two_parents.cpp](examples/compute_with_two_parents.cpp)).
 
+For **realization order** the whole group is **one node** (§6 "Fused groups are
+one node"): its out-edges are the union of the members' external producers, so it
+is placed once, after everything any member reads and before any consumer of any
+member — but an edge *into* the group is keyed by the specific member a consumer
+reads, so the group has no realization key of its own. The rest of this section
+is the group's *internal* structure — member order and how the stages interleave.
+
 So "parent" is a property of each edge (the argument stage of that
 `compute_with`), not of the group: in general there is **no single group
 parent**. (When one member is the ancestor of all the rest — the common case:
@@ -2118,18 +2112,11 @@ The whole loop nest follows from the rules above, assembled into one procedure:
    (§12), and any `in`/`clone_in` wrapper or clone (§13), are likewise ordinary
    Funcs in this order — a wrapper/clone sits between the wrapped Func and the
    consumers it was created for — with whatever schedule each was given. A
-   **fused group** (§14) is ordered as a *unit*: the sort collapses the whole
-   group to a **single node whose inputs are the union of every member's external
-   producers** (producers of any member that are not themselves in the group), so
-   the DFS places that one node — hence the whole group — after everything any
-   member reads and before anything that reads any member's output. (No non-member
-   Func can land between two members: only the collapsed node is orderable.)
-   **Within** the group the members then take consecutive slots in §14's
-   within-group order — a
-   *second* topological sort, over the group's **fuse edges** (each child before
-   the parent it fuses into, §6 tie-break), since the members have no
-   producer/consumer dependency to order them. The whole group realizes as one
-   block (§14).
+   **fused group** (§14) is a single node here (§6 "Fused groups are one node"):
+   the group is placed as a unit, then **within** the group the members take
+   consecutive slots in §14's within-group order (a topological sort over the
+   group's **fuse edges**, child before the parent it fuses into, §6-ranked among
+   what the fuse edges leave unordered). The whole group realizes as one block.
 
 3. **Give each realized Func a site.** A *realized* Func is any Func that is
    **not** a pure-inline Func — i.e. it gets its own `produce` block. Each goes
