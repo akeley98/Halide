@@ -1,22 +1,22 @@
 # Human-added Tasks
 
-Are the following reasonable advice?
+Human: I asked a question (honestly a leading question) to the micro agent elicit some criticism of the current "realization order in detail" section.
+Honestly, I think the structure was set when the understanding of realization order we had was inaccurate,
+and more things have been bolted-on to compensate for misunderstandings instead of restructuring).
 
-## New discussion 
+Since you've identified some failing cases related to realization order and fused groups, this is a golden opportunity to improve loopdoc.md and get at least some micro-agent testing of it.
 
-[ ] Proposed advice: avoid the transitivity feature as much as possible in `in`​ and `clone_in`​. Because the search stops immediately at direct consumers, if all parameter functions consume `*this`​ directly, then you don't have to worry about what the transitivity does or does not do.
-    Claude found the feature is needed when you have to modify an anonymous function, like from `sum`.
+The goals are
 
-[ ] Proposed advice: `f.in(g)` and `f.clone_in(g)` work "as expected" if `g` is itself a clone that consumes `f` directly (i.e. this specific case is NOT blind to clones, only the transitive search of other functions that `g` consumes that would have happened if it were not the case that `g` consumes `f` directly)
+* Make the "realization order in detail" more to the point and not a large number of words that don't quickly describe the actions taken to create this realization order.
+* At least consider the commentary in `micro_agent_on_realization_order.md` when re-structuring
+* Make sure `compute_with` and realization order are documented together holistically.
+* Corollary, move information about realization order X fused groups out of the last "putting it all together" section.
+  The conclusion shouldn't be the first time this is brought up, and there's not enough word budget here anyway to explain this complicated interaction.
 
-[ ] Proposed advice: To work around `f.clone_in(...)` being a failure, if `f` is PURE, for most purposes it will suffice to replace `f.clone_in` with `f.in` (a wrapper) and leave `f` as its default schedule (`compute_inline`).
-    You can have multiple `f.in` wrappers each `compute_at` different places in the pipeline.
+When restructuring, please consider being explicit about the "nodes" and "edges" in the graph that is being topological sorted.
+It seems that we can imagine each "edge" is annotated with some stuff (prefix, name, etc.?) that influences how ties are broken in DFS visitation order.
+Will also have to make a forward reference to the not-really-explained-yet `compute_with` feature.
+But you can say that this future feature combines a bunch of functions in a fused group (which will be defined later) into a single node whose outgoing edges are the union of ...
 
-[ ] ... except this workaround won't work so well if you want each `f.in` to use a different clone/wrapper of something `f` consumes (say `f_input`).
-    Because the `f.in` doesn't consume anything other than `f`, and that common `f` can't sometimes use one clone/wrapper of `f_input` and sometimes another.
-
-[ ] ... the `f.clone_in(...)` to `f.in(...)` workaround doesn't work as well if `f` is impure.
-    Because in this case, the original `f` will have the default, highly inefficient default schedule,
-    and if you try to schedule it with `f.compute_at(f.in(...), ...)`, this will break other `f.in` wrappers.
-
-[ ] There seems to be no *universally-applicable* workaround for `f.clone_in` not working twice, except modifying the algorithm.
+Of course the `compute_with` section should briefly call back to describe how fused groups = node for realization order (But much more briefly).
