@@ -413,9 +413,11 @@ struct FuncContents
     // k-th update definition (so Func::update(i) refers to stages[i+1]).
     std::vector<StageData> stages;
 
-    // Funcs read by this Func across ALL stages, deduplicated (used for
-    // realization order). Per-stage reads live in each StageData::producers.
-    std::vector<std::shared_ptr<FuncContents>> producers;
+    // NOTE: the Funcs read by this Func are NOT cached here. Per-stage reads live
+    // in each StageData::producers (the single source of truth); the whole-Func
+    // producer set is computed on demand by all_producers() below. This avoids
+    // the staleness bugs a cached union invites -- e.g. rfactor rewriting a
+    // stage's reads while a cached union kept pointing at the old callee.
 
     // Where this Func is computed in the loop nest (whole-Func: all stages).
     enum class Level
@@ -457,6 +459,47 @@ struct FuncContents
     std::map<FuncContents *, std::shared_ptr<FuncContents>> wrappers;
     std::shared_ptr<FuncContents> global_wrapper;
 };
+
+// ---------------------------------------------------------------------------
+// The whole-Func producer set, computed on demand from the stages (there is no
+// cached copy). It is the union, in first-appearance order and deduplicated, of
+// every stage's direct reads AND every specialization branch's reads (a producer
+// read only inside a `specialize` branch -- e.g. an rfactor intermediate built
+// on a branch -- is still a producer of the Func). Reading from the stages means
+// a later rewrite of a stage (rfactor moving a read into an intermediate) is
+// reflected automatically, with no stale edge to prune.
+// ---------------------------------------------------------------------------
+inline void gather_stage_tree_producers(const StageData &st,
+                                        std::vector<std::shared_ptr<FuncContents>> &out)
+{
+    for (const auto &p : st.producers)
+    {
+        out.push_back(p);
+    }
+    for (const Specialization &sp : st.specializations)
+    {
+        gather_stage_tree_producers(*sp.schedule, out);
+    }
+}
+
+inline std::vector<std::shared_ptr<FuncContents>> all_producers(const FuncContents *f)
+{
+    std::vector<std::shared_ptr<FuncContents>> raw;
+    for (const StageData &st : f->stages)
+    {
+        gather_stage_tree_producers(st, raw);
+    }
+    std::vector<std::shared_ptr<FuncContents>> out;
+    std::set<FuncContents *> seen;
+    for (auto &p : raw)
+    {
+        if (seen.insert(p.get()).second)
+        {
+            out.push_back(p);
+        }
+    }
+    return out;
+}
 
 // ---------------------------------------------------------------------------
 // Loop-transform primitives (loopdoc.md section 6), operating directly on an
@@ -708,20 +751,8 @@ class FuncRef
         {
             u.dims.push_back(DimData(v.name(), false));
         }
-        // Union this stage's producers into the Func's overall producer set
-        // (used for realization order and cross-stage legality).
-        std::set<FuncContents *> have;
-        for (auto &p : func->producers)
-        {
-            have.insert(p.get());
-        }
-        for (auto &p : u.producers)
-        {
-            if (have.insert(p.get()).second)
-            {
-                func->producers.push_back(p);
-            }
-        }
+        // This stage's reads live in u.producers; the whole-Func producer set is
+        // derived from the stages on demand (all_producers), so nothing to cache.
         func->stages.push_back(std::move(u));
     }
 
@@ -742,7 +773,6 @@ class FuncRef
         s0.dims = DimData::from_pure_var_list(vars);
         s0.producers = collect_producers(rhs);
         func->stages.push_back(std::move(s0));
-        func->producers = func->stages[0].producers;
         func->defined = true;
     }
     void operator=(const FuncRef &rhs)
@@ -1176,9 +1206,14 @@ inline void FuncStageImpl<Derived>::specialize_fail(const std::string &)
 // clone_in() is called for a named consumer.
 namespace internal
 {
-// Direct callers of `f` reachable on a path from `consumer` down to `f` (i.e.
-// the Funcs that DIRECTLY read `f` and lie between `consumer` and `f`). If
-// `consumer` itself reads `f`, it is its own redirect target.
+// Resolve the pin target(s) for wrapping `f` for a named `consumer`, per the
+// §13 search: descend `consumer`'s calls in the current graph; the FIRST Func on
+// each branch that directly calls `f` is pinned, and that branch is NOT descended
+// further (loopdoc.md section 13 pin_targets). So a Func that reads `f` directly
+// is pinned even if it ALSO reaches `f` through a callee below it -- that lower
+// caller keeps reading `f` (the "named consumer is usually not the Func modified"
+// / partial-routing surprise: clone_in(out) pins c2, and c1 beneath c2 stays on
+// the original). If `consumer` itself directly calls `f`, it is its own pin.
 inline void collect_direct_callers(FuncContents *node, FuncContents *f,
                                     std::set<FuncContents *> &seen,
                                     std::set<FuncContents *> &out)
@@ -1191,16 +1226,33 @@ inline void collect_direct_callers(FuncContents *node, FuncContents *f,
     {
         return;
     }
-    for (auto &p : node->producers)
+    // Read the CURRENT graph (loopdoc.md section 13 pin_targets) from the
+    // current call graph (all_producers reads it live from the stages, so a read
+    // of f that an eager rewrite such as rfactor (§12) has moved into an
+    // intermediate is correctly no longer seen as a direct call to f).
+    std::vector<FuncContents *> callees;
+    bool calls_f = false;
+    for (auto &p : all_producers(node))
     {
         if (p.get() == f)
         {
-            out.insert(node); // node directly reads f -> it is a redirect target
+            calls_f = true;
         }
         else
         {
-            collect_direct_callers(p.get(), f, seen, out);
+            callees.push_back(p.get());
         }
+    }
+    // Does this Func directly call f? If so, pin it and stop descending this
+    // branch (do not recurse into its other callees looking for deeper pins).
+    if (calls_f)
+    {
+        out.insert(node);
+        return;
+    }
+    for (FuncContents *c : callees)
+    {
+        collect_direct_callers(c, f, seen, out);
     }
 }
 } // namespace internal
@@ -1222,13 +1274,20 @@ inline Func Func::in(const std::vector<Func> &consumers)
     s0.dims = contents->stages[0].dims; // identity wrapper: same dimensions as f
     s0.producers = {contents};          // the wrapper reads f
     w.contents->stages.push_back(std::move(s0));
-    w.contents->producers = {contents};
     w.contents->defined = true;
 
     for (const Func &c : consumers)
     {
         std::set<FuncContents *> seen, callers;
         internal::collect_direct_callers(c.contents.get(), contents.get(), seen, callers);
+        // No Func on any branch below the named consumer calls f: fall back to
+        // pinning the consumer itself (loopdoc.md section 13 pin_targets). Such a
+        // pin typically fails the lowering re-check, since the consumer does not
+        // call f -- run() surfaces that.
+        if (callers.empty())
+        {
+            callers.insert(c.contents.get());
+        }
         for (FuncContents *caller : callers)
         {
             contents->wrappers[caller] = w.contents;
@@ -1251,7 +1310,6 @@ inline Func Func::in()
     s0.dims = contents->stages[0].dims;
     s0.producers = {contents};
     w.contents->stages.push_back(std::move(s0));
-    w.contents->producers = {contents};
     w.contents->defined = true;
     contents->global_wrapper = w.contents;
     return w;
@@ -1288,7 +1346,8 @@ inline Func Func::clone_in(const std::vector<Func> &consumers)
     {
         w.contents->stages.push_back(deep_copy_stage(st));
     }
-    w.contents->producers = contents->producers; // same callees, shared
+    // The deep-copied stages already carry f's callees (shared shared_ptrs), so
+    // the clone's producer set falls out of all_producers(clone); nothing to set.
     w.contents->defined = true;
     // A clone must NOT inherit f's wrapper registry (those wrappers wrap f, not
     // the clone).
@@ -1299,6 +1358,13 @@ inline Func Func::clone_in(const std::vector<Func> &consumers)
     {
         std::set<FuncContents *> seen, callers;
         internal::collect_direct_callers(c.contents.get(), contents.get(), seen, callers);
+        // No path from the named consumer down to f: fall back to pinning the
+        // consumer itself (loopdoc.md section 13 pin_targets), which then fails
+        // the lowering re-check because the consumer does not call f.
+        if (callers.empty())
+        {
+            callers.insert(c.contents.get());
+        }
         for (FuncContents *caller : callers)
         {
             contents->wrappers[caller] = w.contents;
@@ -1399,8 +1465,6 @@ inline Func Stage::rfactor(const std::vector<std::pair<RVar, Var>> &preserved)
 
     intm.contents->stages.push_back(std::move(intm_pure));
     intm.contents->stages.push_back(std::move(intm_update));
-    // The intermediate's overall producers are those of its update stage.
-    intm.contents->producers = intm.contents->stages[1].producers;
 
     // ---- Rewrite the original chosen update stage into the merge ----------
     std::vector<DimData> merged;
@@ -1417,26 +1481,14 @@ inline Func Stage::rfactor(const std::vector<std::pair<RVar, Var>> &preserved)
         merged.push_back(dim_copy); // free Var, or preserved RVar (stays an RVar here)
     }
     update.dims = std::move(merged);
-    // The merge now reads only the intermediate.
+    // The merge now reads only the intermediate. Because the whole-Func producer
+    // set is derived from the stages (all_producers), rewriting this stage's
+    // reads is enough: `intm` becomes a producer of the original Func and the old
+    // callee (now read only by `intm`) drops out automatically -- no stale
+    // func-level edge to prune. When the handle addresses a specialization branch
+    // (§15), the edit lands on that branch's forked stage, and all_producers
+    // still picks `intm` up by walking the branch tree.
     update.producers = {intm.contents};
-
-    // The intermediate becomes a producer of the original Func. Add it to the
-    // Func's overall producer set if not already present.
-    {
-        bool have = false;
-        for (auto &p : orig->producers)
-        {
-            if (p.get() == intm.contents.get())
-            {
-                have = true;
-                break;
-            }
-        }
-        if (!have)
-        {
-            orig->producers.push_back(intm.contents);
-        }
-    }
 
     return intm;
 }
@@ -2087,6 +2139,42 @@ struct LoopNestPrinter
         return p;
     }
 
+    // Collect a Func's producers in DEFINITION (first-appearance) VISITATION
+    // order (loopdoc.md section 6): stages are walked in order (pure, then each
+    // update), and *within a stage the base definition's calls are visited before
+    // any specialization branch's calls* (recursively, branches in declaration
+    // order). This is the tie-break between sibling producers that share a name
+    // prefix -- e.g. two rfactor intermediates both named "<orig>_intm", one read
+    // by the base definition and one only by a specialization branch: the base
+    // one is visited (hence realized) first. Wrapper/clone redirection is applied
+    // so the walk sees the resolved graph.
+    void collect_branch_visit_producers(FuncContents *f, const StageData &st,
+                                         std::vector<FuncContents *> &out)
+    {
+        for (const auto &spec : st.specializations)
+        {
+            for (auto &p : spec.schedule->producers)
+            {
+                out.push_back(redirect(p, f).get());
+            }
+            collect_branch_visit_producers(f, *spec.schedule, out);
+        }
+    }
+
+    std::vector<FuncContents *> visit_producers(FuncContents *f)
+    {
+        std::vector<FuncContents *> out;
+        for (int s = 0; s < (int)f->stages.size(); s++)
+        {
+            for (auto &p : stage_producers(f, s))
+            {
+                out.push_back(p.get());
+            }
+            collect_branch_visit_producers(f, f->stages[s], out);
+        }
+        return out;
+    }
+
     // Pre-order DFS from the output recording first-visitation order. Producers
     // are walked in definition (first-appearance) order, mirroring Halide's
     // populate_environment_helper.
@@ -2098,9 +2186,9 @@ struct LoopNestPrinter
             return;
         }
         visit_order[f] = counter++;
-        for (auto &p : func_producers(f))
+        for (FuncContents *p : visit_producers(f))
         {
-            compute_visit_order(p.get(), seen, counter);
+            compute_visit_order(p, seen, counter);
         }
     }
 
@@ -2267,6 +2355,71 @@ struct LoopNestPrinter
     // reachable from the output only through the consumers redirected to it), so
     // we walk from the output, resolving each node's producers as we discover it
     // and following the resolved edges to find the rest. One pass, stable refs.
+    // Collect every Func reachable from the output through the call graph
+    // as-written AND through any registered wrapper/clone (their pins and the
+    // wrapper Funcs themselves), so the pin re-check below can see wrapped Funcs
+    // even when the wrapper is unused / unreachable in the resolved graph.
+    void collect_all_funcs(FuncContents *f, std::set<FuncContents *> &all)
+    {
+        if (!f || !all.insert(f).second)
+        {
+            return;
+        }
+        for (auto &p : all_producers(f))
+        {
+            collect_all_funcs(p.get(), all);
+        }
+        for (auto &kv : f->wrappers)
+        {
+            collect_all_funcs(kv.first, all);       // the pinned consumer
+            collect_all_funcs(kv.second.get(), all); // the wrapper/clone
+        }
+        if (f->global_wrapper)
+        {
+            collect_all_funcs(f->global_wrapper.get(), all);
+        }
+    }
+
+    // Lowering re-check (loopdoc.md section 13 "pins freeze at call time"): an
+    // in()/clone_in() pin is resolved and frozen when the call is made, but a
+    // LATER eager rewrite (e.g. rfactor, §12) can move the pinned Func's read of
+    // the wrapped Func f into a new intermediate -- or the pin may have fallen
+    // back to a consumer that never called f. Either way the pinned Func no
+    // longer (or never did) directly call f, which Halide rejects:
+    //   Cannot wrap "f" in "g" because "g" does not call "f"
+    // We reproduce that rejection here. "Calls f" means some STAGE of the pinned
+    // Func directly reads f in the CURRENT graph (checked before wrapper
+    // resolution, so we see the raw, post-rewrite producer lists).
+    void validate_wrapper_pins(FuncContents *output)
+    {
+        std::set<FuncContents *> all;
+        collect_all_funcs(output, all);
+        for (FuncContents *f : all)
+        {
+            for (auto &kv : f->wrappers)
+            {
+                FuncContents *caller = kv.first;
+                bool calls_f = false;
+                for (auto &p : all_producers(caller))
+                {
+                    if (p.get() == f)
+                    {
+                        calls_f = true;
+                        break;
+                    }
+                }
+                if (!calls_f)
+                {
+                    throw CompileError(
+                        "micro_halide: Cannot wrap \"" + f->name + "\" in \"" +
+                        caller->name + "\" because \"" + caller->name +
+                        "\" does not call \"" + f->name +
+                        "\" (loopdoc.md section 13)");
+                }
+            }
+        }
+    }
+
     void resolve_wrappers(FuncContents *output)
     {
         std::vector<FuncContents *> stack{output};
@@ -2280,7 +2433,7 @@ struct LoopNestPrinter
                 continue;
             }
             std::vector<std::shared_ptr<FuncContents>> rp;
-            for (auto &p : c->producers)
+            for (auto &p : all_producers(c))
             {
                 const std::shared_ptr<FuncContents> &r = redirect(p, c);
                 rp.push_back(r);
@@ -2304,7 +2457,13 @@ struct LoopNestPrinter
     const std::vector<std::shared_ptr<FuncContents>> &func_producers(FuncContents *f)
     {
         auto it = resolved_producers_.find(f);
-        return it != resolved_producers_.end() ? it->second : f->producers;
+        if (it != resolved_producers_.end())
+        {
+            return it->second;
+        }
+        // Not visited by resolve_wrappers (unreachable in the resolved graph): no
+        // redirection applies, so the raw producer set (from the stages) stands.
+        return resolved_producers_[f] = all_producers(f);
     }
 
     const std::vector<std::shared_ptr<FuncContents>> &stage_producers(FuncContents *f, int s)
@@ -2461,13 +2620,37 @@ struct LoopNestPrinter
         bool result = false;
         for (FuncContents *g : order)
         {
-            if (g == f || g == site_func || !is_realized(g) ||
-                g->level != FuncContents::Level::At || g->at_func.get() != site_func)
+            if (g == f || g == site_func || !is_realized(g))
+            {
+                continue;
+            }
+            // Where is g realized inside site_func's stage hs? Two ways it can be
+            // in this body: (a) g is compute_at (site_func, g->at_var); or (b) g
+            // is a non-pure inline Func, hence REALIZED at site_func's innermost
+            // use of it (loopdoc.md sections 7 + 11) -- but only when site_func's
+            // stage hs actually reads g directly (only then is g materialized in
+            // this stage's body, at its innermost loop).
+            std::string g_var;
+            if (g->level == FuncContents::Level::At && g->at_func.get() == site_func)
+            {
+                g_var = g->at_var;
+            }
+            else if (g->level == FuncContents::Level::Inline &&
+                     stage_reads(site_func, hs, g))
+            {
+                const std::vector<DimData> &gd = stage_dims(site_func, hs);
+                if (gd.empty())
+                {
+                    continue;
+                }
+                g_var = gd[0].name(); // innermost use
+            }
+            else
             {
                 continue;
             }
             // g must be realized in THIS stage's body, at var or an inner loop.
-            int ig = stage_dim_index(site_func, hs, g->at_var);
+            int ig = stage_dim_index(site_func, hs, g_var);
             if (ig < 0 || ig > ivar)
             {
                 continue;
@@ -2481,7 +2664,7 @@ struct LoopNestPrinter
             // this check the rfactor intermediate's pure stage (which reads
             // neither g nor f) would wrongly pull f in just because it shares the
             // var loop with the reducing stage (rfactor_indirect_at_intm).
-            if (!body_uses(site_func, hs, g->at_var, g, order))
+            if (!body_uses(site_func, hs, g_var, g, order))
             {
                 continue;
             }
@@ -2613,6 +2796,14 @@ struct LoopNestPrinter
     bool site_encloses_loop(FuncContents *g, int gs, const std::string &gv,
                             FuncContents *h, int hs, const std::string &hv)
     {
+        // A non-pure inline func is realized at each consumer's innermost use
+        // (loopdoc.md sections 7 + 11); its own loop (h, hs, hv) nests inside
+        // those sites, so enclosure reduces to enclosing every realization site.
+        if (h != g && is_realized(h) && h->level == FuncContents::Level::Inline &&
+            !(hs < num_stages(h) && h->stages[hs].has_fuse))
+        {
+            return realized_inline_enclosed(g, gs, gv, h);
+        }
         if (g == h)
         {
             // (g, gv) is a family of loops, one per stage of g (loopdoc.md
@@ -2655,11 +2846,71 @@ struct LoopNestPrinter
         return false; // h at root and not g: not inside g's loop
     }
 
+    // The realization order (set in print() before validation/filing). Used by
+    // the realized-inline enclosure below, which must enumerate a Func's readers.
+    const std::vector<FuncContents *> *funcs_ = nullptr;
+
+    // A non-pure Func left at the inline level is REALIZED at the innermost use
+    // in EACH of its consumers (loopdoc.md sections 7 + 11) -- its body, and any
+    // read of f inside it, runs at those sites, NOT at h's own (inline) compute
+    // level. So site (g, gs, gv) encloses h's use of f iff it encloses h's
+    // realization inside every Func that reads h. This is the §7 rule "a read of
+    // f is any read in the realized loop nest, reached through the site func's
+    // callees": f reaches the nest through the realized intermediate h, so the
+    // site must enclose wherever h itself lands.
+    bool realized_inline_enclosed(FuncContents *g, int gs, const std::string &gv,
+                                  FuncContents *h)
+    {
+        if (!funcs_)
+        {
+            return false;
+        }
+        bool found = false;
+        for (FuncContents *c : *funcs_)
+        {
+            if (c == h || !is_realized(c))
+            {
+                continue;
+            }
+            for (int cs = 0; cs < num_stages(c); cs++)
+            {
+                if (!stage_reads(c, cs, h))
+                {
+                    continue;
+                }
+                found = true;
+                const std::vector<DimData> &d = stage_dims(c, cs);
+                // h is materialized just inside c's innermost loop (dim0) of
+                // stage cs (loopdoc.md section 11); a loop-less stage realizes h
+                // at c's leaf, so the whole stage-cs body must be enclosed.
+                if (d.empty())
+                {
+                    if (!site_encloses_use(g, gs, gv, c, cs))
+                    {
+                        return false;
+                    }
+                }
+                else if (!site_encloses_loop(g, gs, gv, c, cs, d[0].name()))
+                {
+                    return false;
+                }
+            }
+        }
+        return found;
+    }
+
     // Does site (g, gs, gv) enclose the body of stage hs of reader h (i.e. the
     // point where h reads f)?
     bool site_encloses_use(FuncContents *g, int gs, const std::string &gv,
                            FuncContents *h, int hs)
     {
+        // A non-pure inline reader is realized at each of its consumers' uses,
+        // not at its own (inline) level (loopdoc.md sections 7 + 11).
+        if (h != g && is_realized(h) && h->level == FuncContents::Level::Inline &&
+            !(hs < num_stages(h) && h->stages[hs].has_fuse))
+        {
+            return realized_inline_enclosed(g, gs, gv, h);
+        }
         if (g == h)
         {
             // The use is in g's own stage hs. The level (g, gv) is a FAMILY of
@@ -3167,6 +3418,11 @@ struct LoopNestPrinter
         output->level = FuncContents::Level::Root;
         output->at_func.reset();
 
+        // Reject stale / no-path in()/clone_in() pins before resolving them
+        // (loopdoc.md section 13 "pins freeze at call time"): a pinned Func that
+        // no longer calls the wrapped Func is a lowering-time error in Halide.
+        validate_wrapper_pins(output);
+
         // Resolve in()/clone_in() wrapper redirection ONCE, up front, before any
         // producer is read (loopdoc.md section 13 "Implementation note"). All
         // later producer reads go through func_producers/stage_producers, which
@@ -3181,6 +3437,7 @@ struct LoopNestPrinter
         std::set<FuncContents *> visited;
         std::vector<FuncContents *> order;
         realization_order(output, visited, order);
+        funcs_ = &order; // reader enumeration for realized-inline enclosure
 
         // Build fused groups (loopdoc.md section 14) before validation/emission:
         // a group is realized as one item.

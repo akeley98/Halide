@@ -464,12 +464,6 @@ how the compiler walks a definition: values, then args, then specializations.) (
 equal prefixes; the topological producer-before-consumer constraint and the
 prefix comparison dominate it.)
 
-<!-- MICRO GAP — failing: specialize_then_rfactor_each, specialize_then_rfactor_each_tiled,
-     specialize_tree_rfactor_mix. Two rfactor intermediates share the prefix "g_intm",
-     so this base-before-specialization visitation rule is the whole tie-break; micro
-     orders the two the other way. Fix realization order to visit a stage's
-     base-definition producers before its specialization-branch producers. -->
-
 
 So in [examples/tiebreak_realization_order.cpp](examples/tiebreak_realization_order.cpp),
 even though the expression is written `b1d(x) + a2d(x, y)`, `a2d` is realized
@@ -776,11 +770,6 @@ inside the chosen `v` loop
 `p.compute_at(out, y)` is legal in all three of the pure-inline, update-inline,
 and `compute_root`-intermediate cases, because in each the intermediate reading
 `p` is realized — or inlined — inside `out`'s `y` loop).
-
-<!-- MICRO GAP — failing: compute_at_inline_dependence_update_inline. The update-def
-     intermediate `intm` reads `p`; micro rejects `p.compute_at(out,y)` because it does
-     not realize `intm` at its innermost use (§11) and/or does not count `p`'s read
-     through the realized `intm` when checking the level. Fix per this paragraph + §11. -->
 
 The ways `(g, v)` falls outside the surviving set:
 
@@ -1109,11 +1098,6 @@ produce g:
         g(...) = ...
 ```
 
-<!-- MICRO GAP — also relevant to failing compute_at_inline_dependence_update_inline:
-     an update-def Func left unscheduled must be REALIZED at its consumer's innermost
-     use (this nest), never inlined-away nor rooted. Micro mishandling this placement is
-     what makes the §7 compute_at check above misfire. -->
-
 ### When it equals a `compute_at`, and when it does not
 
 If `f` is read at a **single** loop depth, this default is *exactly*
@@ -1407,12 +1391,6 @@ Two properties of this walk drive the surprises below:
 ([src_doc: in/clone_in transitivity](src_doc/in_clone_in_transitivity.md) traces
 the search and its lowering-time application in source.)
 
-<!-- MICRO GAP — failing: weird_dag_clone_at_out, _out_c3, _c2, _c2_c3. These need
-     this recursive search: the clone must land on the FIRST direct caller of the
-     wrapped Func under the named consumer (so clone_in(out) pins on c2, and the
-     clone/original split follows the surprises below). Micro does not resolve the
-     pin transitively / does not put the clone on the right shared intermediate. -->
-
 ### Surprise: the named consumer is usually not the Func modified
 
 The search pins the *first direct caller* of `f`, so naming `g` redirects
@@ -1432,11 +1410,6 @@ partial-routing table is in the [src_doc](src_doc/in_clone_in_transitivity.md).)
 The lowering re-check rejects a pin whose Func no longer calls `f`:
 
 > `Cannot wrap "f" in "g" because "g" does not call "f"`
-
-<!-- MICRO GAP — failing (negative): clone_in_unused (no-path pin), clone_spec_a0_b2,
-     _a1_b2, _a2_b2 (stale pin after rfactor). Real Halide errors; micro accepts.
-     Micro must run this lowering re-check and reject when the pinned Func does not
-     (still) call the wrapped Func. -->
 
 Two ways to hit it:
 
