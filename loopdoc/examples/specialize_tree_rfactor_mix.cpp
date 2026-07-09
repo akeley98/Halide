@@ -15,14 +15,20 @@ using namespace Halide;
 //   b1.specialize(c1b).split(x,...);      // nested child B1b of B1 (aliases intm1)
 //   Func intm_base = g.update(0).rfactor(r.y, ub);  // rfactor the BASE (after B1 forked)
 //   intm_base.compute_root().tile(...);   // tile the shared intermediate
-//   g.update(0).specialize(c2);           // B2 forks AFTER the base rfactor -> aliases intm_base
+//   g.update(0).specialize(c2).split(x,...); // B2 forks AFTER the base rfactor -> aliases intm_base
 // So the tree is:
 //   if c1: { if c1b: B1b(split, reads intm1)  else: B1(reads intm1) }
-//   else if c2: B2(reads intm_base)
+//   else if c2: B2(split x, reads intm_base)
 //   else:       fallback(reads intm_base)
 // intm1 is shared by B1/B1b; intm_base (tiled) is shared by B2/fallback. This
 // exercises rfactor-BEFORE a fork (B2 aliases the post-rfactor base) and
 // rfactor-ON a branch (B1's own intm1) in one specialize tree.
+//
+// B2 is given its OWN split so it is structurally distinct from the fallback.
+// Without it, B2 and fallback are identical (both naive, both reading intm_base)
+// and real Halide MERGES them via the §15 identical-branch simplify -- a feature
+// micro_halide does not implement (out of scope). Distinguishing B2 keeps this
+// example focused on the §6 realization/visitation order it is meant to test.
 //
 // Verified against real Halide:
 //   produce g_intm:                                   # intm_base, tiled (4-loop init)
@@ -37,16 +43,15 @@ using namespace Halide;
 //         for x: g(...)                               # g init
 //         for x.bxo: for x.bxi: for r: g(...)         # B1b (split x)
 //         for x: for r: g(...)                        # B1
-//         for x: for r: g(...)                        # B2
+//         for x.cxo: for x.cxi: for r: g(...)         # B2 (split x)
 //         for x: for r: g(...)                        # fallback
 //
-// EXPECTED RED under micro (same root cause as specialize_then_rfactor_each):
-// the two intermediates both print as `g_intm`, so the observable is their
-// realization ORDER, and micro visits the specialization-branch producer before
-// the base producer -- the §6 base-before-specialization visitation gap.
+// The observable that this example targets is the two intermediates' realization
+// ORDER (both print as `g_intm`): micro must visit the base-definition producer
+// before the specialization-branch producer (§6 base-before-specialization).
 int main() {
     Var x("x"), u1("u1"), ub("ub"), bxo("bxo"), bxi("bxi"),
-        tx("tx"), tu("txu"), txi("txi"), tui("tui");
+        tx("tx"), tu("txu"), txi("txi"), tui("tui"), cxo("cxo"), cxi("cxi");
     ImageParam in(type_of<uint8_t>(), 2, "in");
     Func g("g");
     RDom r(0, 10, 0, 10, "r");
@@ -59,6 +64,6 @@ int main() {
     Func intm_base = g.update(0).rfactor(r.y, ub);
     intm_base.compute_root().tile(x, ub, tx, tu, txi, tui, 4, 4);
     intm1.compute_root();
-    g.update(0).specialize(c2);
+    g.update(0).specialize(c2).split(x, cxo, cxi, 4);
     g.print_loop_nest();
 }
