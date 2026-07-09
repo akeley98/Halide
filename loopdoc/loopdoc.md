@@ -500,15 +500,6 @@ labelled-graph facts:
 §14 covers the group's internal structure; for realization order it is exactly
 this one contracted vertex, edges and labels preserved.
 
-<!-- MICRO GAP — failing: fused_group_consumer_interleave, fused_group_edge_keyed_tiebreak.
-     micro places a fused group at its LAST member's slot in the flat per-Func
-     realization order. That is neither the union-of-members out-edges (so it can
-     fall AFTER a consumer of a member -> fused_group_consumer_interleave) nor the
-     member-keyed in-edge (so it ignores which member a consumer read ->
-     fused_group_edge_keyed_tiebreak). Fix: realize the group as ONE contracted
-     vertex per this subsection -- its out-edges the union of members' producers,
-     each in-edge keyed by the member the consumer actually reads. -->
-
 ---
 
 ## 7. `compute_at`: realize inside a consumer's loop
