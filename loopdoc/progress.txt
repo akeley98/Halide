@@ -300,16 +300,18 @@ Marking convention:
     which we will have to decide together should be in-scope for micro_halide or not.
 
     Need to think about interaction with compute_with; what happens if
-    the two fused stages don't have the same ForMode?
+    the two fused stages don't have the same ForType?
 
-    Think about how ForMode interacts with loop rewrites tile/fuse/reorder.
+    Think about how ForType interacts with loop rewrites tile/fuse/reorder.
     If there's a simple rule, document and test it.
-    If it's stupid complicated, let's just forget about it and declare ForMode changes followed by loop rewrites to be out-of-scope.
+    If it's stupid complicated, let's just forget about it and declare ForType changes followed by loop rewrites to be out-of-scope.
 
     Need examples with multiple update stages.
 
-    Need mega-example that combines compute_with, multiple update stages, ForMode, and transitivity (indirect producer/consumer dependencies).
+    Need mega-example that combines compute_with, multiple update stages, ForType, and transitivity (indirect producer/consumer dependencies).
     But save this for the adversarial stage.
+
+    Human error: "ForMode" was used instead of "ForType", which Claude initially copied, but then fixed.
 
 
 # DISCOVERED DOC GAPS
