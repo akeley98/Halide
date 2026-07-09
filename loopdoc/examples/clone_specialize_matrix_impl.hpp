@@ -25,8 +25,8 @@ using namespace Halide;
 //   1 — g and h producers of f; the clone pc is compute_at(f, y)     (positive)
 //   2 — clone_in({g,h}) then rfactor(h): the rfactor moves h's read of the clone
 //       into h_intm, so h no longer calls the wrapped Func           (NEGATIVE)
-//   3 — corrected: rfactor(h) FIRST, then clone_in({g, h_intm}) so the rfactor
-//       output directly consumes the clone                           (positive)
+//   3 — corrected: rfactor(h) FIRST, so clone_in({g, h}) transitively
+//       affects h_intm                                               (positive)
 //   4 — pc compute_at(g, x) while h also reads pc: invalid location  (NEGATIVE)
 [[nodiscard]] int main_impl(int choiceA, int choiceB) {
     Var x("x"), y("y"), xo("xo"), xi("xi"), u("u");
@@ -44,12 +44,17 @@ using namespace Halide;
     h(x, y) = 0;
     h(x, y) += p(x + r.x, y + r.y);               // impure consumer: stencil reduction
 
-    // choiceB==3: rfactor h BEFORE the clone, and clone for {g, h_intm}.
-    Func hintm;
+    // choiceB==3: rfactor h BEFORE the clone, and clone for {g, h} which affects h_intm.
+    Func h_intm;
     const bool rfactor_first = (choiceB == 3);
-    if (rfactor_first) hintm = h.update(0).rfactor(r.y, u);
+    if (rfactor_first) h_intm = h.update(0).rfactor(r.y, u);
 
-    Func pc = rfactor_first ? p.clone_in({g, hintm}) : p.clone_in({g, h});
+    // This used to be Func pc = rfactor_first ? p.clone_in({g, h_intm}) : p.clone_in({g, h});
+    // but it turns out all that mattered for distinguishing B2 (negative) and B3 (positive)
+    // is just the relative order of the rfactor and clone_in.
+    // h_intm need not be explicitly named; it will be correctly using the clone as long as the
+    // clone_in happens after the rfactor, so clone_in's transitive search picks up h_intm.
+    Func pc = p.clone_in({g, h});
 
     if (choiceA == 1) p.specialize(cond).split(x, xo, xi, 4);   // specialize the ORIGINAL after clone
     if (choiceA == 2) pc.specialize(cond).split(x, xo, xi, 4);  // specialize the CLONE after clone
@@ -81,13 +86,13 @@ using namespace Halide;
     } else if (choiceB == 3) {                    // corrected: rfactor output consumes the clone
         g.compute_at(f, y);
         h.compute_at(f, y);
-        hintm.compute_at(f, y);
+        h_intm.compute_at(f, y);
         pc.compute_at(f, y);
         micro_halide_collapses(g, {y});
         micro_halide_collapses(h, {y});
         micro_halide_collapses(h.update(0), {y});
-        micro_halide_collapses(hintm, {y});
-        micro_halide_collapses(hintm.update(0), {y});
+        micro_halide_collapses(h_intm, {y});
+        micro_halide_collapses(h_intm.update(0), {y});
     } else {                                      // NEGATIVE: invalid pc location
         g.compute_at(f, y);
         h.compute_at(f, y);
