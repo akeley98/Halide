@@ -2201,11 +2201,66 @@ struct LoopNestPrinter
         return {name_prefix(f->name), visit_order[f], f->name};
     }
 
+    // Groups whose contracted vertex has already been appended (see below).
+    std::set<FuseGroup *> realized_groups_;
+
     // Post-order DFS over producers (producers before consumers), visiting a
     // Func's producers in realization-order tie-break order.
+    //
+    // A fused group (§14) is a single CONTRACTED VERTEX in this graph (loopdoc.md
+    // §6 "Fused groups: one contracted vertex"): reaching ANY member processes the
+    // WHOLE group as one node, whose out-edges are the UNION of the members'
+    // producers -- so the group is appended once, after everything any member
+    // reads and before every consumer of any member. The edge that led here is
+    // still sorted by the *member's* key (the caller sorts its producers by
+    // sort_key of the actual producer, which for a member is that member's key --
+    // the "edge label"), so which member a consumer reads decides where the group
+    // sorts among that consumer's other producers.
     void realization_order(FuncContents *f, std::set<FuncContents *> &visited,
                            std::vector<FuncContents *> &order)
     {
+        std::shared_ptr<FuseGroup> grp = group_of(f);
+        if (grp)
+        {
+            if (!realized_groups_.insert(grp.get()).second)
+            {
+                return; // the group's contracted vertex is already placed
+            }
+            for (FuncContents *m : grp->members)
+            {
+                visited.insert(m);
+            }
+            // Out-edges of the contracted vertex: the union of every member's
+            // producers, minus intra-group edges (a producer that is itself a
+            // member does not leave the vertex). Sorted by the producer's key.
+            std::vector<FuncContents *> prods;
+            std::set<FuncContents *> pseen;
+            for (FuncContents *m : grp->members)
+            {
+                for (auto &p : func_producers(m))
+                {
+                    if (group_of(p.get()) != grp && pseen.insert(p.get()).second)
+                    {
+                        prods.push_back(p.get());
+                    }
+                }
+            }
+            std::sort(prods.begin(), prods.end(),
+                      [this](FuncContents *a, FuncContents *b) { return sort_key(a) < sort_key(b); });
+            for (FuncContents *p : prods)
+            {
+                realization_order(p, visited, order);
+            }
+            // Append the members as one contiguous block (their within-group order
+            // is decided separately by build_groups; the block's POSITION is the
+            // contracted vertex's slot).
+            for (FuncContents *m : grp->realize_order)
+            {
+                order.push_back(m);
+            }
+            return;
+        }
+
         if (!visited.insert(f).second)
         {
             return;
@@ -3429,19 +3484,24 @@ struct LoopNestPrinter
         // return from the backing store this fills.
         resolve_wrappers(output);
 
-        // Establish first-visitation order (tie-breaker), then realization order.
+        // Establish first-visitation order (the tie-breaker key).
         std::set<FuncContents *> visit_seen;
         std::uint64_t counter = 0;
         compute_visit_order(output, visit_seen, counter);
 
+        // Build fused groups (loopdoc.md section 14) BEFORE the realization walk:
+        // a group is a single contracted vertex in the realization graph
+        // (loopdoc.md section 6), so realization_order needs group membership. Any
+        // ordering of the reachable set works -- build_groups re-sorts members
+        // itself.
+        std::vector<FuncContents *> reachable(visit_seen.begin(), visit_seen.end());
+        build_groups(reachable);
+
+        // Realization order: post-order DFS with fused groups contracted.
         std::set<FuncContents *> visited;
         std::vector<FuncContents *> order;
         realization_order(output, visited, order);
         funcs_ = &order; // reader enumeration for realized-inline enclosure
-
-        // Build fused groups (loopdoc.md section 14) before validation/emission:
-        // a group is realized as one item.
-        build_groups(order);
 
         // Reject illegal schedules before emitting (mirrors Halide aborting).
         validate_groups(order);
