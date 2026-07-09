@@ -1375,8 +1375,9 @@ pin_targets(f, consumer):
         if this Func directly calls f  ->  pin it; stop descending this branch
         else                            ->  recurse into each direct callee
     if no Func on any branch calls f    ->  pin `consumer` itself
-                                            (this pin will fail the lowering re-check)
-global f.in()  ->  pin every consumer of f, except f's own wrappers
+                                            (typically fails the lowering re-check)
+global f.in()  ->  every direct caller of f, minus f's own wrappers and any
+                   consumer that already has its own custom wrapper
 ```
 
 Two properties of this walk drive the surprises below:
