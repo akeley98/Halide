@@ -286,10 +286,49 @@ class VarOrRVar
 };
 
 
+// A loop's TYPE, printed as the first token on its `for`-line (loopdoc.md
+// section 17). Serial is the default and prints as plain `for`. The GPU types
+// additionally carry a device (see DimData::device). The token spellings below
+// match what print_loop_nest emits (and what canonicalize.py keeps).
+enum class ForType
+{
+    Serial,      // "for"
+    Parallel,    // "parallel"
+    Vectorized,  // "vectorized"
+    Unrolled,    // "unrolled"
+    GPUBlock,    // "gpu_block"
+    GPUThread,   // "gpu_thread"
+    GPULane,     // "gpu_lane"
+};
+
+// The loop-type token as it appears on the loop line (loopdoc.md section 17).
+inline const char *for_type_token(ForType t)
+{
+    switch (t)
+    {
+    case ForType::Serial:     return "for";
+    case ForType::Parallel:   return "parallel";
+    case ForType::Vectorized: return "vectorized";
+    case ForType::Unrolled:   return "unrolled";
+    case ForType::GPUBlock:   return "gpu_block";
+    case ForType::GPUThread:  return "gpu_thread";
+    case ForType::GPULane:    return "gpu_lane";
+    }
+    return "for";
+}
+
 struct DimData
 {
     std::string _name;
     bool _is_rvar;
+    // Loop TYPE and DEVICE ride on the dimension (loopdoc.md section 17): they
+    // are independent fields, so a non-GPU type change leaves the device in
+    // place. `device` is the raw device-api name printed inside a `<...>` suffix
+    // (e.g. "Default_GPU"); empty means DeviceAPI::None (no suffix). Because
+    // with_name() copies *this, split/fuse/reorder carry both fields along with
+    // the dimension automatically (section 17 "type rides the dimension").
+    ForType for_type = ForType::Serial;
+    std::string device;  // empty == None
 
     DimData(std::string n, bool is_rvar) : _name(std::move(n)), _is_rvar(is_rvar)
     {
@@ -947,20 +986,99 @@ class FuncStageImpl
     // dimensions to share a type. These are shared Func/Stage methods per the
     // note above -- do not duplicate them onto Func and Stage.
     // -----------------------------------------------------------------------
-    Derived &serial(const VarOrRVar &var) { (void)var; throw InternalError("todo"); }
-    Derived &parallel(const VarOrRVar &var) { (void)var; throw InternalError("todo"); }
-    Derived &parallel(const VarOrRVar &var, int factor) { (void)var; (void)factor; throw InternalError("todo"); }
-    Derived &vectorize(const VarOrRVar &var) { (void)var; throw InternalError("todo"); }
-    Derived &vectorize(const VarOrRVar &var, int factor) { (void)var; (void)factor; throw InternalError("todo"); }
-    Derived &unroll(const VarOrRVar &var) { (void)var; throw InternalError("todo"); }
-    Derived &unroll(const VarOrRVar &var, int factor) { (void)var; (void)factor; throw InternalError("todo"); }
-    Derived &gpu_blocks(const VarOrRVar &bx) { (void)bx; throw InternalError("todo"); }
-    Derived &gpu_threads(const VarOrRVar &tx) { (void)tx; throw InternalError("todo"); }
+    // Set the TYPE of an existing dimension `var` in place -- no new loop
+    // (loopdoc.md section 17). Non-GPU types (serial/parallel/vectorize/unroll)
+    // change ONLY the type and leave any device in place; there is no directive
+    // that clears a device. Applies per stage (via dims()).
+    Derived &serial(const VarOrRVar &var) { return set_for_type(var, ForType::Serial); }
+    Derived &parallel(const VarOrRVar &var) { return set_for_type(var, ForType::Parallel); }
+    Derived &vectorize(const VarOrRVar &var) { return set_for_type(var, ForType::Vectorized); }
+    Derived &unroll(const VarOrRVar &var) { return set_for_type(var, ForType::Unrolled); }
+
+    // The FACTOR forms first split `var` by `factor` (loopdoc.md section 9) and
+    // then type ONE of the two halves (section 17): vectorize/unroll type the
+    // INNER (width-factor) loop, parallel types the OUTER loop. The other half
+    // stays serial. This makes the split's inner/outer order observable.
+    Derived &vectorize(const VarOrRVar &var, int factor) { return factor_form(var, factor, ForType::Vectorized, /*inner=*/true); }
+    Derived &unroll(const VarOrRVar &var, int factor) { return factor_form(var, factor, ForType::Unrolled, /*inner=*/true); }
+    Derived &parallel(const VarOrRVar &var, int factor) { return factor_form(var, factor, ForType::Parallel, /*inner=*/false); }
+
+    // GPU directives set both a TYPE and a DEVICE (loopdoc.md section 17). The
+    // device (default "Default_GPU") prints as a `<Default_GPU>` suffix -- the
+    // only loop type that carries a device. gpu_blocks/gpu_threads/gpu_lanes
+    // type existing dims (no split).
+    Derived &gpu_blocks(const VarOrRVar &bx) { return set_for_type(bx, ForType::GPUBlock, kDefaultGPU); }
+    Derived &gpu_threads(const VarOrRVar &tx) { return set_for_type(tx, ForType::GPUThread, kDefaultGPU); }
+    Derived &gpu_lanes(const VarOrRVar &tx) { return set_for_type(tx, ForType::GPULane, kDefaultGPU); }
+
+    // gpu_tile(x, bx, tx, factor) is sugar: split x by factor into outer `bx`
+    // and inner `tx`, then make the outer a gpu_block and the inner a gpu_thread
+    // (loopdoc.md section 17).
     Derived &gpu_tile(const VarOrRVar &x, const VarOrRVar &bx, const VarOrRVar &tx, int factor)
     {
-        (void)x; (void)bx; (void)tx; (void)factor; throw InternalError("todo");
+        (void)factor; // bound normalized away by the harness
+        dimlist::split(dims(), owner(), x, bx, tx);
+        set_for_type(bx, ForType::GPUBlock, kDefaultGPU);
+        set_for_type(tx, ForType::GPUThread, kDefaultGPU);
+        return static_cast<Derived&>(*this);
     }
-    Derived &gpu_single_thread() { throw InternalError("todo"); }
+
+    // gpu_single_thread() wraps the whole stage in a single (extent-1) GPU
+    // block + thread loop pair OUTSIDE the existing loops (loopdoc.md section
+    // 17). dims() is innermost-first, so append the thread then the block; the
+    // block ends up at the highest index and prints outermost.
+    Derived &gpu_single_thread()
+    {
+        DimData thread("__thread", false);
+        thread.for_type = ForType::GPUThread;
+        thread.device = kDefaultGPU;
+        DimData block("__block", false);
+        block.for_type = ForType::GPUBlock;
+        block.device = kDefaultGPU;
+        dims().push_back(thread);  // just outside the existing loops
+        dims().push_back(block);   // outermost
+        return static_cast<Derived&>(*this);
+    }
+
+private:
+    static constexpr const char *kDefaultGPU = "Default_GPU";
+
+    // Set the loop type of an existing dimension `var` in this stage. A non-empty
+    // `device` also stamps the device (GPU directives); an empty `device` leaves
+    // any existing device untouched (loopdoc.md section 17: type and device are
+    // independent, and no non-GPU directive clears a device).
+    Derived &set_for_type(const VarOrRVar &var, ForType t, const std::string &device = "")
+    {
+        int pos = dimlist::dim_pos(dims(), var.name());
+        if (pos < 0)
+        {
+            throw CompileError("micro_halide: loop-type directive: \"" + owner() +
+                               "\" has no dimension \"" + var.name() + "\"");
+        }
+        dims()[pos].for_type = t;
+        if (!device.empty())
+        {
+            dims()[pos].device = device;
+        }
+        return static_cast<Derived&>(*this);
+    }
+
+    // The factor forms: split `var` by `factor` into outer=`var` and a fresh
+    // inner, then type either the inner or the outer half (loopdoc.md sec 17).
+    Derived &factor_form(const VarOrRVar &var, int factor, ForType t, bool type_inner)
+    {
+        (void)factor; // bound normalized away by the harness
+        // Fresh inner name of the same kind (Var/RVar) as `var`; the harness
+        // drops loop names, so any unique name works.
+        std::string inner_name = var.name() + "$vi";
+        VarOrRVar inner = var.is_rvar ? VarOrRVar(RVar(inner_name))
+                                      : VarOrRVar(Var(inner_name));
+        dimlist::split(dims(), owner(), var, /*outer=*/var, /*inner=*/inner);
+        set_for_type(type_inner ? inner : var, t);
+        return static_cast<Derived&>(*this);
+    }
+
+public:
 
     // compute_with (loopdoc.md section 14): record a per-stage fuse edge from
     // THIS (child) stage into `parent` at loop level `var`, sharing the loops
@@ -1859,6 +1977,24 @@ struct LoopNestPrinter
                             "to the fuse level) of the two stages do not match");
                 }
 
+                // Each pair of shared dimensions (from the fuse level `v`
+                // outward) must have the SAME loop type AND device (loopdoc.md
+                // section 17): the per-pair check compares for_type/device_api,
+                // not just name and count. Fusing e.g. a parallel dim with a
+                // vectorized one is rejected at schedule time.
+                const std::vector<DimData> &cd = stage_dims(f, cs);
+                const std::vector<DimData> &pd = stage_dims(p, ps);
+                for (int k = 0; k < child_above; k++)
+                {
+                    const DimData &cdim = cd[ci + k];
+                    const DimData &pdim = pd[pi + k];
+                    if (cdim.for_type != pdim.for_type || cdim.device != pdim.device)
+                    {
+                        fail(f, "compute_with: for types of the fused dimensions of the "
+                                "two stages do not match");
+                    }
+                }
+
                 // All group members must share ONE compute level.
                 if (!same_compute_level(f, p))
                 {
@@ -2083,14 +2219,15 @@ struct LoopNestPrinter
             return;
         }
 
-        const std::string &var = stage_dims(f, stage)[dim].name();
+        const DimData &d = stage_dims(f, stage)[dim];
+        const std::string &var = d.name();
         // A loop is elided if declared collapsed (bounds, §7) OR it is at/above
         // this stage's collapse floor (a non-spine member's shared loop, §14).
         bool elided = stage_collapsed(f, stage).count(var) != 0 || dim >= collapse_floor;
         int body_indent = indent;
         if (!elided)
         {
-            out << pad(indent) << "for " << var << ":\n";
+            out << pad(indent) << loop_line(d) << "\n";
             body_indent = indent + 2;
         }
 
@@ -2152,6 +2289,16 @@ struct LoopNestPrinter
     static std::string pad(int indent)
     {
         return std::string(indent, ' ');
+    }
+
+    // Render a loop's line (loopdoc.md section 17): `<type> <var>[<device>]:`.
+    // The type token replaces plain `for` for non-serial types; a GPU dim adds
+    // its `<device_api>` suffix. The harness drops the var name and constant
+    // bounds but keeps the type token and device suffix (canonicalize.py).
+    static std::string loop_line(const DimData &d)
+    {
+        std::string dev = d.device.empty() ? "" : "<" + d.device + ">";
+        return std::string(for_type_token(d.for_type)) + " " + d.name() + dev + ":";
     }
 
     // Name prefix used for the realization-order tie-break: drop any "$..."
@@ -3440,7 +3587,8 @@ struct LoopNestPrinter
             out << pad(indent) << f->name << "(...) = ...\n";
             return;
         }
-        const std::string &var = sd.dims[dim].name();
+        const DimData &d = sd.dims[dim];
+        const std::string &var = d.name();
 
         // An elided ("collapsed") loop prints no `for` line and does not
         // indent its body, but is still a valid injection site for any
@@ -3450,7 +3598,7 @@ struct LoopNestPrinter
         int body_indent = indent;
         if (!elided)
         {
-            out << pad(indent) << "for " << var << ":\n";
+            out << pad(indent) << loop_line(d) << "\n";
             body_indent = indent + 2;
         }
 
