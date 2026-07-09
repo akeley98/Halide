@@ -934,6 +934,33 @@ class FuncStageImpl
         return static_cast<Derived&>(*this);
     }
 
+    // -----------------------------------------------------------------------
+    // Loop types / ForType (loopdoc.md section 17): serial / parallel /
+    // vectorized / unrolled and the GPU family. UNIMPLEMENTED STUBS -- a
+    // micro-agent must implement these FROM loopdoc.md section 17 ALONE. Each
+    // sets the loop TYPE (and, for gpu_*, a device) that print_loop_nest shows
+    // as the leading token on the loop line (`parallel`/`vectorized`/... instead
+    // of `for`) plus a `<device_api>` suffix for GPU loops. Section 17 also
+    // governs: the factor forms imply a split and type ONE half (vectorize/
+    // unroll -> the inner, parallel -> the outer); split/fuse/reorder carry the
+    // type along with the dimension; and compute_with requires the paired
+    // dimensions to share a type. These are shared Func/Stage methods per the
+    // note above -- do not duplicate them onto Func and Stage.
+    // -----------------------------------------------------------------------
+    Derived &serial(const VarOrRVar &var) { (void)var; throw InternalError("todo"); }
+    Derived &parallel(const VarOrRVar &var) { (void)var; throw InternalError("todo"); }
+    Derived &parallel(const VarOrRVar &var, int factor) { (void)var; (void)factor; throw InternalError("todo"); }
+    Derived &vectorize(const VarOrRVar &var) { (void)var; throw InternalError("todo"); }
+    Derived &vectorize(const VarOrRVar &var, int factor) { (void)var; (void)factor; throw InternalError("todo"); }
+    Derived &unroll(const VarOrRVar &var) { (void)var; throw InternalError("todo"); }
+    Derived &unroll(const VarOrRVar &var, int factor) { (void)var; (void)factor; throw InternalError("todo"); }
+    Derived &gpu_blocks(const VarOrRVar &bx) { (void)bx; throw InternalError("todo"); }
+    Derived &gpu_threads(const VarOrRVar &tx) { (void)tx; throw InternalError("todo"); }
+    Derived &gpu_tile(const VarOrRVar &x, const VarOrRVar &bx, const VarOrRVar &tx, int factor)
+    {
+        (void)x; (void)bx; (void)tx; (void)factor; throw InternalError("todo");
+    }
+
     // compute_with (loopdoc.md section 14): record a per-stage fuse edge from
     // THIS (child) stage into `parent` at loop level `var`, sharing the loops
     // from the outermost down to `var`. Records state only; the fused nest is

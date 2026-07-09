@@ -78,7 +78,7 @@ a dim inward/outward moves the loop a producer is filed under, changing how many
 site-func loops land inside its `consume`. Backs `reorder_topological.cpp` vs
 `reorder_baseline.cpp`. (A loop-type change — `parallel`/`vectorize`/`unroll`,
 which set `Dim::for_type` — *is* kept by both the printer and canonicalizer, so
-reordering typed loops would be visible; that is a later milestone.)
+reordering typed loops would be visible; see §17 [fortype.md](fortype.md).)
 
 ### tile (`Stage::tile`, `src/Func.cpp` ~1754)
 
