@@ -1,115 +1,90 @@
-# Main agent → human: fresh-eyes re-evaluation (post-compaction)
+# loopdoc.md full read-through — findings (main agent)
 
-You asked me to re-evaluate the doc status and the *causes* of the failing
-tests. Doing that from scratch changed the picture materially from the previous
-"9 reds → 3 fixes" note. **There are 11 reds, and B3's root cause is not what I
-previously wrote.** Below: the corrected diagnosis, then direct answers to each
-of your five Follow-up tasks.
+Read front-to-back on 2026-07-10. No edits made. Overall: the document is
+accurate and internally consistent; nothing in it contradicts what I know of
+Halide's actual behavior, and every claim I spot-checked this session (clone
+inherits `f`'s schedule, compute_with for_type match, realization-order DFS +
+edge-label tie-break, the `device_api==None` extent-1 gate) holds. The items
+below are mostly clarity, not correctness. Ranked by how much they'd trip a
+reader.
 
+## Worth fixing
 
-## The 11 reds and their causes
+1. **§1, "Objects and their conceptual state" — dangling antecedent (I introduced
+   this).** In the Func's stages bullet, the new loop-type sentences sit between
+   "Each stage has its own ordered list of **loop dimensions** …" and "It also has
+   **its own left-hand-side index expressions** …". After two sentences whose
+   subject is "Each dimension" ("Each dimension also carries a **loop type** …"),
+   the "It also has its own left-hand-side…" reads as if the *dimension* has the
+   LHS/RHS — but "It" means the *stage*. A reader could conclude dimensions carry
+   LHS/RHS. Fix: make the referent explicit, e.g. start that clause "Each stage
+   also has its own left-hand-side…", or move the per-dimension type/device
+   sentence to the end of the bullet so the stage's own attributes stay together.
 
-Four distinct causes (not three). Only **one** is a genuine doc gap; I have
-fixed it plus two clarifications. The rest are micro-implementation gaps whose
-rules were already (or are now) in loopdoc.md.
+   HUMAN: either proposed fix approved
 
-| # reds | Examples | Cause | Kind |
-|---|---|---|---|
-| 3 | `clone_spec_a{0,1,2}_b3` | **(A)** `clone_in({g, hintm})` redirection does not reach the rfactor **intermediate** consumer `hintm`; micro leaves `hintm` reading the original `p`, dragging `p` to root. | micro bug (doc clarified) |
-| 4 | `clone_spec_a{0,1,2}_b2`, `clone_in_unused` | **(B)** `in`/`clone_in` pins the wrapper on the *direct caller of `f`* on the path to the named consumer (transitive reach is fine); it errors at lowering if that pinned caller no longer calls `f` — no path (`clone_in_unused`), or `rfactor` after the clone moves `h`'s read into `h_intm` so the pin on `h` goes stale (b2). | **doc gap — FIXED** + micro must reject |
-| 3 | `specialize_then_rfactor_each{,_tiled}`, `specialize_tree_rfactor_mix` | **(C)** two rfactor intermediates share the name `g_intm`; micro orders them by the wrong visitation counter (visits the specialization branch before the base/fallback). | micro bug (§6 already documents base-before-branch) |
-| 1 | `compute_at_inline_dependence_update_inline` | **(D)** an update-def Func can't inline; it auto-realizes at its consumer's innermost loop, so `p.compute_at(out,y)` above it is legal. Micro rejects it. | micro bug (§11+§7 documented; §7 clarified) |
+2. **§7, line ~837 — reader-facing "milestone" jargon.** "…is exactly what the
+   wrapper Funcs `in()` / `clone_in()` (a later milestone) enable…". This is the
+   only remaining "milestone" in the doc (the §9 one was retargeted to §17
+   earlier). Everywhere else the doc cross-references by section; "a later
+   milestone" is development-process vocabulary that means nothing to a reader.
+   Fix: "(§13)".
 
-### Why the previous note was wrong about B3
-I had filed B3 as an unrooted "structural mismatch," and lumped it with the
-realization-order reds. Fresh probing (`probe/probe_clone_rfactor_intm.cpp`)
-shows micro's realization order is *fine*: the minimal DFS-depth case
-(`examples/realization_order_dfs.cpp`), a plain clone, and a clone whose consumer
-is `compute_at(f)` all order `p` correctly. Only adding the
-**rfactor-intermediate-as-clone-consumer** flips `p` to root. So the *symptom* is
-realization order (as you spotted), but the *cause* is incomplete clone
-redirection.
+   HUMAN: fix approved
 
+## Minor / optional
 
-## Answers to your Follow-up tasks
+3. **§13, `clone_in` subsection vs. its opening — timing caveat only stated once.**
+   The section opening (fixed today) correctly says a clone copies "`f`'s *current*
+   schedule … default only if `f` is still unscheduled when you clone." The
+   `### f.clone_in(g)` subsection just below still states it flatly: "a **copy of
+   `f`'s entire definition** (all stages, schedule, and specializations)" with no
+   "as of the call" qualifier. Not wrong (the opening governs), but a reader who
+   jumps straight to the subsection misses the timing nuance. Optional: add "as it
+   stands when you call `clone_in`" to the subsection, or a back-reference to the
+   opening.
 
-**1. "B3 root cause is realization order again."** Half right. The observable is
-the `f`/`p` order, and your HUMAN_REORDERED log confirms that once `f` precedes
-`p` the rest matches. But micro's ordering rule is not the bug — micro would
-order `f` before `p` *if* `p` had no consumer inside `f`. The bug is that micro's
-`clone_in({g, hintm})` doesn't redirect `hintm`, so `hintm` still reads the
-original `p`; that read lives inside `f`, which pulls `p` to root. Fix the
-redirection and the order fixes itself. (The residual `produce keep` you saw in
-the reordered log is an artifact of the manual reorder; the as-generated micro
-already inlines `keep` correctly.)
+   HUMAN: small enough to be worth repeating as a special case; add the clause again instead of an intro back-reference please.
 
-**2. "Is B3 fixable from current loopdoc.md? Why did micro put `p` before `f`
-when `f` < `p`?"** Fixable — it's cause (A), a redirection bug, not a missing
-rule. On the `f` vs `p` puzzle: your intuition "`f` < `p` so `f` first" gives the
-right answer but for the wrong reason. Realization order is **not** a global sort
-by name; it's a **post-order DFS from the output** where the name key only sorts
-each Func's *direct-callee list*. `out`'s callee list is `[f, keep]` (`f` <
-`keep`), so the walk realizes all of `f`'s subtree before reaching `p` through
-`keep` — hence `f` before `p`. (A global name sort would put the leaf `p` first,
-which is what a naïve reading of the old §6 text suggested and what your question
-was implicitly assuming.) I tightened **§6** to say this explicitly and added
-`examples/realization_order_dfs.cpp` (GREEN) as the minimal witness: `a` is
-realized *after* `f` despite `"a" < "f"`, because `a` is gated behind `keep`.
+4. **§7, line ~608 — "undecidable in general" is a slight overstatement.**
+   "Predicting exactly which dimensions collapse requires bounds inference, which
+   is undecidable in general…". Halide *does* compute required-region extents
+   (interval arithmetic); the honest point is that it depends on arbitrary index
+   arithmetic and is out of scope for micro, not that it is formally undecidable.
+   Consider softening to "not something this document derives" / "requires bounds
+   inference micro does not model" to match the careful hedging used elsewhere
+   (e.g. the associativity notes in §3/§12 say "out of scope," not "undecidable").
 
-**3. "Two notions of consume; is the recursive expansion defined carefully
-elsewhere?"** Yes — **§7** already says the compute_at level "must enclose every
-place `f` is read (including indirectly through other functions `g` consumes)"
-and "reads `f` (directly or through Funcs inlined into it)." That is exactly your
-recursive expansion. I added an explicit paragraph naming the two notions and
-stating that a read reached through a *realized* callee (e.g. an update-def Func
-computed inside the site) counts just like a read through an *inlined* callee —
-with a pointer to the `compute_at_inline_dependence` family.
+    HUMAN: yes, we can just drop this claim
 
-**4. "Investigate `compute_at_inline_dependence_update_inline`."** Cause (D), and
-yes it is related to #3. `intm` has an update stage, so it cannot be inlined;
-unscheduled it defaults to being computed at `out`'s innermost loop (§11). `p` is
-read only by `intm`, whose realization sits inside `out`'s `y` loop, so
-`p.compute_at(out, y)` encloses that read → legal. Micro rejects it, so micro is
-either trying to inline the update-def Func or rooting it instead of placing it
-at the innermost consumer loop. Doc facts already present (§11 placement, §7
-enclosing rule); this is a micro fix.
+5. **§14, line ~1784 — broken inline-code span (cosmetic).** The sentence
+   "…the top-level body runs `f.s0, f.s1, g.s0, h.s0`(with `g.s1, f.s2` spliced
+   in)`, h.s1, h.s2, g.s2`." closes the code span before "(with…)" and reopens it,
+   so it renders as two spans with prose between and a stray leading comma in the
+   second. Reflow as one span or split the parenthetical out cleanly.
 
-**5. "Is B2 a new in/clone_in rule?"** Yes — new and **not** derivable from the
-general realization/compute_at rules. But the rule is subtler than "the named
-consumer must call `f`" (my first cut, which the transitive case disproves —
-`common.clone_in(c1)` works even though `c1` reaches `common` only through
-`maybe_inlined`; probe `probe/probe_clone_c3_sharing.cpp`, wrapper example
-`examples/in_but_inlined.hpp`). The actual mechanism (`src/Func.cpp` `resolve_transitive_callers`
-+ `src/WrapCalls.cpp`): `in`/`clone_in` walks *down* from each named consumer to
-`f` and pins the wrapper onto the **direct caller of `f` on that path**
-(transitive reach through intermediates is fine, and the pinned caller can even
-be a derived Func such as an rfactor intermediate). At lowering it errors if that
-pinned caller no longer directly calls `f`. Two ways: no path exists so the pin
-stays on the consumer, which doesn't call `f` (`clone_in_unused`, `g`↛`out`); or
-a later directive severs the pinned caller's call — `clone_in({g, h})` pins on
-`h`, then `rfactor` moves `h`'s read into `h_intm`, so at lowering `h`'s callee
-is `h_intm`, not `f` — a **stale pin**, not a claim `h` can't reach `f` (b2). Fix:
-pin on the Func that will call `f` in the final graph — `rfactor` first, then
-`clone_in({g, h_intm})` (b3). Documented in **§13** (subsection "The redirected
-caller must still call the wrapped Func at lowering"). *(Corrected after you
-flagged the clone_in_but_inlined example — since rewritten to wrappers as
-in_but_inlined.hpp.)*
+   HUMAN: Either fix approved
 
+6. **§15 "Legality" — discoverability.** The rule "the Func that calls
+   `compute_with` must have no specializations" lives only in §15, and §14's own
+   Legality list does not mention or cross-reference it. A reader auditing
+   compute_with legality from §14 wouldn't find this constraint. Optional: add a
+   one-line pointer from §14 Legality to §15.
 
-## Doc changes made this pass (main agent territory; no micro/harness edits)
-- **§6** — realization order reframed as a post-order DFS whose name key sorts
-  each callee list, not a global sort; consequence spelled out. New green example
-  `examples/realization_order_dfs.cpp`.
-- **§13** — new legality subsection: listed consumer must call the wrapped Func
-  (covers `clone_in_unused` + B2); redirection reaches rfactor-intermediate
-  consumers.
-- **§7** — explicit "two notions of consume"/realized-vs-inline callee paragraph;
-  `compute_at_inline_dependence` cross-reference.
-- Probe `probe/probe_clone_rfactor_intm.cpp` records the B3 isolation.
+   HUMAN: fix approved
 
+## Surprises checked and found consistent (no action)
 
-## What is left for micro-agents (rules now all in loopdoc.md)
-- (A) Make `in`/`clone_in` redirection reach rfactor-intermediate consumers → clears B3 ×3.
-- (B) Make `in`/`clone_in` **reject** a listed consumer that doesn't call the wrapped Func → clears B2 ×3 + `clone_in_unused` (as negatives).
-- (C) Order same-prefix rfactor intermediates by §6 base-before-specialization visitation → clears the 3 visitation reds.
-- (D) Realize an update-def Func at its consumer's innermost loop by default, and count reads through it for compute_at legality → clears `compute_at_inline_dependence_update_inline`.
+- §6 realization order as a post-order DFS with a per-consumer edge-label
+  tie-break (prefix → first-visitation index → full name), and fused groups as a
+  single contracted multigraph vertex with preserved in-edge labels — matches
+  `RealizationOrder.cpp`/`find_fused_groups` as I understand them.
+- §12 rfactor's LHS/RHS rewrite (incl. the histogram scatter-index moving to the
+  intermediate) and the per-(specialization, stage) edit routing.
+- §13 the two-phase eager/deferred model, the pin-set collision order-sensitivity,
+  the blind-to-pending-rewrites case, and the clone-once `#6476` limitation.
+- §17 factor-form asymmetry (vectorize/unroll → inner, parallel → outer), type
+  riding the dimension through split/fuse/reorder, and the extent-1/device gate.
+
+None of these read as wrong; I note them only to record that the surprising
+claims were the ones I actively tried to falsify and could not.
