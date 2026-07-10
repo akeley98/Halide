@@ -606,8 +606,10 @@ inline void fuse(std::vector<DimData> &a, const std::string &owner,
         throw CompileError("micro_halide: fuse: \"" + owner +
                            "\" has no dimension \"" + outer.name() + "\"");
     }
-    // TODO do we inherit state from inner or outer position?
-    // For is_rvar it doesn't matter since they'll match, but what about GPU etc.
+    // The fused loop inherits the INNER dimension's state -- its loop type and
+    // device ride along via with_name (loopdoc.md section 17: "the fused loop
+    // takes the inner dimension's type and device; the outer's type is dropped").
+    // (is_rvar is guaranteed equal by the require_rvar_match checks above.)
     const DimData old_dim = a[ipos];
     // The fused dim is placed where the inner dim was. The outer dim is deleted.
     a[ipos] = old_dim.with_name(fused.name());
