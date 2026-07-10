@@ -50,7 +50,7 @@ add the **schedule** that places and reshapes those loops across the pipeline.
       `gpu_block`/`gpu_thread`/`gpu_lane`) and, for the GPU types, a **device**
       (`DeviceAPI`) — set per stage by `parallel`/`vectorize`/`unroll`/`serial`
       and the `gpu_*` directives (§17), and carried along by `split`/`fuse`/
-      `reorder`. It also has **its own left-hand-side
+      `reorder`. Each stage also has **its own left-hand-side
       index expressions and right-hand-side value expressions** — the "algorithm"
       of that stage. The LHS/RHS are *seeded* by the definition you wrote, but
       they are **part of the mutable, per-stage scheduling state**, not a
@@ -605,7 +605,7 @@ Worked cases, all `f.compute_at(output, x)` with `output` reading `f` at offsets
   like inlining.
 
 **Predicting exactly which dimensions collapse requires bounds inference**,
-which is undecidable in general and out of scope for this document. We therefore
+which is out of scope for this document. We therefore
 *declare* elision rather than derive it: an example annotates it with
 
     f.compute_at(output, x);
@@ -833,8 +833,8 @@ The ways `(g, v)` falls outside the surviving set:
 
 The last case is the fundamental one: `f` placed inside one site func can only
 feed reads within that site func. Feeding consumers that live at different, non-nested
-locations is exactly what the wrapper Funcs `in()` / `clone_in()` (a later
-milestone) enable; until then such a schedule is simply illegal.
+locations is exactly what the wrapper Funcs `in()` / `clone_in()` (§13)
+enable; until then such a schedule is simply illegal.
 
 This single principle — *the level must enclose every read of `f`* — is the
 whole rule, and it does **not** grow with new features: later directives do not
@@ -1353,7 +1353,9 @@ wrapping `f` separately per consumer.
 ### `f.clone_in(g)` — an independent *clone*
 
 `f.clone_in(g)` returns a new Func that is a **copy of `f`'s entire definition**
-(all stages, schedule, and specializations), and makes `g` read the clone. Unlike
+(all stages, schedule, and specializations) *as they stand when you call
+`clone_in`* — so a default schedule only if `f` is still unscheduled — and makes
+`g` read the clone. Unlike
 a wrapper, the clone *recomputes* `f`'s work rather than reading `f`'s result, so
 `f` and the clone are independent and may be scheduled differently.
 
@@ -1781,7 +1783,8 @@ the members order `f, g, h` (`f.s2` fuses into `g.s1`, `g.s1` into `h.s0`) and
   `s2`; `f` emits `s2` (spliced into `g.s1`).
 
 Only the unfused stages start their own sibling nests, so the top-level body runs
-`f.s0, f.s1, g.s0, h.s0`(with `g.s1, f.s2` spliced in)`, h.s1, h.s2, g.s2`. The
+`f.s0, f.s1, g.s0, h.s0, h.s1, h.s2, g.s2` (with `g.s1` spliced into `h.s0`, and
+`f.s2` into `g.s1`). The
 free `g.s2` lands last, after all of `h` — not "at `g`'s slot" — because `g`
 stalled in the first sweep behind its fused `s1` and was not revisited until
 `h.s0` freed it ([src_doc: compute_with/ordering](src_doc/compute_with/ordering.md);
@@ -1906,6 +1909,10 @@ compute_at rule:
   pinned to the single stage `g.s0`, leaving nowhere to put it. Either way Halide
   rejects up front with "impossible to establish correct stage order" — checked
   per Func, per parent ([src_doc: compute_with/legality](src_doc/compute_with/legality.md)).
+* The Func being fused in must itself have **no specializations** — a fused group
+  is one unconditional shared nest with no room for per-branch variants; the rule
+  and its example live in §15 Legality
+  ([examples/neg_compute_with_specialize.cpp](examples/neg_compute_with_specialize.cpp)).
 
 A producer's `compute_at` legality inside a fused group needs no new rule — it is
 exactly §7's principle, the site must enclose every use of the Func, evaluated
