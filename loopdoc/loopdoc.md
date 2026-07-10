@@ -1308,14 +1308,16 @@ two reduction vars of a 3-D `RDom` and reorders the intermediate's update loops)
 ## 13. `in` and `clone_in`: wrapper and clone Funcs
 
 Both directives create a **new, separate Func** that a chosen set of consumers
-read *instead of* the original. They differ in what that new Func computes. In
-both cases the new Func is an ordinary Func with the usual **default inline**
-schedule (§4–§5), and you schedule it like any other. Left at the default it is
-*non-realized*: a pure wrapper or a pure clone is substituted away exactly like
-any other inline pure Func (§5), so it has **no visible effect on the nest until
-you give it a compute level** (`compute_root`/`compute_at`); a *non-pure* clone
-left inline instead follows the non-pure inline default (§11). The example nests
-below therefore assume the new Func has been scheduled (e.g. `compute_root`).
+read *instead of* the original. They differ in what that new Func computes and in
+the schedule it starts with, and you schedule it like any other. A **wrapper**
+(`in`) starts with the usual **default inline** schedule (§4–§5); a **clone**
+(`clone_in`) starts from a *copy of `f`'s current schedule* (see below), which is
+the default only if `f` is still unscheduled when you clone. While the new Func is
+inline it is *non-realized* — a pure wrapper or clone is substituted away like any
+other inline pure Func (§5), a *non-pure* one follows the non-pure inline default
+(§11) — so it has **no visible effect on the nest until it has a compute level**
+(its own, or one inherited from `f`). The example nests below assume the new Func
+is realized (e.g. `compute_root`).
 
 ### `f.in(g)` — an identity *wrapper*
 
