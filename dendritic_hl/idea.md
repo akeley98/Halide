@@ -47,8 +47,9 @@ The catalog is a bipartite DAG consisting of:
   The child schedule nodes are attempts of implementing the idea.
   Up to one of the child schedules is the idea node's **canonical schedule**.
 
-Furthermore, the C++ file in the workspace has a special "idea node comment"
-indicating which idea node it is to be parented to (or none at all).
+Furthermore, there's a special **current idea state**
+indicating which idea node the workspace file it is to be parented to
+(or none at all).
 
 A schedule node is a **root node** if it has 0 parents.
 
@@ -80,8 +81,6 @@ We assume these increase monotonically even though leap seconds screw us.
 ### Hash Format
 
 sha256, lowercase hex digits.
-The hash of a C++ file/schedule interacts with the idea node comment,
-described in a later section.
 
 
 ### Schedule Node State
@@ -128,45 +127,32 @@ described in a later section.
   Note: this design means adding commentary with negative importance can "demote" a 0-importance node.
 
 
-### C++ File Idea Node Comment
+### Current Idea State
 
-TODO KILL THIS OFF.
+We need to keep track of which idea the schedule in the workspace should be parented to.
+The "current idea state" stored in the catalog is a tagged union of
 
-The C++ file may contain a line of the form
+* **No current idea state**: contains a timestamp;
+  indicates the workspace schedule is to become a root node.
 
-    [ignored prefix whitespace]// DENDRITIC_HL_IDEA=<idea-id> [anything after whitespace ignored]
+* **Some current idea state**: contains full ID of an idea node.
 
-There are three legal states for **workspace** C++ files:
-
-* **Missing:** no such comment
-
-* **No Parent:** exactly one such comment, `<idea-id>` is `root:{timestamp}` ("embeds a timestamp")
-
-* **One Parent:** exactly one such comment, `<idea-id>` is a valid full ID of an idea node
-
-This is something I'm not too certain about.
-Re-evaluate if there's a better way to do this later.
-
-For C++ files in the **catalog**,
-they must contain an idea node comment with `<idea-id>` set to `catalog_placeholder`.
-This will get automatically substituted when copying C++ files between the workspace and catalog.
-
-When tools insert a new `DENDRITIC_HL_IDEA` comment, they also insert a courtesy comment above:
-
-    // Special comment by Dendritic Halide Harness; avoid hand-editing
-
-Illegal states for workspace C++ files:
-
-* **Multiple comments:** Diagnosed with line numbers for any tool needing to find the idea node comment (which is pretty much all tools).
-
-* **Invalid ID:** Diagnosed by tools that need to parse the idea node comment but are not overwriting it.
-
-**IMPORTANT:** when hashing a file, this is always done after substituting in the `catalog_placeholder`.
 
 ## Catalog Directory State
 
 Each `*.cpp` or `*.cc` or `*.c++` file in the workspace has a corresponding
 `*.dh_hl` "catalog directory" next to it, if it's ever input to `dh_hl`.
+
+The top-level catalog directory contains sub-directories
+
+* `bin`
+* `idea`
+* `sch`
+
+and files
+
+* `current_idea.txt`
+* `.gitignore`, ignores `bin` directory
 
 
 ### Schedule Nodes on Disk
@@ -174,8 +160,7 @@ Each `*.cpp` or `*.cc` or `*.c++` file in the workspace has a corresponding
 Each schedule node is stored in a `sch/{id}` subdirectory of the catalog directory.
 This contains files and directories:
 
-* **C++ source code:** `generator.cpp`, with `catalog_placeholder` idea node comment.
-  The reason for this is to make the hash invariant of the actual parent idea node(s).
+* **C++ source code:** `generator.cpp`
 
 * **UTC wall time timestamp:** derived from full ID
 
@@ -217,6 +202,18 @@ This contains files and directories:
   File doesn't exist if there's not yet a canonical schedule.
   *Merge risk:* Different IDs in incoming `canonical.txt`.
   Fix with `fix_canonical` tool.
+
+
+### Current Idea State on Disk
+
+Stored in `current_idea.txt`, single line with trailing newline holding
+
+* `dendritic_hl_root({timestamp})` to encode the "no current idea" state
+
+* `dendritic_hl_idea({idea node full ID})` to encode the "some current idea" state
+
+*Merge risk:* Fix with `fix_current_idea` tool.
+Ignore all lines except those parsing in the above 2 forms.
 
 
 ### Efficiency
@@ -276,7 +273,7 @@ For schedule nodes with:
 
 * **One parent idea node:** Prefer short IDs that embed the parent idea node
 * **No or multiple parent idea nodes:** Prefer hash-based IDs unless stated otherwise;
-  fall back to full ID when truly required (no hash prefix is unambiguous)
+  fall back to full ID when truly required (no hash prefix is unambiguous).
 
 Figure some heuristics for creating reasonable short IDs.
 
@@ -299,9 +296,8 @@ otherwise, the catalog directory is implicitly created.
 or an error if no unambiguous schedule node ID would be given.
 It is rarely needed to pass this, unless you're doing some heavy-handed modification of the catalog state.
 
-The **workspace idea node** is the optional idea node referenced by the idea node comment in the workspace file.
-If the tool requires this information and there is no such comment or it is in illegal state,
-the tool reports an error and suggests the status tool.
+The "current idea node" is nothing, if the current idea state encodes "no current idea",
+and otherwise the idea node referenced by the "some current idea" state.
 
 
 ### Help Tool
@@ -320,6 +316,8 @@ This is a purely read-only command.
 If there's no catalog directory, advise `dh_hl new_root {workspace file name}` and exit.
 Otherwise,
 
+* Give the current idea state
+
 * Give the **unambiguous schedule node** ID (defined soon), if it exists.
   If it doesn't, issue the warning:
 
@@ -327,26 +325,20 @@ Otherwise,
     DO NOT PROCEED as the catalog may have been left in an inconsistent state,
     unless you have been advised otherwise. (ambiguous schedule ID)
 
-* Give the status of the idea node comment, including if it's in an illegal state.
-  (this is not an error for this command).
-  Give the ID of the workspace idea node, if it exists.
-
 The unambiguous schedule node is:
 
-* If the idea node comment is in a legal state and encodes "no parent",
+* If the current idea state encodes "no current idea",
   and there is a schedule node whose timestamp and hash matches the
-  idea node comment timestamp and workspace file hash,
+  current idea state timestamp and workspace file hash respectively,
   then the unambiguous schedule node is that schedule node.
-  [recall you have to modify the idea node comment in a private copy before hashing].
 
-* If the idea node comment is in a legal state and encodes "one parent",
-  and the workspace idea node has a child schedule node whose hash
+* If there exists a current idea node, and it has a child schedule whose hash
   matches the workspace file hash, then the unambiguous schedule node
   is that child schedule node.
   If there's multiple such nodes:
     - Give the canonical schedule, if it's one of the choices.
     - Warn & show the list of such nodes' IDs otherwise; no unambiguous schedule node in this case.
-  If the output is in short ID form, embed the ID of the workspace idea node in it.
+  If the output is in short ID form, embed the ID of the current idea node in it.
 
 * Doesn't exist otherwise.
 
@@ -355,7 +347,7 @@ when it unambiguously corresponds to a schedule node.
 Essentially, this was "where we left off" when we last stopped searching.
 As soon as we start editing the file, it'll be in inconsistent state.
 
-We need the idea node comment to remember what idea we were working on,
+We need the current idea state to remember what idea we were working on,
 since we have no idea otherwise as soon as the schedule hash changes.
 
 Regarding the warning, as soon as the workspace file is edited,
@@ -371,16 +363,16 @@ parent the schedule to an idea that has nothing to do with what is actually bein
 
     dh_hl restore {workspace file name} {schedule ID}
 
-Copy the schedule node's C++ schedule to the workspace file.
-This implies modifying an existing idea node comment, which depends on the parents of the schedule node.
+Copy the schedule node's C++ schedule to the workspace file,
+and update the current idea node state as follows,
+depending on the number of parent idea nodes of the referenced schedule node.
 
-* **No parents:** set the comment to "no parent" state,
-  with the comment embedding the timestamp of the schedule node.
+* **No parents:** set to "no current idea" state, embedding the timestamp of the schedule node.
 
-* **One parent:** set the comment to refer to this parent.
+* **One parent:** set to "some current idea" state, embedding the ID of the parent idea node.
 
 * **Multiple parents:** if the schedule ID used a short ID that embeds an idea node,
-  set the comment to refer to this idea node.
+  set to "some current idea" state, embedding the ID of said idea node.
   Otherwise, issue an error, with suggested legal short IDs for this schedule node,
   one each for each parent idea node.
 
@@ -403,14 +395,14 @@ TODO
 
     dh_hl canon {workspace file name}
 
-Set the canonical schedule of the workspace idea node to the schedule node named by `dh_hl status`.
+Set the canonical schedule of the current idea node to the schedule node named by `dh_hl status`.
 This is a schedule node that holds a copy of the workspace schedule.
 
 Requirements:
-    * Workspace idea node must exist
+    * Current idea node must exist
     * `dh_hl status` must give an unambiguous schedule node ID
     * Referenced schedule must have a `success` compilation state
-    * The workspace idea node must not already have a canonical schedule
+    * The current idea node must not already have a canonical schedule
 
 If the command fails due to the last requirement:
     * Advise this was already done if the schedule node is already the canonical schedule.
@@ -445,32 +437,20 @@ TODO
 
     dh_hl new_root {workspace file name}
 
-Make an internal copy of the workspace file containing an
-idea node comment encoding "no parent" and embedding the current timestamp.
-
-* Edit existing idea node comment if it exists.
-* Add new idea node comment + courtesy comment if not.
-* Diagnose multiple idea node comments as an error.
-
 Hash the file and look for existing schedule nodes with the same hash.
 Error if so, giving IDs of all such schedule nodes.
 
-Otherwise, create a new root node schedule node that contains the
-modified copy of the workspace file, and the same timestamp as before.
-Overwrite the workspace file with the modifications.
+Otherwise, create a new root node schedule node that contains a
+copy of the workspace file, and set the current idea state to
+"no current idea" embedding the timestamp of the new schedule node.
 
 
 ### Set Idea Tool
 
     dh_hl set_idea {workspace file name} {idea ID}
 
-If the workspace file contains one idea node comment,
-edit it to reference the given idea node.
-
-If the workspace file contains no idea node comment,
-add one (with courtesy comment) that references the given idea node.
-
-Multiple existing idea node comments get diagnosed as an error.
+Update the current idea state to "some current idea",
+embedding the given idea node ID.
 
 
 ### New Idea Tool
@@ -537,13 +517,13 @@ Print out state of the referenced schedule node as a JSON object, with key/value
 
 * `children`: list of strings, each a full ID of a child node
 
-* `source`: string, C++ source code (idea node comment left as-is)
+* `source`: string, C++ source code
 
 * `timestamp`: string, timestamp
 
 * `hash`: string
 
-* `compilation result`: string
+* `compile`: string, `compile.txt` result
 
 TODO benchmark, generator parameters, commentary
 
@@ -567,8 +547,6 @@ Print out state of the referenced idea node as a JSON object, with key/value pai
 * `canonical_schedule`: null if no canonical schedule, otherwise string full ID of the canonical schedule
 
 * `importance`: number
-
-TODO
 
 
 ### History Tool
@@ -596,6 +574,15 @@ Modify the catalog graph so that
   The proposal name and text indicates a resolved merge conflict.
 
 
+### Fix Current Idea Tool
+
+    dh_hl fix_current_idea {workspace file name}
+
+TODO
+
+TODO Workspace file must at least pass the C++ compilation step correctly.
+
+
 ## Tool Safety Requirements
 
 Tools should assume the catalog directory will not be modified while the tool is running.
@@ -606,7 +593,10 @@ Tools can assume sha256 collisions never happen.
 Tools NEVER overwrite or modify existing files, except for:
 
 * Workspace C++ files
+* `current_idea.txt`
 * `canonical.txt` for `fix_canonical` tool
+* `current_idea.txt` for `fix_current_idea` tool
+* (TODO any exceptions I forgot?)
 
 Accordingly, use `"x"` mode or equivalent when creating new files.
 
@@ -617,7 +607,7 @@ Use a common helper for this.
 If the tool fails, an `atexit` handler will run that deletes all those recorded new files and directories.
 It is OK to ignore node sub-directories like `child/`; I just care that there are no half-baked new idea node or schedule node directories left behind.
 
-The "new files" don't include the workspace C++ file and the special case of overwriting `canonical.txt`.
+The "new files" don't include the workspace C++ file and the special case overwritten files.
 NEVER delete the workspace C++ file.
 Defer overwriting files as the FINAL step of tools.
 
