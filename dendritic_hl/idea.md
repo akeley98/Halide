@@ -61,7 +61,7 @@ Minor schedules should not store interesting variations on schedules;
 this should be done by adding a legitimate child idea node.
 
 
-### Tree Consistency Requirements
+### Tree Structure Requirements
 
 * The parent of an idea node must be a **major schedule**.
 
@@ -69,8 +69,8 @@ this should be done by adding a legitimate child idea node.
   (in the future relative to) its parent node's timestamp.
   Ensures no cycles.
 
-These rules only have to be checked to the extent that tools run on
-currently-consistent catalogs will not violate any of the rules.
+These rules only have to be checked to the extent that tools
+will not add new violations of the requirements.
 
 
 ### Timestamp Format
@@ -195,7 +195,7 @@ No automatic fix provided -- this power should be used very sparingly anyway.
 *Merge risk:* (unlikely) incoming different benchmarks, advice, or commentaries with the same timestamp.
 No automatic fix provided.
 
-*Merge risk:* Could undetected violations of tree consistency timestamp requirements happen?
+*Merge risk:* Could undetected violations of tree structure timestamp requirements happen?
 
 
 ### Idea Nodes on Disk
@@ -342,7 +342,7 @@ Otherwise, the tool tries to find a schedule node that already holds the workspa
 
 Hash the workspace file and look for schedule nodes with matching hashes.
 
-If none exist, the status is "catalog inconsistent, unknown schedule".
+If none exist, the status is "workspace inconsistent, unknown schedule".
 
 Otherwise, if the current idea state is parsable and holds the "no current idea" state,
 and there exists a schedule node that
@@ -350,16 +350,16 @@ and there exists a schedule node that
 (b) is a root node,
 (c) has a timestamp matching the timestamp embedded in the current idea state,
 *then* that schedule node is the **unambiguous schedule node**
-and the status is "catalog consistent".
+and the status is "workspace consistent".
 
 Otherwise, if the current idea state is parsable and holds the "some current idea" state,
 and there exists a schedule node that
 (a) has a matching hash,
 (b) has its parent idea node matching the onc embedded in the current idea state,
 *then* that schedule node is the **unambiguous schedule node**
-and the status is "catalog consistent".
+and the status is "workspace consistent".
 
-Otherwise, the status is "catalog inconsistent, unexpected current idea state".
+Otherwise, the status is "workspace inconsistent, unexpected current idea state".
 
 **Outputs:**
 
@@ -368,13 +368,13 @@ Otherwise, the status is "catalog inconsistent, unexpected current idea state".
   Try to print errors cleanly in this case.
 
 * Gives the status as one of
-    - "catalog inconsistent, unknown schedule"
-    - "catalog inconsistent, unexpected current idea state"
-    - "catalog consistent"
+    - "workspace inconsistent, unknown schedule"
+    - "workspace inconsistent, unexpected current idea state"
+    - "workspace consistent"
 
-* If the catalog is consistent, print the ID of the unambiguous schedule node.
+* If the workspace is consistent, print the ID of the unambiguous schedule node.
 
-* If the catalog is inconsistent, give the warning
+* If the workspace is inconsistent, give the warning
 
         AGENTS: If this is the first time editing this file this session,
         this means the file was edited without correct harness tracking.
