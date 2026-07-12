@@ -2,12 +2,11 @@
 
 The process of scheduling Halide code -- whether by hand or automated -- is often a sort of tree search.
 Schedules evolve over time into other schedules, and some plans don't work out and get back-tracked.
-What I want is a system that stores a "catalog" of schedules, organized into a historic tree structure
-(techincally a DAG, in some cases).
+What I want is a system that stores a "catalog" of schedules, organized into a historic tree structure.
 
 My goals for the Dendritic Halide Harness (`dendritic_hl.py`, shortened as `dh_hl`) are:
 
-* **Long term memory device:** Give agents a system for long-term
+* **Long Term Memory Device:** Give agents a system for long-term
   coordination and progress tracking.
   Include structured commentary and suggested ideas for each schedule.
   Also, form the basis for building a future UI for humans (or planner
@@ -35,10 +34,10 @@ My goals for the Dendritic Halide Harness (`dendritic_hl.py`, shortened as `dh_h
 
 Each C++ file in the **workspace** (files outside the catalog) that has
 ever been passed to `dh_hl` gets an associated catalog stored in a directory next to it.
-The catalog is a bipartite DAG consisting of:
+The catalog is a bipartite tree consisting of:
 
 * **Schedule Nodes:** Holds C++ generator file and associated benchmarking information and commentary.
-  May have 0 or more "idea nodes" as parents (but usually exactly 1, so the history is a tree).
+  May have 0 or 1 "idea nodes" as parents.
   May have 0 or more idea nodes as children as well only if this is a major schedule (to be defined).
   The schedule is embedded with a UTC wall time timestamp.
 
@@ -62,13 +61,16 @@ Minor schedules should not store interesting variations on schedules;
 this should be done by adding a legitimate child idea node.
 
 
-### DAG Consistency Requirements
+### Tree Consistency Requirements
 
 * The parent of an idea node must be a **major schedule**.
 
-* The parent schedule nodes of an idea must all have embedded
-  timestamps strictly lower (in the past) relative to each of the
-  child schedule nodes.
+* Each node must have timestamp strictly greater than
+  (in the future relative to) its parent node's timestamp.
+  Ensures no cycles.
+
+These rules only have to be checked to the extent that tools run on
+currently-consistent catalogs will not violate any of the rules.
 
 
 ### Timestamp Format
@@ -92,8 +94,10 @@ sha256, lowercase hex digits.
 * **Schedule Node Full ID:** `{timestamp}_{hash}` where `hash` is that of the stored C++ code encoded as UTF-8.
   Exactly 90 characters.
 
-* **Edges:** 0 or more parent idea nodes, 0 or more child idea nodes,
-  referenced by child node full ID (not yet defined).
+* **Edges:** 0 or 1 parent idea nodes, 0 or more child idea nodes.
+  *Alternate design* had multiple parent ideas possible (DAG not tree),
+  which was helping the "git compatibility" goal,
+  but just raised too many tough cases for a prototype.
 
 * **Compilation Result:** C++ compiler error, Halide compiler error, or success.
 
@@ -101,7 +105,7 @@ sha256, lowercase hex digits.
 
 * **Generator Parameter Value Advice:** JSON format
 
-* **Commentary Files:** Contains timestamp, optional importance value, commentary text.
+* **Commentary Files:** Contains timestamp, optional integer importance value, commentary text.
   For minor schedules, should be used to explain what went wrong with this implementation attempt.
   For major schedules, should be used as a post-mortem, or commentary on the effectiveness of the change
   implemented from the idea.
@@ -112,7 +116,9 @@ sha256, lowercase hex digits.
 
 * **Proposal Name:** String of length in [1, 72], containing only alphanumeric characters and underscore.
 
-* **Edges:** Exactly one parent schedule node, any number of child schedule nodes, referenced by schedule ID.
+* **UTC wall time timestamp:** timestamp of when the idea node was created.
+
+* **Edges:** Exactly one parent schedule node, any number of child schedule nodes.
 
 * **Idea Node Full ID:** `{proposal name}_{parent id}`; since the `parent id` is fixed-width, the proposal name can be derived easily.
 
@@ -137,6 +143,8 @@ The "current idea state" stored in the catalog is a tagged union of
 
 * **Some current idea state**: contains full ID of an idea node.
 
+TODO: think cautiously about whether this belongs in repo state or not.
+
 
 ## Catalog Directory State
 
@@ -152,21 +160,23 @@ The top-level catalog directory contains sub-directories
 and files
 
 * `current_idea.txt`
-* `.gitignore`, ignores `bin` directory
+* `.gitignore`, ignores `bin`
 
 
 ### Schedule Nodes on Disk
 
 Each schedule node is stored in a `sch/{id}` subdirectory of the catalog directory.
-This contains files and directories:
+This contains files and directories holding state:
 
 * **C++ source code:** `generator.cpp`
 
 * **UTC wall time timestamp:** derived from full ID
 
-* **Edges:** `parent/` and `child/` directories.
-  Each edge to a parent idea node is stored as an empty `parent/{parent id}` file.
-  Each edge to a child idea node is stored as an empty `child/{child id}` file.
+* **Edges:** `parent.txt` holds the full ID of the parent idea node plus a newline,
+  unless this schedule node is a root node, in which case `parent.txt` doesn't exist.
+  Edges to child idea nodes are *derived state*.
+  Scan the `idea` nodes directory (to be defined)
+  for nodes whose full IDs have the correct `parent id`.
 
 * **Compilation Result:** `compile.txt`, holding `c++ error`, `halide error`, or `success`.
 
@@ -175,23 +185,32 @@ This contains files and directories:
 * **Generator Parameter Value Advice:** store in `param/{timestamp of advice}.json`
 
 * **Commentary Files:** store in `comment/{timestamp of commentary}.txt` if no importance value,
-  otherwise `comment/{timestamp of commentary}_{importance}.txt`.
+  otherwise `comment/{timestamp of commentary}_{importance}.txt`; importance formatted base-10 like `%d`.
   Contents are just the text of the commentary.
+
+*Merge risk:* `parent.txt` merge conflict if two branches retroactively parented
+a root schedule node to two different idea nodes.
+No automatic fix provided -- this power should be used very sparingly anyway.
 
 *Merge risk:* (unlikely) incoming different benchmarks, advice, or commentaries with the same timestamp.
 No automatic fix provided.
 
-*Merge risk:* Undetected violations of DAG consistency timestamp requirement.
+*Merge risk:* Could undetected violations of tree consistency timestamp requirements happen?
 
 
 ### Idea Nodes on Disk
 
 Each idea node is stored in a `idea/{id}` subdirectory of the catalog directory.
-This contains files and directories:
+This contains files and directories holding state:
 
-* **Edges:** `child/` sub-directory;
-  each edge to a child schedule node is stored as an empty `child/{child id}` file.
-  Note the proposal name and parent schedule node are implied from this idea node's full ID.
+* **UTC wall time timestamp:** `timestamp.txt`, timestamp string plus newline
+
+* **Edges:** Both the parent and children are *derived state*.
+  Parent schedule node is derived from this idea node's ID.
+  Child schedule nodes are derived by walking `sch` for schedule nodes
+  who have this idea node as their parent.
+  **The tools DON'T** proactively do this walk; they must do it lazily,
+  once, only if this information is actually needed.
 
 * **Proposal Text** `proposal.txt`
   *Merge risk:* problem if two branches had the same proposal name and different proposal text.
@@ -211,9 +230,6 @@ Stored in `current_idea.txt`, single line with trailing newline holding
 * `dendritic_hl_root({timestamp})` to encode the "no current idea" state
 
 * `dendritic_hl_idea({idea node full ID})` to encode the "some current idea" state
-
-*Merge risk:* Fix with `fix_current_idea` tool.
-Ignore all lines except those parsing in the above 2 forms.
 
 
 ### Efficiency
@@ -240,13 +256,11 @@ The IDs previously defined for idea and schedule nodes are the full IDs.
 Only full IDs are stored in the catalog, because they are stable over time.
 For convenience, short IDs are preferred almost everywhere else instead.
 
-**Idea Node Short ID:** `{proposal name prefix}.{N}`, `N` an integer.
+**Idea Node Short ID:** `{proposal name prefix}.{N}`, `N` a base-10 integer.
 
 This references an idea node as follows:
 
-* Consider only the list of idea nodes whose proposal names start with `proposal name prefix`.
-
-* Sort this list by the timestamp of the parent schedule node, breaking ties by sorting by the full idea node ID.
+* Consider only the list of idea nodes whose full IDs start with `proposal name prefix`.
 
 * Select the `N`-th node, 0-indexed.
 
@@ -255,9 +269,11 @@ This references an idea node as follows:
 * `{idea node short id}` (alone) references the canonical schedule of the idea node.
 
 * `{idea node short id}.{N}` references the `N`-th child schedule node of the idea node,
-  0-indexed, sorted by schedule node ID.
+  0-indexed, sorted by schedule node full ID.
   Because the schedule node ID starts with a timestamp,
   this is basically chronological order.
+  Only this short ID form requires an expensive walk of the full graph structure,
+  and it is the uncommon case, only for minor schedules.
 
 * `{hash prefix}` references the sole schedule node whose hash starts with the given prefix.
   Error if this is ambiguous.
@@ -271,9 +287,9 @@ Note short IDs (except the hash prefix form) are distinguished by containing at 
 Whenever tools output IDs for nodes, they should output short IDs whenever possible.
 For schedule nodes with:
 
-* **One parent idea node:** Prefer short IDs that embed the parent idea node
-* **No or multiple parent idea nodes:** Prefer hash-based IDs unless stated otherwise;
+* **No parent idea node:** Prefer hash-based IDs unless stated otherwise;
   fall back to full ID when truly required (no hash prefix is unambiguous).
+* **One parent idea node:** Prefer short IDs that embed the parent idea node.
 
 Figure some heuristics for creating reasonable short IDs.
 
@@ -284,20 +300,26 @@ so there's a common place where this override can be implemented)
 
 ## Tools
 
-In all tools, the schedule and idea IDs implicitly refer to nodes in the catalog associated with the workspace file.
+In all tools, the schedule and idea IDs implicitly refer to nodes
+in the catalog associated with the workspace file.
+
 If the workspace file doesn't exist, the tool reports an error, except for the restore tool.
+
 If the workspace file exists but the catalog directory doesn't,
 then an error is reported for read-only commands;
 otherwise, the catalog directory is implicitly created.
 
 `[parameter]` means an optional parameter.
 
-`[schedule ID]`, if not given explicitly, implies the unambiguous schedule node ID given by `dh_hl status`,
+`[schedule ID]`, if not given explicitly,
+implies the unambiguous schedule node ID that would be given by `dh_hl status`,
 or an error if no unambiguous schedule node ID would be given.
 It is rarely needed to pass this, unless you're doing some heavy-handed modification of the catalog state.
 
 The "current idea node" is nothing, if the current idea state encodes "no current idea",
 and otherwise the idea node referenced by the "some current idea" state.
+Commands that explicitly edit the current idea state must not error out
+due to errors in the existing `current_idea.txt`.
 
 
 ### Help Tool
@@ -314,36 +336,57 @@ List commands briefly if no `[command]` given, otherwise give description of the
 This is a purely read-only command.
 
 If there's no catalog directory, advise `dh_hl new_root {workspace file name}` and exit.
-Otherwise,
+Otherwise, the tool tries to find a schedule node that already holds the workspace file.
+
+**Search:**
+
+Hash the workspace file and look for schedule nodes with matching hashes.
+
+If none exist, the status is "catalog inconsistent, unknown schedule".
+
+Otherwise, if the current idea state is parsable and holds the "no current idea" state,
+and there exists a schedule node that
+(a) has a matching hash,
+(b) is a root node,
+(c) has a timestamp matching the timestamp embedded in the current idea state,
+*then* that schedule node is the **unambiguous schedule node**
+and the status is "catalog consistent".
+
+Otherwise, if the current idea state is parsable and holds the "some current idea" state,
+and there exists a schedule node that
+(a) has a matching hash,
+(b) has its parent idea node matching the onc embedded in the current idea state,
+*then* that schedule node is the **unambiguous schedule node**
+and the status is "catalog consistent".
+
+Otherwise, the status is "catalog inconsistent, unexpected current idea state".
+
+**Outputs:**
 
 * Give the current idea state
+  (no current idea/some current idea/parse error/missing/etc.)
+  Try to print errors cleanly in this case.
 
-* Give the **unambiguous schedule node** ID (defined soon), if it exists.
-  If it doesn't, issue the warning:
+* Gives the status as one of
+    - "catalog inconsistent, unknown schedule"
+    - "catalog inconsistent, unexpected current idea state"
+    - "catalog consistent"
 
-    AGENTS: If this is the first time editing this file this session,
-    DO NOT PROCEED as the catalog may have been left in an inconsistent state,
-    unless you have been advised otherwise. (ambiguous schedule ID)
+* If the catalog is consistent, print the ID of the unambiguous schedule node.
 
-The unambiguous schedule node is:
+* If the catalog is inconsistent, give the warning
 
-* If the current idea state encodes "no current idea",
-  and there is a schedule node whose timestamp and hash matches the
-  current idea state timestamp and workspace file hash respectively,
-  then the unambiguous schedule node is that schedule node.
+        AGENTS: If this is the first time editing this file this session,
+        this means the file was edited without correct harness tracking.
+        DO NOT PROCEED, unless you have been advised otherwise.
+        Likely causes include user action, and git checkouts / merges.
 
-* If there exists a current idea node, and it has a child schedule whose hash
-  matches the workspace file hash, then the unambiguous schedule node
-  is that child schedule node.
-  If there's multiple such nodes:
-    - Give the canonical schedule, if it's one of the choices.
-    - Warn & show the list of such nodes' IDs otherwise; no unambiguous schedule node in this case.
-  If the output is in short ID form, embed the ID of the current idea node in it.
 
-* Doesn't exist otherwise.
+**Rationale:**
 
-**Rationale:** a workspace file is in "consistent state"
-when it unambiguously corresponds to a schedule node.
+A workspace file is in "consistent state"
+when it unambiguously corresponds to a schedule node whose
+parent idea is what we expected.
 Essentially, this was "where we left off" when we last stopped searching.
 As soon as we start editing the file, it'll be in inconsistent state.
 
@@ -371,11 +414,6 @@ depending on the number of parent idea nodes of the referenced schedule node.
 
 * **One parent:** set to "some current idea" state, embedding the ID of the parent idea node.
 
-* **Multiple parents:** if the schedule ID used a short ID that embeds an idea node,
-  set to "some current idea" state, embedding the ID of said idea node.
-  Otherwise, issue an error, with suggested legal short IDs for this schedule node,
-  one each for each parent idea node.
-
 
 ### Build Tool
 
@@ -400,7 +438,7 @@ This is a schedule node that holds a copy of the workspace schedule.
 
 Requirements:
     * Current idea node must exist
-    * `dh_hl status` must give an unambiguous schedule node ID
+    * `dh_hl status` would give an unambiguous schedule node ID
     * Referenced schedule must have a `success` compilation state
     * The current idea node must not already have a canonical schedule
 
@@ -463,7 +501,7 @@ The schedule node must be a major schedule.
 
 Error if this would cause an ID collision (i.e. the proposal name is already used).
 
-Does not give back the ID of the new idea node, because it may be invalidated later.
+Gives back the ID of the new idea node.
 
 
 ### List Ideas Tool
@@ -492,17 +530,16 @@ Print the referenced idea node's
 
 ### Force Parent Idea Tool
 
-    dh_hl force_parent_idea {workspace file name} {maximum parent ideas} {idea ID} [schedule ID]
+    dh_hl force_parent_idea {workspace file name} {idea ID} [schedule ID]
 
-Set the referenced schedule node to be the canonical schedule of the referenced idea node.
-(implies adding an edge).
+Add the referenced schedule node to be a child and the canonical
+schedule of the referenced idea node.
 
 This fails if:
-* The referenced idea node already has a canonical schedule
-* The referenced schedule node would end up with more than `maximum parent ideas`-many parent idea nodes.
+* The referenced schedule node is not a root node.
+* The referenced idea node already has a canonical schedule.
 
-Rarely needed, mostly for when a new root schedule was created and you regret it.
-Hence `maximum parent ideas`, which should be 1 for this use case.
+Rarely needed, mostly for when a new root node was created and you regret it.
 
 
 ### JSON Schedule Info Tool
@@ -546,7 +583,7 @@ Print out state of the referenced idea node as a JSON object, with key/value pai
 
 * `canonical_schedule`: null if no canonical schedule, otherwise string full ID of the canonical schedule
 
-* `importance`: number
+* `importance`: number if finite, null for negative infinity
 
 
 ### History Tool
@@ -555,8 +592,10 @@ Print out state of the referenced idea node as a JSON object, with key/value pai
 
 TODO
 
-When following edges, check the DAG consistency rules.
-So we are guaranteed not to end up in an infinite loop even if the catalog state is cooked.
+When following an edge from child to parent node, check that
+this edge follows the tree consistency timestamp requirement.
+So we are guaranteed not to end up in an infinite loop
+even if the catalog state is cooked.
 
 
 ### Fix Canonical Tool
@@ -574,13 +613,11 @@ Modify the catalog graph so that
   The proposal name and text indicates a resolved merge conflict.
 
 
-### Fix Current Idea Tool
+### Fix Merge Tool
 
-    dh_hl fix_current_idea {workspace file name}
+    dh_hl fix_merge {workspace file name}
 
-TODO
-
-TODO Workspace file must at least pass the C++ compilation step correctly.
+TODO worry about this later.
 
 
 ## Tool Safety Requirements
@@ -595,7 +632,6 @@ Tools NEVER overwrite or modify existing files, except for:
 * Workspace C++ files
 * `current_idea.txt`
 * `canonical.txt` for `fix_canonical` tool
-* `current_idea.txt` for `fix_current_idea` tool
 * (TODO any exceptions I forgot?)
 
 Accordingly, use `"x"` mode or equivalent when creating new files.
