@@ -1,9 +1,12 @@
 # Source evidence: loop-nest construction (bootstrap subset)
 
-These files back the claims in [../loopdoc.md](../loopdoc.md) §§2–17 with
+These files back the claims in [../loopdoc_for_src_doc.md](../loopdoc_for_src_doc.md) §§2–17 with
 citations into the Halide compiler. Paths are relative to the Halide source
 root (`../src` from the loopdoc directory). Line numbers are approximate and
 may drift; the surrounding function names are the stable anchors.
+
+We left the section numbers as-is after restructuring `loopdoc.md`
+into multiple files hence the separate loopdoc file.
 
 The entry point for the loop-nest pseudocode is
 `Internal::print_loop_nest(const vector<Function> &)` in
