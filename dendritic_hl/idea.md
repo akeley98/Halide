@@ -22,7 +22,7 @@ My goals for the Dendritic Halide Harness (`dendritic_hl.py`, shortened as `dh_h
 
 * **Maximize Compatibility with Source Control:**
   "transparent"-ish on-disk state for catalog, designed to minimize merge conflicts.
-  This is also why I say "catalog" and not "repository"
+  This is also why I say "catalog" and not "repository".
 
 * Implemented in **one Python 3 file** for now even though I liketh it not
 
@@ -99,17 +99,19 @@ sha256, lowercase hex digits.
   which was helping the "git compatibility" goal,
   but just raised too many tough cases for a prototype.
 
-* **Compilation Result:** C++ compiler error, Halide compiler error, or success.
+* **Result:** C++ compiler error, Halide compiler error, or success.
 
-* **Benchmark Result Files** JSON format
-
-* **Generator Parameter Value Advice:** JSON format
+* **Benchmark Result Files** JSON format, documented later
 
 * **Commentary Files:** Contains timestamp, optional integer importance value, commentary text.
   For minor schedules, should be used to explain what went wrong with this implementation attempt.
   For major schedules, should be used as a post-mortem, or commentary on the effectiveness of the change
   implemented from the idea.
   The harness doesn't enforce these "shoulds"
+
+FUTURE: consider how to store history of sweeping over `GeneratorParam` values.
+For now, the required default value of the `GeneratorParam`
+may be used as an out-of-band method to recommend the "official" parameter values.
 
 
 ### Idea Node State
@@ -143,7 +145,7 @@ The "current idea state" stored in the catalog is a tagged union of
 
 * **Some current idea state**: contains full ID of an idea node.
 
-TODO: think cautiously about whether this belongs in repo state or not.
+FUTURE: think cautiously about whether this belongs in repo state or not.
 
 
 ## Catalog Directory State
@@ -178,11 +180,11 @@ This contains files and directories holding state:
   Scan the `idea` nodes directory (to be defined)
   for nodes whose full IDs have the correct `parent id`.
 
-* **Compilation Result:** `compile.txt`, holding `c++ error`, `halide error`, or `success`.
+* **Result:** `result.txt`,
+  holding `c++ error`, `halide error`, or `success`.
+  The default value is `c++ error`.
 
 * **Benchmark Result Files:** store in `bench/{hostname}_{timestamp of benchmark}.json`
-
-* **Generator Parameter Value Advice:** store in `param/{timestamp of advice}.json`
 
 * **Commentary Files:** store in `comment/{timestamp of commentary}.txt` if no importance value,
   otherwise `comment/{timestamp of commentary}_{importance}.txt`; importance formatted base-10 like `%d`.
@@ -230,6 +232,22 @@ Stored in `current_idea.txt`, single line with trailing newline holding
 * `dendritic_hl_root({timestamp})` to encode the "no current idea" state
 
 * `dendritic_hl_idea({idea node full ID})` to encode the "some current idea" state
+
+After a git merge conflict, there may be multiple lines encoding
+competing state values, plus extra cruft from git.
+We will use a simplistic algorithm where every line not parsing
+in one of the above two forms is assumed to be cruft.
+
+The parser for the current idea state must be robust to this merge
+conflict case. When this happens, report the competing state values
+and suggest the `new_root` tool.
+
+This info is part of an error message or the formatted output of the
+`status` tool.
+
+FUTURE: The `new_root` tool is a bare-minumum recovery strategy
+from merge conflicts. A production version of Dendritic Halide maybe
+can offer better tools, but at some point we're re-inventing git.
 
 
 ### Efficiency
@@ -293,7 +311,7 @@ For schedule nodes with:
 
 Figure some heuristics for creating reasonable short IDs.
 
-TODO: may add an override for this
+FUTURE: may add an override for this
 (so use a helper function to format short IDs,
 so there's a common place where this override can be implemented)
 
@@ -309,7 +327,9 @@ If the workspace file exists but the catalog directory doesn't,
 then an error is reported for read-only commands;
 otherwise, the catalog directory is implicitly created.
 
-`[parameter]` means an optional parameter.
+`{...}` (curly brackets) means a mandatory argument.
+
+`[...]` (square brackets) means an optional argument.
 
 `[schedule ID]`, if not given explicitly,
 implies the unambiguous schedule node ID that would be given by `dh_hl status`,
@@ -336,7 +356,8 @@ List commands briefly if no `[command]` given, otherwise give description of the
 This is a purely read-only command.
 
 If there's no catalog directory, advise `dh_hl new_root {workspace file name}` and exit.
-Otherwise, the tool tries to find a schedule node that already holds the workspace file.
+Otherwise, the tool tries to find a schedule node that already holds the workspace file
+and give basic information on the current catalog state.
 
 **Search:**
 
@@ -417,16 +438,137 @@ depending on the number of parent idea nodes of the referenced schedule node.
 
 ### Build Tool
 
-    dh_hl build {workspace file name} [parameters]
+    dh_hl build {workspace file name} [parameters file]
 
-TODO
+This tool tries to compile the workspace file and add/update a schedule node for it.
+There are four steps:
+
+1. Find or create the edited schedule node
+2. Compile the Halide binary
+3. Conditionally update the result state of the edited schedule node
+4. Print the ID of the edited schedule node
+
+(1) The edited schedule node is:
+
+* If `dh_hl status` would give an unambiguous schedule node,
+  that schedule node is the one this tool edits.
+* Otherwise, if there is no current idea node,
+  give an error, and suggest the `set_idea` and `new_root` tools.
+* Otherwise, add a new child schedule node to the current idea node
+  holding a copy of the workspace file.
+
+Note `new_root` shouldn't be used often, hence this tool doesn't try
+to automate `new_root` and forces the user/agent to do it themselves
+and think about whether that actually makes sense.
+
+(2) Use the `bin` directory of the catalog directory as temporary storage.
+
+Use the `ninja` build tool to
+* compile the C++ workspace file to Halide generator
+* run the Halide generator to get a Halide binary and `conceptual_stmt` file.
+  Use `target=host-profile` and link to `RunGenMain` to finish a standalone binary.
+
+[RunGenMain doc](https://halide-lang.org/docs/md_doc_2_run_gen.html)
+
+Print the file name (in the `bin/`) directory of the `conceptual_stmt` file.
+It can be overwritten by future builds.
+Pipe the output `stdout` and `stderr` to the harness's `stdout` and `stderr`.
+
+`gen_hist_host/build.ninja` provides an example of this two-step build.
+But you will have to Google how to link in `RunGenMain`.
+
+If the parameters file was given, it must hold a generator parameters JSON object
+(described later).
+Unpack the key/value pairs and pass them as generator parameters.
+If not given, it's as if an empty generator parameters JSON object was given.
+
+NB when executing the generator, each numeric parameter value must be
+formatted with `%d` if it's a whole number, and with `%r` if not,
+to ensure no floating point roundoff.
+
+(3) The result state of the schedule node gets updated to one of:
+
+* `c++ error`: couldn't even compile the C++ workspace file (worst)
+* `halide error`: passed said step, but Halide generator exited unsuccessfully
+* `success`: both steps exited successfully (best)
+
+However, update the result state to the better of the previous and new value.
+This is to account for how some generator parameter values may cause the
+Halide generator to fail; doesn't mean the entire schedule is bad.
+
+(4) Finally (after all other printing including the sub-processes),
+print the ID of the edited schedule node.
+
+This tool exits successfully iff no harness errors occurred
+and all subprocesses succeeded. 
+
+FUTURE: configurable Halide library location.
+For now just define a magic constant `~/Halide/build/`
+which will work on this computer at least.
+
+FUTURE: switch to CMake if absolutely huge payoff would happen (I hate CMake).
 
 
-### Benchmark Tool
 
-    dh_hl benchmark {workspace file name} [parameters]
+### Profile Tool
 
-TODO
+    dh_hl profile {workspace file name} [parameters file]
+
+This is like `dh_hl build` except
+* The Halide binary is run with Andrew Adam's new profiler tool
+  and the benchmark results are recorded.
+* The parameters file may contain a list of generator parameters JSON object,
+  with each parameter set profiled in turn.
+
+The list of generator parameters JSON objects for the command is
+* `[{}]`, if the parameters file was not given
+* `[obj]`, if the parameters file encodes a single JSON object `obj`
+* The parsed contents of the parameters file, verbatim, if it's already a list
+
+Steps 2 and 3 of the `dh_hl build` command are modified to become a loop over this list.
+Build the C++ to Halide generator once, then, for each object in the list,
+
+* Generate the Halide binary from the generator (no `stmt` needed this time).
+* Update result state of the edited schedule node as in `dh_hl build`, step 3.
+* Run the binary with `--verbose --benchmarks=all --estimate_all` (FUTURE: `--estimate_all` isn't great)
+* Add a new benchmark JSON object (documented later) to the edited schedule node's benchmarks set.
+
+Don't fail irrecoverably if some builds fail.
+Just skip it and move on.
+
+Examples: see the `gen_hist_host` and `hist_run_rule` rules in `gemm_halide_test/build.ninja`.
+But you will have to Google how to link in `RunGenMain`.
+
+IMPORTANT: each benchmark run must monopolize the entire computer
+(ignoring outside processes that we can't reasonably control).
+Ergo, no parallelizing benchmarking, no compiling while benchmarking.
+
+Implement the loop in Python; don't try to get `ninja` to build and
+profile everything, even if theoretically possible with pools,
+so I'm not paranoid when I have to inherit this software later.
+
+This tool exits successfully iff no harness errors occurred
+and no subprocesses exited unsuccessfully.
+
+
+### Build/Profile Tool Future Work
+
+FUTURE: allow benchmarking without the profiler.
+
+FUTURE: specify input size / explicit inputs for profiling
+that are passed through to `RunGenMain`.
+
+FUTURE: allow alternative to Halide's random number generator,
+since the buffer contents may have considerable impact on
+performance for algorithms like atomic-increment histograms
+(e.g. many 0s = lock contention, not observable for uniform distribution).
+
+FUTURE: ask Andrew Adams to output JSON profiler output.
+So we can put all the information away in the benchmark files.
+
+FUTURE: GPU target.
+More in general really we should just pass args through
+to the Halide generator and RunGenMain.
 
 
 ### Canon Tool
@@ -439,7 +581,7 @@ This is a schedule node that holds a copy of the workspace schedule.
 Requirements:
     * Current idea node must exist
     * `dh_hl status` would give an unambiguous schedule node ID
-    * Referenced schedule must have a `success` compilation state
+    * Referenced schedule must have a `success` result state.
     * The current idea node must not already have a canonical schedule
 
 If the command fails due to the last requirement:
@@ -464,23 +606,29 @@ The commentary file has no importance value.
 Like the `comment` tool but with the addition of the importance value.
 
 
-### Advise Parameters Tool
-
-    dh_hl advise_parameters {workspace file name} [parameters]
-
-TODO
-
-
 ### New Root Tool
 
     dh_hl new_root {workspace file name}
 
 Hash the file and look for existing schedule nodes with the same hash.
-Error if so, giving IDs of all such schedule nodes.
+If any of them are major schedules, issue an error,
+giving IDs of all such schedule nodes.
 
 Otherwise, create a new root node schedule node that contains a
 copy of the workspace file, and set the current idea state to
 "no current idea" embedding the timestamp of the new schedule node.
+
+This tool must succeed regardless of the contents of the current idea
+state on disk. However, if parsing the existing file yielded multiple
+encoded current idea states, have the additional effect of adding
+commentary to the new schedule node in the form:
+
+        dh_hl new_root tool: automated merge conflict recovery
+        [one line for each encoded current idea state parsed,
+        in any order and the same format as the current idea state file]
+
+and with no importance value attached.
+This is just a temporary "bare minimum" merge conflict resolution.
 
 
 ### Set Idea Tool
@@ -527,6 +675,8 @@ Print the referenced idea node's
 * full proposal text
 * list of child schedule IDs, one line each
 
+Add some minimal formatting to make it look nice.
+
 
 ### Force Parent Idea Tool
 
@@ -560,9 +710,15 @@ Print out state of the referenced schedule node as a JSON object, with key/value
 
 * `hash`: string
 
-* `compile`: string, `compile.txt` result
+* `result`: string, `result.txt` result
 
-TODO benchmark, generator parameters, commentary
+* `benchmark`: list of objects,
+  each benchmark file becomes one benchmark JSON object (described later)
+
+* `commentary`: list of objects, one for each commentary file.
+  Has key/value pairs `timestamp` (formatted string timestamp value),
+  `importance` (number if importance exists, null if not),
+  `text` (string contents).
 
 
 ### JSON Idea Info Tool
@@ -590,12 +746,29 @@ Print out state of the referenced idea node as a JSON object, with key/value pai
 
     dh_hl history {workspace file name} [schedule ID]
 
-TODO
+Walk the branch of the tree starting from the referenced schedule node.
+Alternate between printing nodes and following edges from child to parent,
+terminating after printing the root node.
 
 When following an edge from child to parent node, check that
-this edge follows the tree consistency timestamp requirement.
+this edge follows the tree structure timestamp requirement.
 So we are guaranteed not to end up in an infinite loop
 even if the catalog state is cooked.
+
+For each schedule node, print:
+
+* Its ID
+* For each commentary file,
+  print its timestamp on one line,
+  and print the first up-to 72 characters of the first line of the commentary text.
+
+For each idea node, print in the same format as `dh_hl list_ideas`.
+Try to recycle common code plz.
+
+Add some minimal formatting to make it look nice.
+Put conspicuous dividers between the info printed for each node.
+
+FUTURE: use the `importance` stuff to filter to less info
 
 
 ### Fix Canonical Tool
@@ -613,13 +786,6 @@ Modify the catalog graph so that
   The proposal name and text indicates a resolved merge conflict.
 
 
-### Fix Merge Tool
-
-    dh_hl fix_merge {workspace file name}
-
-TODO worry about this later.
-
-
 ## Tool Safety Requirements
 
 Tools should assume the catalog directory will not be modified while the tool is running.
@@ -631,6 +797,7 @@ Tools NEVER overwrite or modify existing files, except for:
 
 * Workspace C++ files
 * `current_idea.txt`
+* `result.txt`
 * `canonical.txt` for `fix_canonical` tool
 * (TODO any exceptions I forgot?)
 
@@ -649,15 +816,26 @@ Defer overwriting files as the FINAL step of tools.
 
 Make SIGQUIT raise `KeyboardInterrupt` and try to prevent `KeyboardInterrupt` and exceptions from stopping the `atexit` handler.
 
-Remember to check DAG consistency requirements whenever adding new edges.
+Remember to check tree structure requirements whenever adding new edges.
 Strongly advised to use a common helper function for this.
 
 
-## Parameter Value JSON Format
+## Tool Internal Design
+
+TODO
+
+
+## Generator Parameters JSON Object Format
 
 TODO
 
 
 ## Benchmark JSON Format
 
-TODO
+TODO hostname, CPU count, runtime parsed from profile.
+
+FUTURE: once profile tool accepts explicit input sizes etc.
+we need to embed that in here.
+
+FUTURE: ask Andrew Adams to output JSON profiler output.
+So we can put all the information away in the benchmark files.
