@@ -9,7 +9,7 @@ As such, the implementation must be based only on the information provided by th
   If you suspect a bug in the harness, flag it for the main agent for review.
 
 * DO NOT read any of the Halide source code (`../src`) or `src_doc`.
-  It is permitted to read the Halide tutorials (`../tutorial`).
+  It is permitted to read the Halide tutorials (`../tutorial`) and loopdoc detail (`detail/`).
 
 * DO NOT attempt to run your own independent experiments on Halide.
   Run only the code in the `example/` directory.
