@@ -107,9 +107,5 @@ every read of a producer can stop doing so (and a producer computed at a fused
 "enclose every read" check, re-evaluated on the post-fusion structure — not new
 rules.
 
-The illegal cases above are rejected with an error rather than producing a loop
-nest; the legal ones cited (`producer_at_rvar`, `cross_stage_compute_at_shared`)
-do produce a nest.
-
 ---
 

@@ -107,9 +107,9 @@ Two consequences of Halide simplifying the nest before printing:
   it wraps (same loops, same order, same nested producers — i.e. the
   specialization changed nothing structural), Halide folds the if/else back into
   one copy, so that specialization leaves no trace. A branch that differs only in
-  a way this document's structural comparison ignores (the order of two plain
-  serial loops, a constant tile size) is still a *distinct* nest and is printed
-  separately. In practice every useful specialization changes the structure, so
+  a way this document does not distinguish (the order of two plain serial loops,
+  a constant tile size) is still a *distinct* nest and is printed separately. In
+  practice every useful specialization changes the structure, so
   each one prints its own subtree; the examples here are all structurally
   distinct per branch.
 
@@ -174,7 +174,7 @@ should be treated as a last resort:
 
 This document does not treat `select`-pruning as part of the scheduling model:
 **simplifying `select` (and thus this per-branch-producer behavior) depends on
-analyzing `Expr`s**, which the loop-nest model here does not do, so it is out of
+analyzing `Expr`s**, which this document treats as opaque (§1) — so it is out of
 scope.
 
 ### Legality
@@ -190,16 +190,14 @@ The restriction is on the caller (the member being fused in), not on the target
 
 * **Condition de-duplication.** Re-calling `specialize` with an *equal* condition
   `Expr` returns the **handle to the existing** specialization rather than
-  appending a new one. This document does not model that: the examples always use
-  **distinct** conditions (e.g. separate `Param<bool>`s), so each `specialize`
-  call is a new branch and no `Expr`-equality bookkeeping is needed.
+  appending a new one. Recognizing an *equal* condition requires `Expr`-equality
+  analysis, which this document treats as opaque (§1); give each branch a distinct
+  condition and the question does not arise.
 * **Identical-branch merge.** The "How it becomes loops" note above — that Halide
   folds an if/else whose branches are structurally identical into one printed copy
-  — is a `simplify()` effect a purely structural model need **not** reproduce: one
-  loop nest per branch (specializations then fallback) without merging is
-  equivalent for our purposes. Every example here has structurally distinct
-  branches, so no merge arises; matching Halide's merge would require
-  true-IR-identity comparison, which is out of scope.
+  — is a `simplify()` effect. Predicting exactly when it fires requires comparing
+  the branches' full IR for identity, an `Expr`-level judgment this document does
+  not make (§1); it treats each branch as printing its own subtree.
 * **Per-branch loop elision.** Placing a producer at a *different loop* per branch
   (e.g. `compute_at(f, y)` in one branch, `compute_at(f, x)` in another) gives it
   a different required region — and so a different set of elided (point) loops —

@@ -146,7 +146,7 @@ This document predicts loop *structure*, not two things Halide also prints that
 are incidental to it: the exact **loop-variable names** (compound, carrying
 Halide's internal `split`/`rfactor` naming lineage plus a global counter — not
 reproducible by hand) and constant **loop bounds** (`for x in [0, 7]`, which
-follow from bounds inference, out of scope here). What *is* significant: the
+follow from bounds inference, out of scope here). What it *does* predict: the
 produce/consume nesting, the number and nesting of `for` loops, their order, and
 their type (`parallel`, `vectorized`, `gpu_block`, …; §17).
 
@@ -654,9 +654,8 @@ and `f` being read *outside* `g` — a different consumer, or `g`'s own outer sc
 post-transform, post-fusion loop nest; no later directive adds new legality cases.
 
 Full rules — the loop-level/family model, indirect reads, the per-stage
-treatment, and the worked negative examples — are in
-[detail/compute_at_legality.md](detail/compute_at_legality.md). The illegal cases
-there are rejected with an error rather than producing a loop nest.
+treatment, and the worked illegal cases — are in
+[detail/compute_at_legality.md](detail/compute_at_legality.md).
 
 ---
 
@@ -1150,8 +1149,8 @@ forms (`vectorize(v, n)`, `parallel(v, n)`) `split` first and type **one** of th
 two halves (vectorize/unroll the inner, parallel the outer); the `gpu_*` family
 sets the type plus a device. The type **rides the dimension** through
 `split`/`fuse`/`reorder`, which is the second way a `reorder` becomes observable
-(§9): the type token is significant, whereas two untyped serial loops are
-indistinguishable.
+(§9): the type token is part of the printed nest, whereas two untyped serial
+loops are indistinguishable.
 
 Full directive list and overloads, the split-half asymmetry, the GPU specifics
 (device suffix, `gpu_tile`/`gpu_single_thread`, why GPU legality is out of scope),

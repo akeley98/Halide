@@ -41,9 +41,9 @@ f(x) += intm(x, r.y);             // now reduces over r.y only, reading intm
 
 Splitting the rule into the two Funcs it produces:
 
-* **The intermediate Func** (named `<orig>_intm`; since names are normalized
-  (§10) what matters is that it is *one new distinct Func*). It is a normal
-  multi-stage Func:
+* **The intermediate Func** (named `<orig>_intm`; its exact name is not
+  predictable (§10), so what matters is that it is *one new distinct Func*). It is
+  a normal multi-stage Func:
     * Its **pure stage**'s dimension list is the original Func's pure-stage
       dimensions, followed by the new pure `Var`s in `preserved` order — the new
       vars **outermost**. (Innermost→outermost for `rfactor(r.y, u)`: `[x, u]`.)

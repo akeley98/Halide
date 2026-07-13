@@ -21,10 +21,11 @@ gpu_thread <var><API>: # ForType::GPUThread
 gpu_lane <var><API>:   # ForType::GPULane
 ```
 
-This document ignores loop-variable names and constant bounds (§2), but the
-**type token and the `<device_api>` suffix are significant**. So a loop's
-observable identity is `(type, device, position in the nest)`. Serial is the
-default and prints as plain `for`; `serial(v)` resets a dimension back to it.
+This document does not track loop-variable names or constant bounds (§2), but the
+**type token and the `<device_api>` suffix are part of the nest it predicts**. So
+what distinguishes one loop from another here is its type, its device, and its
+position in the nest. Serial is the default and prints as plain `for`; `serial(v)`
+resets a dimension back to it.
 
 ### Setting a whole dimension's type
 
@@ -79,16 +80,15 @@ that carries a device.
 lowering passes (`CanonicalizeGPUVars`, `FuseGPUThreadLoops`), so what you
 schedule is what prints. GPU legality (a block loop must enclose a thread loop,
 warp-size limits on `gpu_lanes`, thread-count bounds) is enforced only during GPU
-lowering, which this path skips — so it is **out of scope** here (and needs
-bounds analysis micro does not do).
+lowering, which this path skips — so it is **out of scope** here.
 
 The type and the device are **independent** fields on the dimension: a non-GPU
 directive (`serial`/`parallel`/`vectorize`/`unroll`) changes only the type and
 leaves any device in place, and there is no directive that clears a device. So
 re-typing a GPU dim does *not* undo the GPU-ness — `gpu_threads(x)` then
 `vectorize(x)` prints `vectorized x<Default_GPU>`, a typed loop still carrying its
-device. (Real Halide would reject such a schedule during GPU lowering, which this
-path skips; reproducing that error is out of scope.)
+device. (Halide rejects such a schedule during GPU lowering, which
+`print_loop_nest` skips — so no error is raised here.)
 
 ### The type rides the dimension through `split` / `fuse` / `reorder`
 
@@ -133,7 +133,7 @@ when they match, the shared loop carries that one type.
   tail is handled; observable only through bounds, which this path normalizes away.
 * **`atomic()` / `allow_race_conditions()`** and the race-condition legality of a
   `parallel` `RVar` — a legality concern needing associativity/bounds analysis,
-  not a loop-nest-structure concern; micro does not model it.
+  not a loop-nest-structure concern.
 * **GPU legality** and **multiple device APIs** beyond the default (see above).
 
 ---

@@ -60,8 +60,8 @@ a wrapper, the clone *recomputes* `f`'s work rather than reading `f`'s result, s
 
 Each wrapper/clone is a **distinct** Func with its own auto-generated name
 (`f_in_g`, `f_clone_in_g`, plus an internal `$n` suffix the printer strips) — a
-separate node in the nest (§10 normalizes names to positional ids), never "the
-same Func twice."
+separate node in the nest (its exact name is not predictable, §10; what matters is
+that it is a distinct Func), never "the same Func twice."
 
 ### Two phases: eager at call time, deferred at lowering
 
@@ -148,7 +148,8 @@ Two ways to hit it:
 
 - **No path to `f` at all** — the search falls back to pinning the named consumer
   itself, which never calls `f` (`out.clone_in(g)` when `g` reads `f` but not
-  `out` — [clone_in_unused.cpp](../examples/clone_in_unused.cpp), a negative example).
+  `out` — [clone_in_unused.cpp](../examples/clone_in_unused.cpp), an illegal case
+  Halide rejects).
 - **A later eager rewrite severs the pinned call.** The pin is frozen at call
   time; `rfactor` (§12) then rewrites the definition, moving the read of `f` into
   a new intermediate, so the pin goes *stale*:

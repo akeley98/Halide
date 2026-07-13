@@ -60,8 +60,8 @@ So inline-of-non-pure is genuinely *more* than "a default `compute_at`": it is a
 per-use-site materialization, equal to a `compute_at` only when every use shares
 a depth. This is the deepest reason "inline" is not just a compute level with one
 site (§4's wart): for a non-pure Func it means "recompute at the innermost point
-of *each* use." (A model of the loop nest must therefore place it per use site,
-not by rewriting `f` to a single `compute_at`.)
+of *each* use." (So you must predict it per use site, not by rewriting `f` to a
+single `compute_at`.)
 
 ---
 

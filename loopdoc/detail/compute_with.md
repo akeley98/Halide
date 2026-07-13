@@ -69,9 +69,7 @@ its own fuse level. This order is not computed up front — it is *discovered by
 emission itself* (step 2 below), one ready stage at a time, as the nest grows. The
 body order, the produce nesting, and the legality rule all follow from this one
 sequence. The procedure mirrors Halide's `build_pipeline_group`
-([src_doc: compute_with/growth](../src_doc/compute_with/growth.md); the
-`[loopdoc-trace]` lines in any fused example's `debug_1` log print the member
-order and the stage order directly).
+([src_doc: compute_with/growth](../src_doc/compute_with/growth.md)).
 
 Two granularities are in play, and keeping them apart is the whole trick of this
 section: a fuse edge joins two *stages* (`f.s0` into `g.s1`), but the members are
@@ -183,8 +181,7 @@ Only the unfused stages start their own sibling nests, so the top-level body run
 `f.s2` into `g.s1`). The
 free `g.s2` lands last, after all of `h` — not "at `g`'s slot" — because `g`
 stalled in the first sweep behind its fused `s1` and was not revisited until
-`h.s0` freed it ([src_doc: compute_with/ordering](../src_doc/compute_with/ordering.md);
-verified via `[loopdoc-trace]`).
+`h.s0` freed it ([src_doc: compute_with/ordering](../src_doc/compute_with/ordering.md)).
 
 ### Loop ownership: the `(child, v)` site
 
@@ -224,7 +221,7 @@ Two consequences:
   `f`'s use). This holds identically for `compute_at`, `store_at`, and
   `hoist_storage`. (A fused loop's bounds are the union over the members, so a
   producer there can keep a loop it would collapse at a plain `compute_at`; as
-  always such elision is declared, not derived.)
+  always, which loops collapse is a bounds question, not derived here.)
 * Which shared loop collapses to a point is (as always) a bounds question, not
   derived here. Only the **spine owner's** shared loops can print as real `for`s;
   any other member's shared loops are already extent-1 scheduling points that
@@ -334,8 +331,7 @@ Halide bug, not a structural quirk: it can generate out-of-bounds accesses
 ([Halide #4751](https://github.com/halide/Halide/issues/4751)). Other
 `compute_with` shapes — multi-child groups, chains, members with differing
 extents, even differing fuse levels — compute *correct* results; this
-inconsistent-tiling case is the one to steer clear of. (Not modeled here — no
-example exercises it.)
+inconsistent-tiling case is the one to steer clear of.
 
 
 ---
