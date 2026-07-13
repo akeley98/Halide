@@ -142,11 +142,13 @@ schedule places multiple Funcs or separates storage from computation, so they
 are introduced with the schedule (§§5–8); §3 needs only `produce`, `for`, and
 the leaf.
 
-Two cosmetic details are *not* part of the model and are ignored by this
-document: the exact loop-variable names, and constant loop bounds
-(`for x in [0, 7]`). What *is* significant: the produce/consume
-nesting, the number and nesting of `for` loops, their order, and their type
-(`parallel`, `vectorized`, `gpu_block`, …; §17).
+This document predicts loop *structure*, not two things Halide also prints that
+are incidental to it: the exact **loop-variable names** (compound, carrying
+Halide's internal `split`/`rfactor` naming lineage plus a global counter — not
+reproducible by hand) and constant **loop bounds** (`for x in [0, 7]`, which
+follow from bounds inference, out of scope here). What *is* significant: the
+produce/consume nesting, the number and nesting of `for` loops, their order, and
+their type (`parallel`, `vectorized`, `gpu_block`, …; §17).
 
 ---
 
@@ -398,123 +400,17 @@ realizations that come after it.
   (`blur_x`, `blur_y`, and the anonymous `cast` wrappers) vanish; only the two
   rooted stages and the output appear.
 
-### Realization order in detail
+### Realization order: tie-breaking, inline Funcs, fused groups
 
-Picture the pipeline as a directed graph: **nodes are Funcs**, and each node has
-an **out-edge to every Func it reads** (consumer → producer). Every Func is a
-node, including those that end up inlined — inlining is decided later (§5), and
-keeping an inline Func as a node is what lets it **transmit dependencies** (inline
-`b` reading rooted `a` keeps `a` ahead of everything that reads `b`; in
-`box_blur`, `output` inlines `blur_y`→`blur_x`→`input_16`, so `input_16` precedes
-`output`).
-
-**The order is the post-order of a depth-first walk from the output(s)**, with
-one shared *visited* set: at each node, descend its out-edges, then append the
-node *after* its whole subtree; a node already visited is skipped. Two properties
-fall straight out:
-
-- a producer is appended before the consumer that descended into it, so **every
-  producer precedes all its consumers**;
-- a shared producer is reached by several paths but appended **once**, on the
-  first — **realized once, ahead of every reader**
-  ([examples/diamond_root.cpp](examples/diamond_root.cpp)). (Reaching a node that
-  is visited but not yet appended is a back-edge = dependency cycle = error.)
-
-The name never reorders the graph globally. A producer reachable only through an
-alphabetically-*later* sibling realizes *after* that sibling's whole subtree even
-if its own name sorts earlier:
-[examples/realization_order_dfs.cpp](examples/realization_order_dfs.cpp) yields
-`mid, f, a, out` — **`a` after `f` despite `"a" < "f"`** — because `a` is
-reachable only behind `keep` in `out`'s out-edges.
-
-#### The one degree of freedom: the order of a node's out-edges
-
-The walk's only choice is the order in which it descends a node's out-edges (its
-independent producers). Give each edge a **label** — the key of the producer it
-points at — and the walk descends a node's out-edges in **label order**. The label
-is:
-
-> **prefix**, then **first-visitation index**, then **full name** — where the
-> prefix is the name with any `$n` uniqueness suffix and trailing digits removed.
-> The first-visitation index is **unique per Func**, so it always settles a prefix
-> tie; the third field, full name, is only a deterministic total-order fallback
-> and is never actually the deciding field.
-
-This ranks only *one consumer's* producers; it is not a global sort, and not the
-left-to-right order of the defining expression
-([examples/tiebreak_realization_order.cpp](examples/tiebreak_realization_order.cpp):
-`a2d` before `b1d` though written `b1d(x) + a2d(x, y)`). For an ordinary edge the
-label is just the target Func's key, so you can think "sort by target"; keeping it
-as an edge *label* rather than a property of the target vertex matters only for
-`compute_with`, below.
-
-The middle field, **first-visitation index**, is a structural stamp (a separate
-pre-order DFS, detailed next) — *not* a name. It is the field that actually
-settles ties: when two producers share a prefix
-([examples/tiebreak_visitation_order.cpp](examples/tiebreak_visitation_order.cpp):
-two `b`-prefixed producers go by which is *visited* first, not alphabetically),
-and *especially* when they share a full name — two `rfactor` intermediates both
-printed `g_intm`, so prefix and name tie and first-visitation is the **only**
-deciding field. This same ranking orders sibling producers filed at any single
-`compute_at` level, not just root (§7).
-
-#### First-visitation index
-
-First-visitation order is a *pre-order* depth-first walk from the output(s),
-separate from the realization walk: on reaching a Func, **stamp it with the next
-index the first time it is seen**, then descend into the Funcs it calls, skipping
-any already stamped. "The Funcs it calls, in order" means the calls across the
-Func's whole definition, in this order:
-
-- **Stages first-to-last** — the pure (init) definition, then each update stage in
-  order (§3), so a producer read only in a later update is stamped later.
-- **Within a stage, in the compiler's definition order**: first the RDom
-  **predicate** reads (a reduction's `where`-clause, if any — rarely the deciding
-  read), then the **RHS** value reads (what the
-  stage computes), then the **LHS** index reads (where it stores). A Func read
-  **only on the LHS** — a data-dependent scatter index, e.g. `hist(idx(x)) += 1` —
-  is still visited and still gets an index; it is just stamped *after* that
-  stage's predicate and RHS reads. (It is a genuine producer: `idx` must be
-  computed before the stage can run, so it needs a slot like any other.)
-- **Then the stage's `specialize` branches**, in declaration order, recursively
-  (§15) — so a producer read only in a branch is stamped after the base
-  definition's reads of the *same* stage.
-
-(This mirrors the compiler's own definition walk — predicate, then values, then
-args, then specializations — in `DefinitionContents::accept`.)
-
-#### Fused groups: one contracted vertex (forward reference: `compute_with`, §14)
-
-Because the tie-break lives on the **edge label**, `compute_with` (§14) is a plain
-graph operation: **contract the group's members into a single vertex**. Contraction
-in a *multigraph* keeps every edge — it never merges or relabels them — so the
-group vertex has:
-
-- **out-edges** = the union of the members' out-edges (to the members' producers),
-  labels intact — so the group is realized once, after everything *any* member
-  reads;
-- **in-edges** = the union of the members' in-edges (from consumers), **each still
-  carrying the label of the member it originally pointed at**.
-
-Those preserved in-edge labels are the whole subtlety, and they are ordinary
-multigraph edges — not a "half-collapse": a consumer that read member `a` has an
-edge into the group labelled with `a`'s key, a consumer that read member `z` has
-one labelled with `z`'s key. So the group vertex has **no key of its own** — where
-it sorts among a given consumer's other producers depends on *which member that
-consumer read*, i.e. on the edge label. Two consequences, both ordinary
-labelled-graph facts:
-
-- the group is one vertex, so it precedes every consumer of any member and follows
-  every producer of any member
-  ([examples/fused_group_consumer_interleave.cpp](examples/fused_group_consumer_interleave.cpp));
-- flipping which member a consumer reads relabels that consumer's edge into the
-  group, moving the group relative to the consumer's other producers
-  ([examples/fused_group_edge_keyed_tiebreak.cpp](examples/fused_group_edge_keyed_tiebreak.cpp)).
-
-§14 covers the group's internal structure; for realization order it is exactly
-this one contracted vertex, edges and labels preserved.
-
----
+That topological order is not unique: where the graph leaves a consumer's
+independent producers unordered, Halide picks a **deterministic** order. Two facts
+complete the picture — every Func is a node in the graph *including* ones that end
+up inlined (an inline Func still transmits the dependencies of what it reads,
+keeping its producers ahead of its consumers), and a **fused group** (§14) is
+placed as a single node. The exact walk (a post-order DFS from the output), the
+per-consumer edge-label tie-break and its first-visitation index, and the
+fused-group treatment are in
+[detail/realization_order.md](detail/realization_order.md).
 
 ## 7. `compute_at`: realize inside a consumer's loop
 
@@ -994,15 +890,17 @@ and inner loops of the split.
 
 ## 10. Function names and identity in the output
 
-Halide prints each Func's name, but this document identifies Funcs *positionally*
-(`F0`, `F1`, … in order of first appearance) rather than by exact name, so you only need
-to get the *structure* and the *number of distinct Funcs* right, not reproduce
-Halide's exact names. This matters because some Funcs are auto-named:
+You do not need to predict Halide's exact Func *names*. Many Funcs are
+auto-generated — `in`/`clone_in` wrappers and clones (§13), `rfactor`
+intermediates (§12), boundary-condition helpers (below) — with internal suffixes
+that are not reproducible by hand. What matters for the loop nest is its
+*structure* and the set of **distinct Funcs** it realizes: how many there are and
+how they nest. Two naming facts that affect that Func set:
 
-* `BoundaryConditions::repeat_edge(input)` and friends create a wrapper Func
-  (printed `repeat_edge`) whose dimensions are auto-named `_0, _1, _2, …`. It
-  is a real Func and is realized if scheduled (in `box_blur` it is
-  `compute_root`). Its dimension count matches the input's.
+* `BoundaryConditions::repeat_edge(input)` and friends create a **real** wrapper
+  Func (printed `repeat_edge`, dimensions auto-named `_0, _1, _2, …`); it is
+  realized if scheduled (in `box_blur` it is `compute_root`), and its dimension
+  count matches the input's.
 * `cast<T>(...)` does **not** create a Func — it is an Expr operation that
   stays inside the leaf line of whatever definition contains it.
 
@@ -1146,15 +1044,16 @@ The whole loop nest follows from the rules above, assembled into one procedure:
    always computed at the outermost level (§5, §6).
 
 2. **Compute the realization order** — order the pipeline so every producer
-   precedes its consumers, by the exact procedure in §6 ("Realization order in
-   detail" — a post-order DFS from the output, not a global sort). All Funcs remain
+   precedes its consumers (the topological sort of §6; the exact DFS and tie-break
+   are in [detail/realization_order.md](detail/realization_order.md)). All Funcs remain
    in this order so they can pass dependencies along; a **pure inline** Func
    (§4) is never realized and drops out of the steps below (§5), but a non-pure
    inline Func *is* realized (§11) and keeps its slot. An `rfactor` intermediate
    (§12), and any `in`/`clone_in` wrapper or clone (§13), are likewise ordinary
    Funcs in this order — a wrapper/clone sits between the wrapped Func and the
    consumers it was created for — with whatever schedule each was given. A
-   **fused group** (§14) is a single contracted vertex here (§6 "Fused groups: one
+   **fused group** (§14) is a single contracted vertex here
+   ([detail/realization_order.md](detail/realization_order.md) "Fused groups: one
    contracted vertex"):
    the group is placed as a unit, then **within** the group the members take
    consecutive slots in §14's within-group order (a topological sort over the
@@ -1267,6 +1166,8 @@ Several features above are summarized here and treated in full in `detail/`, so
 the main document stays a readable overview. Each detail doc's section references
 (`§N`) point back to this file.
 
+* [detail/realization_order.md](detail/realization_order.md) — the realization-order
+  DFS, its tie-break and first-visitation index, and fused groups as one node (§6).
 * [detail/compute_at_legality.md](detail/compute_at_legality.md) — the full
   `compute_at` legality rules and the loop-level/family model (§7).
 * [detail/inline_nonpure.md](detail/inline_nonpure.md) — inlined non-pure Funcs,

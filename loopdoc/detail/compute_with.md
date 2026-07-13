@@ -44,8 +44,9 @@ edges:
   group while `f` has two parents
   ([examples/compute_with_two_parents.cpp](../examples/compute_with_two_parents.cpp)).
 
-For **realization order** the whole group is **one contracted vertex** (§6 "Fused
-groups: one contracted vertex"): the members' out-edges (to their producers) and
+For **realization order** the whole group is **one contracted vertex**
+([realization_order.md](realization_order.md) "Fused groups: one contracted
+vertex"): the members' out-edges (to their producers) and
 in-edges (from consumers) are all preserved with their labels, so the group is
 placed once — after everything any member reads, before any consumer of any
 member — while an in-edge still carries the label of the specific member a
@@ -80,7 +81,8 @@ of A fuses into a stage of B.
 1. **Order the members (Funcs).** Topologically sort the Funcs with each child
    before its parent, breaking whatever the fuse edges leave unordered — several
    children of one parent, or one child's two parents — by the §6 realization
-   order (the same name-then-visitation tie-break). Members have no
+   order (the same name-then-visitation tie-break,
+   [realization_order.md](realization_order.md)). Members have no
    producer/consumer dependency among themselves (a precondition) and no cyclic
    fuse edges (Legality), so the fuse edges are the only ordering constraint and
    the sort is well-defined. A chain `g.compute_with(f)`, `h.compute_with(g)` is
