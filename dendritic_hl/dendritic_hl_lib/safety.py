@@ -85,6 +85,25 @@ def new_file(path, data):
     _new_entries.append(("file", path))
     with os.fdopen(fd, "wb") as f:
         f.write(data)
+    _maybe_inject_failure()
+
+
+# -- test-only failure injection --------------------------------------------
+# When DH_HL_TEST_FAIL_AFTER=<n> is set, raise after the n-th new_file this
+# run.  Lets subprocess tests prove the atexit rollback restores a partial
+# mutation.  The file(s) already created remain recorded, so rollback undoes
+# them.  Guarded by the env var; a no-op in normal use.
+_new_file_count = 0
+
+
+def _maybe_inject_failure():
+    global _new_file_count
+    _new_file_count += 1
+    n = os.environ.get("DH_HL_TEST_FAIL_AFTER")
+    if n is not None and _new_file_count >= int(n):
+        raise RuntimeError(
+            "DH_HL_TEST_FAIL_AFTER: injected failure after {} new file(s)"
+            .format(_new_file_count))
 
 
 def queue_overwrite(path, data):
