@@ -40,6 +40,9 @@ My goals for the Dendritic Halide Harness (`dendritic_hl.py`, shortened as `dh_h
   allowing us to monitor stats on how often agents generate illegal schedules.
   Make life easier for now by assuming one C++ file containing a typical
   Halide::Generator setup (2-phase build, C++ -> C++ bin -> Halide bin).
+  **Simplifying assumption:** the workspace C++ file registers **exactly one**
+  generator. This lets the build/profile tools discover the generator name
+  automatically (see the Build Tool) instead of parsing it out of the source.
 
 * **Maximize Compatibility with Source Control:**
   "transparent"-ish on-disk state for catalog, designed to minimize merge conflicts.
@@ -48,8 +51,8 @@ My goals for the Dendritic Halide Harness (`dendritic_hl.py`, shortened as `dh_h
 * Implemented as a **Python 3 package** for now even though I liketh it not.
   It is launched by the `./dh_hl` stub.
 
-* In the end, this will only be a sketchy prototype, as I'm a lowly intern
-  with not that much time in the grand scheme of things.
+* In the end, this will only be a sketchy prototype,
+  as there is only 2 months left in my internship.
 
 
 ## Conceptual State
@@ -100,9 +103,10 @@ and this made the timestamp invariant easier, but made
 
 ### Timestamp Format
 
-Always use UTC time, format with `strftime("%Y-%m-%dT%H%M%S.%fZ")` (microsecond precision).
+Always use UTC time, format with `strftime("%Y-%m-%dT%H%M%S_%fZ")` (microsecond precision).
 These are sortable lexicographically, assuming the year is between 1000 and 9999 CE.
 We assume these increase monotonically even though leap seconds screw us.
+(Note, we avoid `.` due to short IDs, to be described later).
 
 
 ### Hash Format
@@ -217,6 +221,11 @@ This contains files and directories holding state:
 *Merge risk:* `parent.txt` merge conflict if two branches retroactively parented
 a root schedule node to two different idea nodes.
 No automatic fix provided -- this power should be used very sparingly anyway.
+
+*Merge risk:* `result.txt` conflict.
+Unlikely but could happen due to committing a failed build that
+later worked due to trying different generator parameters.
+No automatic fix provided.
 
 *Merge risk:* (unlikely) incoming different benchmarks, advice, or commentaries with the same timestamp.
 No automatic fix provided.
@@ -336,7 +345,7 @@ Unless otherwise stated, any of the `{...}` components may be empty.
   whose hash starts with `{hash prefix}`.
   (This form has two `.`, one hidden in the `{idea node short ID}`).
 
-* `.{hash prefix}`:
+* `root.{hash prefix}`:
   matches all root node schedules whose hash starts with `{hash prefix}`,
   which cannot be empty.
 
@@ -500,6 +509,16 @@ Use the `ninja` build tool to
 * link `RunGenMain` against the generated `registration.cpp` + static library
   to finish a standalone benchmarkable binary.
 
+**Generator name.** `GenGen` still requires `-g <name>` even when only one
+generator is registered, but under the single-generator assumption (see Goals)
+the name is discovered automatically: run the generator executable with **no**
+`-g`, and it errors out listing `available Generators are:` followed by the sole
+registered name; scrape that single name and pass it as `-g`. Then use a
+**fixed** output basename (e.g. `-f dh_hl_gen`), so all emitted filenames
+(`dh_hl_gen.a`, `dh_hl_gen.registration.cpp`, `dh_hl_gen.conceptual.stmt`, ...)
+are independent of the generator's registered name. This whole path was tested
+end-to-end against the local Halide build.
+
 [RunGenMain doc](https://halide-lang.org/docs/md_doc_2_run_gen.html)
 
 Print the file name (in the `bin/`) directory of the `conceptual.stmt` file.
@@ -545,9 +564,13 @@ FUTURE: switch to CMake if absolutely huge payoff would happen (I hate CMake).
 
 The following was tested end-to-end against the local Halide build at
 `~/Halide/build/` and produces a standalone binary that both benchmarks
-(via the profiler) and emits the `conceptual.stmt`. Adapt the fixed name
-`brighten` (`-f` basename / `-g` generator name) to whatever the workspace
-generator registers.
+(via the profiler) and emits the `conceptual.stmt`. In these examples the
+name `brighten` is used for both `-g` (generator name) and `-f` (output
+basename) since the example generator registers `brighten`. The real tool
+instead **discovers** the `-g` name (run the generator exe with no `-g` and
+scrape the `available Generators are:` list, which holds a single name under
+the single-generator assumption) and passes a **fixed** `-f` basename such as
+`dh_hl_gen`; this decoupled variant was also tested end-to-end.
 
 **Gotchas that cost time (all confirmed on this machine):**
 
@@ -610,7 +633,7 @@ this repo's `*.ninja*` gitignore rule and can be committed; hence the `-f`.
     dh_hl profile {workspace file name} [parameters file]
 
 This is like `dh_hl build` except
-* The Halide binary is run with Andrew Adam's new profiler tool
+* The Halide binary is run with Andrew Adams's new profiler tool
   and the benchmark results are recorded.
 * The parameters file may contain a list of generator parameters JSON object,
   with each parameter set profiled in turn.
@@ -686,6 +709,8 @@ Requirements:
 If the command fails due to the last requirement:
     * Advise this was already done if the schedule node is already the canonical schedule.
     * Advise the `dh_hl new_idea` and `dh_hl set_idea` tools otherwise.
+
+There is intentionally no "change canonical schedule" tool.
 
 
 ### Comment Tool
