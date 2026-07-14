@@ -699,8 +699,10 @@ class Catalog:
                 + repr(proposal_name))
         if not parent_schedule.is_major():
             raise DhHlError(
-                "parent of an idea must be a major schedule (root or a "
-                "canonical schedule); {} is minor".format(
+                "parent of an idea must be a major schedule (root or a canonical schedule);\n"
+                "{} is minor\n"
+                "Advice: consider the `dh_hl canon` tool,\n"
+                "if you're satisfied the current schedule implements the current idea".format(
                     self.format_schedule_id(parent_schedule)))
         full_id = ids.make_idea_id(proposal_name, parent_schedule.full_id)
         if full_id in self.ideas:

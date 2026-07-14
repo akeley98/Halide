@@ -314,7 +314,7 @@ def cmd_history(args):
     while node is not None:
         print("#" * 72)
         print("Schedule: " + catalog.format_schedule_id(node))
-        print("#" * 72)
+        print("-" * 72)  # Use "-" to make the ID and its contents less visually separated than "#"
 
         ideas = catalog.child_ideas(node)
         if ideas:
