@@ -882,29 +882,30 @@ Print out state of the referenced idea node as a JSON object, with key/value pai
 
     dh_hl history {workspace file name} [schedule ID]
 
-Walk the branch of the tree starting from the referenced schedule node.
-Alternate between printing nodes and following edges from child to parent,
-terminating after printing the root node.
+Walk the branch of the tree starting from the referenced schedule node,
+going up towards a root node.
 
-When following an edge from child to parent node, check that
-this edge follows the tree structure timestamp invariant.
+Starting at the referenced schedule node, print:
+
+* Its ID
+* Its child idea nodes in the same format as `dh_hl list_ideas`.
+  Mark the child idea node that is the parent of the previously printed schedule node.
+  Try to recycle common code plz.
+* For each commentary file, print its timestamp on one line,
+  and print the first up-to 72 characters of the first line of the commentary text.
+
+After each printed schedule node, move on to its parent idea node's parent schedule node,
+and stop after printing the root schedule node reached.
+
+Add some minimal formatting to make it look nice.
+Put conspicuous dividers between the info printed for each schedule node.
+
+When traversing up the tree,
+check that the two edges follow the tree structure timestamp invariant.
 So we are guaranteed not to end up in an infinite loop
 even if the catalog state is cooked.
 
-For each schedule node, print:
-
-* Its ID
-* For each commentary file,
-  print its timestamp on one line,
-  and print the first up-to 72 characters of the first line of the commentary text.
-
-For each idea node, print in the same format as `dh_hl list_ideas`.
-Try to recycle common code plz.
-
-Add some minimal formatting to make it look nice.
-Put conspicuous dividers between the info printed for each node.
-
-FUTURE: use the `importance` stuff to filter to less info
+FUTURE: use the `importance` stuff to filter to less info.
 
 
 ### Fix Canonical Tool
