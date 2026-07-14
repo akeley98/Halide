@@ -161,7 +161,7 @@ The top-level catalog directory contains sub-directories
 
 and files
 
-* `current_idea.txt`
+* `current_idea_state.txt`
 * `.gitignore`, ignores `bin`
 
 
@@ -227,7 +227,7 @@ This contains files and directories holding state:
 
 ### Current Idea State on Disk
 
-Stored in `current_idea.txt`, single line with trailing newline holding
+Stored in `current_idea_state.txt`, single line with trailing newline holding
 
 * `dendritic_hl_root({timestamp})` to encode the "no current idea" state
 
@@ -339,7 +339,7 @@ It is rarely needed to pass this, unless you're doing some heavy-handed modifica
 The "current idea node" is nothing, if the current idea state encodes "no current idea",
 and otherwise the idea node referenced by the "some current idea" state.
 Commands that explicitly edit the current idea state must not error out
-due to errors in the existing `current_idea.txt`.
+due to errors in the existing `current_idea_state.txt`.
 
 
 ### Help Tool
@@ -796,7 +796,7 @@ Tools can assume sha256 collisions never happen.
 Tools NEVER overwrite or modify existing files, except for:
 
 * Workspace C++ files
-* `current_idea.txt`
+* `current_idea_state.txt`
 * `result.txt`
 * `canonical.txt` for `fix_canonical` tool
 * (TODO any exceptions I forgot?)
@@ -804,17 +804,25 @@ Tools NEVER overwrite or modify existing files, except for:
 Accordingly, use `"x"` mode or equivalent when creating new files.
 
 We furthermore must make all changes to the catalog atomic as much as possible.
-For any tool run, record a list of new files created, and NEW idea node or schedule node directories created (not existing directories touched).
+For any tool run, record a list of new files and new directories created
+(not existing directories touched).
 Use a common helper for this.
 
 If the tool fails, an `atexit` handler will run that deletes all those recorded new files and directories.
-It is OK to ignore node sub-directories like `child/`; I just care that there are no half-baked new idea node or schedule node directories left behind.
+Again, be very very careful about new vs. existing directories.
+Don't delete any directories you didn't create.
+
+OVERRIDING SAFETY RULE: never use "recursive directory delete" functions.
+If you delete files and directories in the opposite order as creation,
+a directory will be empty when deleted, so `os.rmdir` will work.
+This rule prevents PERMANENT DAMAGE from bugs (like deleting my `home`).
 
 The "new files" don't include the workspace C++ file and the special case overwritten files.
 NEVER delete the workspace C++ file.
 Defer overwriting files as the FINAL step of tools.
 
 Make SIGQUIT raise `KeyboardInterrupt` and try to prevent `KeyboardInterrupt` and exceptions from stopping the `atexit` handler.
+(But don't get stuck in an infinite loop if an `OSError` happens).
 
 Remember to check tree structure requirements whenever adding new edges.
 Strongly advised to use a common helper function for this.
@@ -822,7 +830,69 @@ Strongly advised to use a common helper function for this.
 
 ## Tool Internal Design
 
-TODO
+<!-- Claude: read this carefully and tell me if I'm off my pills with the proposed design -->
+
+Obviousness and idiot-proofing are priorities for this prototype since
+this design may evolve quickly and isn't meant to scale to production uses.
+I'd like to have most of the harness code working with an in-memory representation
+that's fairly 1:1 with the conceptual state.
+
+Each tool execution is short-lived and breaks into multiple phases
+
+* Lazily load the needed parts of the catalog to memory
+* Modify state in-memory (can be interleaved with lazy loads)
+* Flush changes to the catalog directory, in two sub-phases,
+  write all new files, then overwrite existing files.
+
+I don't want any file opened or parsed more than once.
+
+There is a top-level `Catalog` object, owning
+* A single `CurrentIdeaState` object
+* A `Dict[str, IdeaNode]`: idea nodes by full ID
+* A `Dict[str, ScheduleNode]`: schedule nodes by full ID
+
+Each object
+* is accessed with getters and setters
+* has initially empty state, and is lazily initialized from disk when needed by getters
+* is dirtied when modified, or upon creation if it's not loaded from disk
+* has `flush_new` and `flush_overwrite` callbacks that implement
+  the "write new files" and "overwrite existing files" steps of flushing
+  state to disk
+* may own lazily-created sub-objects corresponding to some piece of conceptual state;
+  for example, a schedule node object owns commentary sub-objects.
+
+Furthermore, each node may contain partially-initialized derived
+state (like the implied list of child nodes), which won't be complete
+until each child object is walked.
+
+Dirty objects get added to a `Dict[int, object]` dict where the key is the object's `id`.
+All objects in here get flushed just before the tool exits.
+* Each file on disk is strictly "owned" by a single object.
+* An object being dirty does not imply owner objects are dirty.
+* Ergo, an object only has to flush its own direct state, not recursively
+  any state of sub-objects.
+* In the previous schedule/commentary example, the schedule node doesn't
+  write any commentary files; the commentary object itself has to be
+  dirty for this to happen.
+
+Whenever you list the contents of a directory, this should become
+a `dict` mapping some unique key (often derived from filename)
+to initially-empty objects.
+So you don't have to list the contents of any directory twice.
+Those empty objects become non-empty if actually explored.
+
+On startup,
+* Parse the current idea state, but don't raise any exceptions for parser errors.
+  These get encoded into `CurrentIdeaState` and raised only if needed.
+* Initialize the node dicts by listing files in the `sch/` and `idea/` directories.
+  Each is stored as an empty-state `ScheduleNode` or `IdeaNode`.
+
+Some objects' state is encoded by the presence or absence of a file
+(weird design motivated by my anti-git-merge-conflict goal).
+For example, the canonical schedule of an idea node is like this.
+Don't try to read a nonexistent file more than once.
+So in this example, the `CanonicalSchedule` object has to encode a
+tri-state (a) empty (unknown state), (b) doesn't exist, (c) exists.
 
 
 ## Generator Parameters JSON Object Format
