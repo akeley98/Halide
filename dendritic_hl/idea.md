@@ -12,6 +12,9 @@ Claude: please review this document for
 Although, I have to be honest that I may not be able to consider
 improvements due to the internship time limits I'm under.
 
+You may play around with Halide to get an idea of what I'm asking for,
+especially for the build and profile tools.
+
 To be clear, you are not asked to implement this document,
 only review it.
 -->
