@@ -519,6 +519,15 @@ registered name; scrape that single name and pass it as `-g`. Then use a
 are independent of the generator's registered name. This whole path was tested
 end-to-end against the local Halide build.
 
+If the `available Generators are:` list contains anything other than exactly
+one name (zero, or two or more), the tool reports a harness error and stops.
+This check happens *after* phase 1 (the C++ compile to a generator exe) has
+already succeeded, so it is a workspace-authoring problem (the single-generator
+assumption is violated), not a build outcome to catalogue: do **not** record a
+result-state update for it, and leave any pre-existing result on a reused node
+untouched. The error should name the generators found so the user can fix the
+workspace file. This enforces the assumption rather than silently picking one.
+
 [RunGenMain doc](https://halide-lang.org/docs/md_doc_2_run_gen.html)
 
 Print the file name (in the `bin/`) directory of the `conceptual.stmt` file.
@@ -613,7 +622,7 @@ Phase 4 -- link the standalone binary:
 
 Run / benchmark:
 
-    ./brighten.rungen --benchmarks=all --estimate_all --verbose
+    HL_PROFILER_JSON_OUTPUT=out.json ./brighten.rungen --benchmarks=all --estimate_all --verbose
 
 where `$H` = `~/Halide/build`. For `profile`, phase 1 runs once and phases
 2--4 + the run loop over each parameter set. Only phase 2 sees the generator
@@ -649,6 +658,7 @@ Build the C++ to Halide generator once, then, for each object in the list,
 * Generate the Halide binary from the generator (no `stmt` needed this time).
 * Update result state of the edited schedule node as in `dh_hl build`, step 3.
 * Run the binary with `--verbose --benchmarks=all --estimate_all` (FUTURE: `--estimate_all` isn't great)
+  and with `HL_PROFILER_JSON_OUTPUT=...` to get profiler JSON data out.
 * Add a new benchmark JSON object (documented later) to the edited schedule node's benchmarks set.
   NOTE: this is unlikely but a Claude reviewer of the document recommended
   busy waiting for the timestamp to change, so 2 benchmarks in the same microsecond
@@ -684,9 +694,6 @@ FUTURE: allow alternative to Halide's random number generator,
 since the buffer contents may have considerable impact on
 performance for algorithms like atomic-increment histograms
 (e.g. many 0s = lock contention, not observable for uniform distribution).
-
-FUTURE: ask Andrew Adams to output JSON profiler output.
-So we can put all the information away in the benchmark files.
 
 FUTURE: GPU target.
 More in general really we should just pass args through
@@ -988,7 +995,8 @@ Each object
 * is accessed with getters and setters
 * has initially empty state, and is lazily initialized from disk when needed by getters
 * is dirtied when modified, or upon creation if it's not loaded from disk;
-  do this in each setter and non-load-from-disk `__init__` path.
+  do this in each setter and non-load-from-disk `__init__` path;
+  DON'T ever expect outside code to dirty an object manually!
 * has `flush_new` and `flush_overwrite` callbacks that implement
   the "write new files" and "overwrite existing files" steps of flushing
   state to disk
@@ -1043,44 +1051,17 @@ Pass all pairs to the Halide generator as `key=value`.
 
 ## Benchmark JSON Format
 
-Key value pair:
+Key value pairs:
 
 * `hostname`: string, hostname of system used for profiling
 * `cpu_count`: number, CPU count of system used for profiling
 * `parameters`: object, generator parameters used to generate the profiled Halide binary
-* `total_ms`: number, total runtime in milliseconds
-* `samples`: number
-* `runs`: number
-* `ms_per_run`: number, milliseconds per run
-* `average_threads_used`: number
+* `profiler`: the profiler JSON output should be a JSON object whose "pipelines"
+  value is a list of 1 object. This is that inner object.
+  (There will be more than 1 if we support multiple generators; just error for != 1 for now).
 
 Note this is not the profiler you'll find documented on the internet.
 The profiler was rewritten internally for this project.
-The output looks like this:
-
-    --------------------------------------------------------------------------------------------------------
-    hist
-     total time: 213.752991 ms  samples: 162  runs: 1  time per run: 213.752991 ms
-     average threads used: 10.802469
-     heap allocations: 3344  peak heap usage: 17M
-      name                   │ time     percent │ active│ heap │ peak │ avg  │
-                             │                  │threads│allocs│  mem │  mem │
-      thread idle            │   2.51ms ( 1.1%) │  3.50 │      │      │      │
-      malloc                 │   1.26ms ( 0.5%) │  6.00 │      │      │      │
-      free                   │   0.00ms ( 0.0%) │       │      │      │      │
-      hist_rows.in()         │  26.69ms (12.4%) │ 10.64 │    1 │   14M│   14M│
-      ├Y.clone_in(hist_rows) │   0.00ms ( 0.0%) │       │ 3343 │ 3520K│  320K│
-      └hist_rows             │   1.25ms ( 0.5%) │ 11.00 │      │ 4096 │      │
-      hist                   │   1.27ms ( 0.5%) │ 10.00 │      │ 1024 │      │
-      cdf                    │   0.00ms ( 0.0%) │       │      │ 1024 │      │
-      output                 │ 180.75ms (84.5%) │ 11.00 │      │      │      │
-    --------------------------------------------------------------------------------------------------------
-
-For now just use a fragile heuristic to scan the information out of
-the top report lines.
-
-FUTURE: ask Andrew Adams to output JSON profiler output.
-So we can put all the information away in the benchmark files.
 
 FUTURE: once profile tool accepts explicit input sizes etc.
 we need to embed that in here.
