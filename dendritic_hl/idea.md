@@ -230,7 +230,10 @@ No automatic fix provided.
 *Merge risk:* (unlikely) incoming different benchmarks, advice, or commentaries with the same timestamp.
 No automatic fix provided.
 
-*Merge risk:* Could undetected violations of tree structure timestamp invariant happen?
+*Merge risk:* Undetected tree structure invariant violations may happen
+as a result of combining `force_parent_idea` in one branch and adding
+new child idea nodes and schedules in another.
+It's possible for the two operations to be legal separately, but not together.
 
 
 ### Idea Nodes on Disk
@@ -305,7 +308,7 @@ The IDs previously defined for idea and schedule nodes are the full IDs.
 Only full IDs are stored in the catalog, because they are stable over time.
 For convenience, short IDs are preferred almost everywhere else instead.
 
-Short IDs are contain at least one `.` OR contain only hex characters.
+Short IDs contain at least one `.` OR contain only hex characters.
 Full IDs contain no `.` and at least one `_`.
 
 Each short ID matches some number of nodes.
@@ -934,7 +937,6 @@ Tools NEVER overwrite or modify existing files, except for:
 * `current_idea_state.txt`
 * `result.txt`
 * `canonical.txt` for `fix_canonical` tool
-* (TODO any exceptions I forgot?)
 
 Accordingly, use `"x"` mode or equivalent when creating new files.
 
