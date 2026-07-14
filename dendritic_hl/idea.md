@@ -827,15 +827,51 @@ TODO
 
 ## Generator Parameters JSON Object Format
 
-TODO
+Object containing generator name / parameter value pairs.
+Each value can be bool, number, or string.
+Pass all pairs to the Halide generator as `key=value`.
 
 
 ## Benchmark JSON Format
 
-TODO hostname, CPU count, runtime parsed from profile.
+Key value pair:
 
-FUTURE: once profile tool accepts explicit input sizes etc.
-we need to embed that in here.
+* `hostname`: string, hostname of system used for profiling
+* `cpu_count`: number, CPU count of system used for profiling
+* `parameters`: object, generator parameters used to generate the profiled Halide binary
+* `total_ms`: number, total runtime in milliseconds
+* `samples`: number
+* `runs`: number
+* `ms_per_run`: number, milliseconds per run
+* `average_threads_used`: number
+
+Note this is not the profiler you'll find documented on the internet.
+The profiler was rewritten internally for this project.
+The output looks like this:
+
+    --------------------------------------------------------------------------------------------------------
+    hist
+     total time: 213.752991 ms  samples: 162  runs: 1  time per run: 213.752991 ms
+     average threads used: 10.802469
+     heap allocations: 3344  peak heap usage: 17M
+      name                   │ time     percent │ active│ heap │ peak │ avg  │
+                             │                  │threads│allocs│  mem │  mem │
+      thread idle            │   2.51ms ( 1.1%) │  3.50 │      │      │      │
+      malloc                 │   1.26ms ( 0.5%) │  6.00 │      │      │      │
+      free                   │   0.00ms ( 0.0%) │       │      │      │      │
+      hist_rows.in()         │  26.69ms (12.4%) │ 10.64 │    1 │   14M│   14M│
+      ├Y.clone_in(hist_rows) │   0.00ms ( 0.0%) │       │ 3343 │ 3520K│  320K│
+      └hist_rows             │   1.25ms ( 0.5%) │ 11.00 │      │ 4096 │      │
+      hist                   │   1.27ms ( 0.5%) │ 10.00 │      │ 1024 │      │
+      cdf                    │   0.00ms ( 0.0%) │       │      │ 1024 │      │
+      output                 │ 180.75ms (84.5%) │ 11.00 │      │      │      │
+    --------------------------------------------------------------------------------------------------------
+
+For now just use a fragile heuristic to scan the information out of
+the top report lines.
 
 FUTURE: ask Andrew Adams to output JSON profiler output.
 So we can put all the information away in the benchmark files.
+
+FUTURE: once profile tool accepts explicit input sizes etc.
+we need to embed that in here.
