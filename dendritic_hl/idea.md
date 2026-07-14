@@ -485,18 +485,20 @@ and think about whether that actually makes sense.
 (2) Use the `bin` directory of the catalog directory as temporary storage.
 
 Use the `ninja` build tool to
-* compile the C++ workspace file to Halide generator
-* run the Halide generator to get a Halide binary and `conceptual_stmt` file.
-  Use `target=host-profile` and link to `RunGenMain` to finish a standalone binary.
+* compile the C++ workspace file to a Halide generator executable
+* run the generator to emit the AOT static library, header, `registration.cpp`,
+  and the `conceptual.stmt` file, using `target=host-profile`
+* link `RunGenMain` against the generated `registration.cpp` + static library
+  to finish a standalone benchmarkable binary.
 
 [RunGenMain doc](https://halide-lang.org/docs/md_doc_2_run_gen.html)
 
-Print the file name (in the `bin/`) directory of the `conceptual_stmt` file.
+Print the file name (in the `bin/`) directory of the `conceptual.stmt` file.
 It can be overwritten by future builds.
 Pipe the output `stdout` and `stderr` to the harness's `stdout` and `stderr`.
 
-`gemm_halide_test/build.ninja` provides an example of this two-step build.
-But you will have to Google how to link in `RunGenMain`.
+See the **Reference Build Commands** subsection below for a tested,
+contained example of the full generator + `RunGenMain` build.
 
 If the parameters file was given, it must hold a generator parameters JSON object
 (described later).
@@ -530,6 +532,69 @@ which will work on this computer at least.
 FUTURE: switch to CMake if absolutely huge payoff would happen (I hate CMake).
 
 
+### Reference Build Commands
+
+The following was tested end-to-end against the local Halide build at
+`~/Halide/build/` and produces a standalone binary that both benchmarks
+(via the profiler) and emits the `conceptual.stmt`. Adapt the fixed name
+`brighten` (`-f` basename / `-g` generator name) to whatever the workspace
+generator registers.
+
+**Gotchas that cost time (all confirmed on this machine):**
+
+* `HalideBuffer.h` and `HalideRuntime.h` are **not** in `build/include/`
+  (which only has `Halide.h`); they live in `~/Halide/src/runtime/`,
+  so `RunGenMain` must be compiled with `-I ~/Halide/src/runtime`.
+* The `conceptual_stmt` emit produces a file with extension **`.conceptual.stmt`**,
+  not `.conceptual_stmt`.
+* Compile `RunGenMain` with `-fno-exceptions -DHALIDE_NO_PNG -DHALIDE_NO_JPEG`
+  so it doesn't drag in libpng/libjpeg; benchmarking uses random/estimated
+  inputs, so no image I/O is needed.
+* The `static_library` emit already embeds the Halide runtime, so no separate
+  `runtime.a` needs linking (unlike Halide's own root `Makefile`, which emits
+  with `no_runtime`). Only `-lpthread -ldl` are needed at link time.
+
+Phase 1 -- build the generator executable (the `GenGen` main lives inside
+`libHalide_GenGen.a`):
+
+    c++ -std=c++17 -O2 -I$H/include -I$H/../tools \
+        generator.cpp -o generator_exe \
+        $H/tools/libHalide_GenGen.a -L$H/src -lHalide -Wl,-rpath,$H/src
+
+Phase 2 -- run the generator; append generator params as trailing `key=value`
+tokens (formatted per the `%d`/`%r` rule above):
+
+    ./generator_exe -g brighten -o . -f brighten [key=value ...] \
+        -e static_library,c_header,registration,conceptual_stmt \
+        target=host-profile
+
+Phase 3 -- compile `RunGenMain` (note the `src/runtime` include):
+
+    c++ -c -std=c++17 -O2 -fno-exceptions -DHALIDE_NO_PNG -DHALIDE_NO_JPEG \
+        -I$H/include -I$H/../src/runtime -I$H/../tools -I. \
+        $H/../tools/RunGenMain.cpp -o RunGenMain.o
+
+Phase 4 -- link the standalone binary:
+
+    c++ -std=c++17 -O2 RunGenMain.o brighten.registration.cpp brighten.a \
+        -o brighten.rungen -lpthread -ldl
+
+Run / benchmark:
+
+    ./brighten.rungen --benchmarks=all --estimate_all --verbose
+
+where `$H` = `~/Halide/build`. For `profile`, phase 1 runs once and phases
+2--4 + the run loop over each parameter set. Only phase 2 sees the generator
+params, so the loop must re-emit and re-link per parameter set.
+
+A worked, tested generator + ninja build is under
+`dendritic_hl/rungen_example/`. Run it with
+
+    ninja -f build_ninja.txt brighten.rungen
+
+The ninja file is named `build_ninja.txt` (not `build.ninja`) so it escapes
+this repo's `*.ninja*` gitignore rule and can be committed; hence the `-f`.
+
 
 ### Profile Tool
 
@@ -560,8 +625,9 @@ Build the C++ to Halide generator once, then, for each object in the list,
 Don't fail irrecoverably if some builds fail.
 Just skip it and move on.
 
-Examples: see the `gen_hist_host` and `hist_run_rule` rules in `gemm_halide_test/build.ninja`.
-But you will have to Google how to link in `RunGenMain`.
+See the **Reference Build Commands** subsection under the Build Tool for the
+tested build/link recipe. For `profile`, keep the generator executable from
+phase 1 and re-run the emit + link + benchmark steps for each parameter set.
 
 IMPORTANT: each benchmark run must monopolize the entire computer
 (ignoring outside processes that we can't reasonably control).

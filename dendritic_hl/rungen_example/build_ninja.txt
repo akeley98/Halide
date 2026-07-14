@@ -1,0 +1,59 @@
+# Contained example: Halide Generator -> AOT static library -> standalone
+# RunGenMain binary that can benchmark. Mirrors what dh_hl build/profile need.
+#
+# This file is named build_ninja.txt rather than build.ninja so it escapes the
+# repo-wide `*.ninja*` gitignore rule and can be committed. Invoke it with -f:
+#
+#   ninja -f build_ninja.txt brighten.rungen   # build the standalone binary (default)
+#   ninja -f build_ninja.txt run               # build everything and benchmark it
+
+halide = /Users/dakeley/Halide/build
+tools  = /Users/dakeley/Halide/tools
+cxx    = c++
+
+# ---- Phase 1: build the generator executable (GenGen main lives in the .a) --
+genflags = -std=c++17 -O2 -I$halide/include -I$tools
+genld    = $halide/tools/libHalide_GenGen.a -L$halide/src -lHalide -Wl,-rpath,$halide/src
+
+rule gen_exe
+  command = $cxx $genflags $in -o $out $genld
+  description = GEN-EXE $out
+
+build brighten_generator: gen_exe brighten_generator.cpp
+
+# ---- Phase 2: run the generator -> static_library + header + registration ---
+# static_library embeds the Halide runtime, so nothing else to link for it.
+# conceptual_stmt is the human-readable loop nest dh_hl prints.
+rule gen_emit
+  command = ./$in -g brighten -o . -f brighten $extra_args $
+            -e static_library,c_header,registration,conceptual_stmt $
+            target=host-profile
+  description = GEN-EMIT (brighten.a brighten.h brighten.registration.cpp brighten.conceptual.stmt)
+
+build brighten.a brighten.h brighten.registration.cpp brighten.conceptual.stmt: gen_emit brighten_generator
+
+# ---- Phase 3: compile RunGenMain (no image I/O deps needed for benchmarking) -
+rungen_flags = -std=c++17 -O2 -fno-exceptions -DHALIDE_NO_PNG -DHALIDE_NO_JPEG $
+               -I$halide/include -I$halide/../src/runtime -I$tools -I.
+rule rungenmain_obj
+  command = $cxx -c $rungen_flags $in -o $out
+  description = CXX RunGenMain.o
+
+build RunGenMain.o: rungenmain_obj $tools/RunGenMain.cpp
+
+# ---- Phase 4: link standalone binary --------------------------------------
+rule link_rungen
+  command = $cxx -std=c++17 -O2 $in -o $out -lpthread -ldl
+  description = LINK $out
+
+build brighten.rungen: link_rungen RunGenMain.o brighten.registration.cpp brighten.a
+
+# ---- Convenience: build + benchmark ---------------------------------------
+rule run
+  command = ./$in --benchmarks=all --estimate_all --verbose
+  description = RUN $in
+  pool = console
+
+build run: run brighten.rungen
+
+default brighten.rungen
