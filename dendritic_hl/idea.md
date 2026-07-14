@@ -715,7 +715,7 @@ Requirements:
 
 If the command fails due to the last requirement:
     * Advise this was already done if the schedule node is already the canonical schedule.
-    * Advise the `dh_hl new_idea {canonical ID}` and `dh_hl set_idea {canonical ID}` tools otherwise,
+    * Advise the `dh_hl new_idea {canonical ID}` and `dh_hl set_idea` tools otherwise,
       where the `{canonical ID}` is the ID of the major schedule that blocked this command.
 
 There is intentionally no "change canonical schedule" tool.
