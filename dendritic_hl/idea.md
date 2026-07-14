@@ -68,7 +68,7 @@ The catalog is a bipartite tree consisting of:
   Up to one of the child schedules is the idea node's **canonical schedule**.
 
 Furthermore, there's a special **current idea state**
-indicating which idea node the workspace file it is to be parented to
+indicating what idea node that new schedule nodes will be parented to
 (or none at all).
 
 A schedule node is a **root node** if it has 0 parents.
@@ -86,12 +86,15 @@ this should be done by adding a legitimate child idea node.
 
 * The parent of an idea node must be a **major schedule**.
 
-* Each node must have timestamp strictly greater than
-  (in the future relative to) its parent node's timestamp.
-  Ensures no cycles.
+* The parent of an idea node must be older than (have strictly
+  lower timestamp than) each child schedule node of the idea.
 
 These rules only have to be checked to the extent that tools
 will not add new violations of the requirements.
+
+*History note:* idea nodes used to have timestamps as well,
+and this made the timestamp invariant easier, but made
+`fix_canonical` and `force_parent_idea` impossible.
 
 
 ### Timestamp Format
@@ -139,8 +142,6 @@ may be used as an out-of-band method to recommend the "official" parameter value
 
 * **Proposal Name:** String of length in [1, 72], containing only alphanumeric characters and underscore.
 
-* **UTC wall time timestamp:** timestamp of when the idea node was created.
-
 * **Edges:** Exactly one parent schedule node, any number of child schedule nodes.
 
 * **Idea Node Full ID:** `{proposal name}_{parent id}`; since the `parent id` is fixed-width, the proposal name can be derived easily.
@@ -173,6 +174,7 @@ FUTURE: think cautiously about whether this belongs in repo state or not.
 
 Each `*.cpp` or `*.cc` or `*.c++` file in the workspace has a corresponding
 `*.dh_hl` "catalog directory" next to it, if it's ever input to `dh_hl`.
+The directory's name is the C++ filename with `.dh_hl` appended (e.g. `.cpp.dh_hl`)
 
 The top-level catalog directory contains sub-directories
 
@@ -226,8 +228,6 @@ No automatic fix provided.
 Each idea node is stored in a `idea/{id}` subdirectory of the catalog directory.
 This contains files and directories holding state:
 
-* **UTC wall time timestamp:** `timestamp.txt`, timestamp string plus newline
-
 * **Edges:** Both the parent and children are *derived state*.
   Parent schedule node is derived from this idea node's ID.
   Child schedule nodes are derived by walking `sch` for schedule nodes
@@ -266,7 +266,7 @@ and suggest the `new_root` tool.
 This info is part of an error message or the formatted output of the
 `status` tool.
 
-FUTURE: The `new_root` tool is a bare-minumum recovery strategy
+FUTURE: The `new_root` tool is a bare-minimum recovery strategy
 from merge conflicts. A production version of Dendritic Halide maybe
 can offer better tools, but at some point we're re-inventing git.
 
@@ -291,6 +291,8 @@ Mac limit is `1024` characters.
 
 ## Full and Short IDs
 
+TODO: Consider Claude feedback on short ID
+
 The IDs previously defined for idea and schedule nodes are the full IDs.
 Only full IDs are stored in the catalog, because they are stable over time.
 For convenience, short IDs are preferred almost everywhere else instead.
@@ -301,7 +303,7 @@ This references an idea node as follows:
 
 * Consider only the list of idea nodes whose full IDs start with `proposal name prefix`.
 
-* Select the `N`-th node, 0-indexed.
+* Select the `N`-th node, 0-indexed. TODO sorted how?
 
 **Schedule Node Short IDs:** multiple formats
 
@@ -317,8 +319,6 @@ This references an idea node as follows:
 * `{hash prefix}` references the sole schedule node whose hash starts with the given prefix.
   Error if this is ambiguous.
 
-All but the hash-based form "embed the parent idea node" of the reference schedule ID.
-
 ### Short ID input and output
 
 Note short IDs (except the hash prefix form) are distinguished by containing at least one `.`
@@ -328,7 +328,7 @@ For schedule nodes with:
 
 * **No parent idea node:** Prefer hash-based IDs unless stated otherwise;
   fall back to full ID when truly required (no hash prefix is unambiguous).
-* **One parent idea node:** Prefer short IDs that embed the parent idea node.
+* **One parent idea node:** Prefer short IDs that include the `idea node short id`.
 
 Figure some heuristics for creating reasonable short IDs.
 
@@ -397,7 +397,7 @@ and the status is "workspace consistent".
 Otherwise, if the current idea state is parsable and holds the "some current idea" state,
 and there exists a schedule node that
 (a) has a matching hash,
-(b) has its parent idea node matching the onc embedded in the current idea state,
+(b) has its parent idea node matching the one embedded in the current idea state,
 *then* that schedule node is the **unambiguous schedule node**
 and the status is "workspace consistent".
 
@@ -495,7 +495,7 @@ Print the file name (in the `bin/`) directory of the `conceptual_stmt` file.
 It can be overwritten by future builds.
 Pipe the output `stdout` and `stderr` to the harness's `stdout` and `stderr`.
 
-`gen_hist_host/build.ninja` provides an example of this two-step build.
+`gemm_halide_test/build.ninja` provides an example of this two-step build.
 But you will have to Google how to link in `RunGenMain`.
 
 If the parameters file was given, it must hold a generator parameters JSON object
@@ -553,6 +553,9 @@ Build the C++ to Halide generator once, then, for each object in the list,
 * Update result state of the edited schedule node as in `dh_hl build`, step 3.
 * Run the binary with `--verbose --benchmarks=all --estimate_all` (FUTURE: `--estimate_all` isn't great)
 * Add a new benchmark JSON object (documented later) to the edited schedule node's benchmarks set.
+  NOTE: this is unlikely but a Claude reviewer of the document recommended
+  busy waiting for the timestamp to change, so 2 benchmarks in the same microsecond
+  won't cause a benchmark name collision.
 
 Don't fail irrecoverably if some builds fail.
 Just skip it and move on.
@@ -658,6 +661,7 @@ This is just a temporary "bare minimum" merge conflict resolution.
 
 Update the current idea state to "some current idea",
 embedding the given idea node ID.
+It's an error if the ID doesn't reference an idea node that actually exists.
 
 
 ### New Idea Tool
@@ -709,6 +713,7 @@ schedule of the referenced idea node.
 This fails if:
 * The referenced schedule node is not a root node.
 * The referenced idea node already has a canonical schedule.
+* The new edge would cause a tree structure requirements violation.
 
 Rarely needed, mostly for when a new root node was created and you regret it.
 
@@ -721,7 +726,7 @@ Print out state of the referenced schedule node as a JSON object, with key/value
 
 * `id`: full ID of node
 
-* `parents`: list of strings, each a full ID of a parent node
+* `parent`: string or null, full ID of parent idea node if it exists
 
 * `children`: list of strings, each a full ID of a child node
 
@@ -829,7 +834,9 @@ For any tool run, record a list of new files and new directories created
 (not existing directories touched).
 Use a common helper for this.
 
-If the tool fails, an `atexit` handler will run that deletes all those recorded new files and directories.
+If the tool fails, an `atexit` handler will run that deletes all those recorded new files and directories
+(disable the `atexit` handler as the final step before successful exit,
+so we don't delete new files when the tool succeeds!)
 Again, be very very careful about new vs. existing directories.
 Don't delete any directories you didn't create.
 
@@ -840,7 +847,8 @@ This rule prevents PERMANENT DAMAGE from bugs (like deleting my `home`).
 
 The "new files" don't include the workspace C++ file and the special case overwritten files.
 NEVER delete the workspace C++ file.
-Defer overwriting files as the FINAL step of tools.
+Defer overwriting files as the FINAL step of tools, because we don't roll back these overwrites.
+So overwriting as late as possible minimizes the risk of crashing after the overwrite.
 
 Make SIGQUIT raise `KeyboardInterrupt` and try to prevent `KeyboardInterrupt` and exceptions from stopping the `atexit` handler.
 (But don't get stuck in an infinite loop if an `OSError` happens).
@@ -875,16 +883,19 @@ There is a top-level `Catalog` object, owning
 Each object
 * is accessed with getters and setters
 * has initially empty state, and is lazily initialized from disk when needed by getters
-* is dirtied when modified, or upon creation if it's not loaded from disk
+* is dirtied when modified, or upon creation if it's not loaded from disk;
+  do this in each setter and non-load-from-disk `__init__` path.
 * has `flush_new` and `flush_overwrite` callbacks that implement
   the "write new files" and "overwrite existing files" steps of flushing
   state to disk
 * may own lazily-created sub-objects corresponding to some piece of conceptual state;
   for example, a schedule node object owns commentary sub-objects.
 
-Furthermore, each node may contain partially-initialized derived
-state (like the implied list of child nodes), which won't be complete
-until each child object is walked.
+Furthermore, each node contains a lazily-initialized derived list of
+child nodes. This is **all-or-nothing** for each category of node.
+When the tool needs the child nodes of a schedule node,
+all the idea nodes are loaded and walked to initialize all schedule nodes' children.
+Same, with idea and schedule nodes swapped.
 
 Dirty objects get added to a `Dict[int, object]` dict where the key is the object's `id`.
 All objects in here get flushed just before the tool exits.
@@ -895,6 +906,9 @@ All objects in here get flushed just before the tool exits.
 * In the previous schedule/commentary example, the schedule node doesn't
   write any commentary files; the commentary object itself has to be
   dirty for this to happen.
+* Similarly, a new child schedule added to an idea node doesn't dirty
+  the idea node, because there's no physical idea node state to modify.
+  The relationship is encoded solely through the new schedule node's `parent.txt`.
 
 Whenever you list the contents of a directory, this should become
 a `dict` mapping some unique key (often derived from filename)
