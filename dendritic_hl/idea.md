@@ -1,3 +1,21 @@
+<!--
+Claude: please review this document for
+
+* basic writing quality
+
+* flaws with the design
+
+* actionability for asking an agent to implement this for me
+
+* possible refinements to the design
+
+Although, I have to be honest that I may not be able to consider
+improvements due to the internship time limits I'm under.
+
+To be clear, you are not asked to implement this document,
+only review it.
+-->
+
 # Dendritic Halide Harness -- Harness for agentic Halide scheduling
 
 The process of scheduling Halide code -- whether by hand or automated -- is often a sort of tree search.
