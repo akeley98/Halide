@@ -21,7 +21,19 @@ from . import ids
 from . import safety
 from .errors import DhHlError, HarnessError
 
-_UNLOADED = object()  # sentinel: state not yet loaded from disk
+# Sentinel distinguishing "not yet looked at disk" from a real loaded value.
+# Several fields are lazily populated and hold one of three kinds of value:
+#
+#   _UNLOADED  -- unknown: we have NOT yet read (or stat'd) the backing file.
+#   None       -- known absence: we looked, and the state genuinely isn't there
+#                 (e.g. no parent.txt => a root node; no canonical.txt => no
+#                 canonical schedule).  This is a loaded value, not "unset".
+#   <value>    -- known presence: the loaded contents.
+#
+# The point of the sentinel is precisely so `None` can mean the second case
+# without being confused with the first -- so we never re-stat a file we've
+# already found to be absent (part of the "don't read any file twice" goal).
+_UNLOADED = object()
 
 
 # ---------------------------------------------------------------------------
@@ -104,8 +116,8 @@ class ScheduleNode:
         self.full_id = full_id
         self.is_new = is_new
         self._source = source if source is not None else _UNLOADED
-        self._parent_id = _UNLOADED       # None (root) / str / _UNLOADED
-        self._result = _UNLOADED          # str / _UNLOADED
+        self._parent_id = _UNLOADED       # _UNLOADED / None (=root) / parent id str
+        self._result = _UNLOADED          # _UNLOADED / result str (absent file => "c++ error")
         self._result_dirty = False
         self._commentary = _UNLOADED      # list[Commentary]
         self._benchmarks = _UNLOADED      # list[Benchmark]
@@ -147,6 +159,8 @@ class ScheduleNode:
     # -- parent ----------------------------------------------------------
     @property
     def parent_id(self):
+        # Tri-state via _UNLOADED: absence of parent.txt loads as None, which
+        # is the meaningful "this is a root node" value (not "unknown").
         if self._parent_id is _UNLOADED:
             p = os.path.join(self.dir, "parent.txt")
             if os.path.exists(p):
@@ -306,7 +320,7 @@ class IdeaNode:
         self.is_new = is_new
         self._proposal_text = (proposal_text if proposal_text is not None
                                else _UNLOADED)
-        self._canonical = _UNLOADED       # None / str / _UNLOADED
+        self._canonical = _UNLOADED       # _UNLOADED / None (=no canonical) / schedule id str
         self._canonical_dirty = False
         # Derived child edges (filled by Catalog._ensure_linked):
         self.child_schedule_ids = None
@@ -344,7 +358,11 @@ class IdeaNode:
     # -- canonical schedule (presence/absence file) ----------------------
     @property
     def canonical(self):
-        """Full ID of the canonical schedule, or None."""
+        """Full ID of the canonical schedule, or None if there isn't one.
+
+        Encoded on disk purely by the presence/absence of canonical.txt, so
+        this is a tri-state field: _UNLOADED (haven't checked) vs. None
+        (checked, file absent => no canonical) vs. the loaded ID string."""
         if self._canonical is _UNLOADED:
             p = os.path.join(self.dir, "canonical.txt")
             if os.path.exists(p):
