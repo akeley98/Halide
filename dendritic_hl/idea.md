@@ -291,50 +291,58 @@ Mac limit is `1024` characters.
 
 ## Full and Short IDs
 
-TODO: Consider Claude feedback on short ID
-
 The IDs previously defined for idea and schedule nodes are the full IDs.
 Only full IDs are stored in the catalog, because they are stable over time.
 For convenience, short IDs are preferred almost everywhere else instead.
 
-**Idea Node Short ID:** `{proposal name prefix}.{N}`, `N` a base-10 integer.
+Short IDs are contain at least one `.` OR contain only hex characters.
+Full IDs contain no `.` and at least one `_`.
 
-This references an idea node as follows:
+Each short ID matches some number of nodes.
+The short ID resolves successfully iff it matches exactly 1 node.
+If there's more than 1 match, the error message lists all matching IDs from oldest-to-newest.
+The timestamp of an idea is implicitly the timestamp of its parent schedule (break ties arbitrarily).
 
-* Consider only the list of idea nodes whose full IDs start with `proposal name prefix`.
-
-* Select the `N`-th node, 0-indexed. TODO sorted how?
-
-**Schedule Node Short IDs:** multiple formats
-
-* `{idea node short id}` (alone) references the canonical schedule of the idea node.
-
-* `{idea node short id}.{N}` references the `N`-th child schedule node of the idea node,
-  0-indexed, sorted by schedule node full ID.
-  Because the schedule node ID starts with a timestamp,
-  this is basically chronological order.
-  Only this short ID form requires an expensive walk of the full graph structure,
-  and it is the uncommon case, only for minor schedules.
-
-* `{hash prefix}` references the sole schedule node whose hash starts with the given prefix.
-  Error if this is ambiguous.
-
-### Short ID input and output
-
-Note short IDs (except the hash prefix form) are distinguished by containing at least one `.`
-
-Whenever tools output IDs for nodes, they should output short IDs whenever possible.
-For schedule nodes with:
-
-* **No parent idea node:** Prefer hash-based IDs unless stated otherwise;
-  fall back to full ID when truly required (no hash prefix is unambiguous).
-* **One parent idea node:** Prefer short IDs that include the `idea node short id`.
-
-Figure some heuristics for creating reasonable short IDs.
+Whenever tools output IDs for nodes, they should output short IDs
+whenever possible.  Figure some heuristics for creating reasonable
+unambiguous short IDs, but include at least 6 hash characters (like
+git) to minimize risk that short IDs become ambiguous.
+Fall back on outputting full IDs if the generated short ID is ambiguous.
 
 FUTURE: may add an override for this
 (so use a helper function to format short IDs,
 so there's a common place where this override can be implemented)
+
+Unless otherwise stated, any of the `{...}` components may be empty.
+
+**Idea node short ID:**
+
+* `{hash prefix}.{proposal name prefix}`:
+  matches idea nodes whose proposal name starts with `{proposal name prefix}`
+  and parent node's hash starts with `{hash prefix}`.
+
+**Schedule node short ID:**
+
+* `{idea node short ID}.canon`:
+  find all idea nodes matching the given short ID,
+  and match canonical schedules of such idea nodes.
+  (This form has two `.`, one hidden in the `{idea node short ID}`).
+  The tool prefers outputting this form of short ID when possible.
+
+* `{idea node short ID}.{hash prefix}`:
+  find all idea nodes matching the given short ID,
+  and match any child schedule node of such idea nodes
+  whose hash starts with `{hash prefix}`.
+  (This form has two `.`, one hidden in the `{idea node short ID}`).
+
+* `.{hash prefix}`:
+  matches all root node schedules whose hash starts with `{hash prefix}`,
+  which cannot be empty.
+
+* `{hash prefix}`:
+  matches all schedule nodes whose hash starts with `{hash prefix}`,
+  which cannot be empty.
+  The tool accepts but does not generate short IDs of this form.
 
 
 ## Tools
@@ -523,7 +531,7 @@ Halide generator to fail; doesn't mean the entire schedule is bad.
 print the ID of the edited schedule node.
 
 This tool exits successfully iff no harness errors occurred
-and all subprocesses succeeded. 
+and all subprocesses succeeded.
 
 FUTURE: configurable Halide library location.
 For now just define a magic constant `~/Halide/build/`
