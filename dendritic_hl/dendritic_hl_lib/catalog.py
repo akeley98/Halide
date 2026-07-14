@@ -1,0 +1,901 @@
+"""In-memory model of a dendritic_hl catalog, with lazy load + dirty flush.
+
+Design (see idea.md "Tool Internal Design"):
+
+* A Catalog owns one CurrentIdeaState and two dicts (schedules, ideas) keyed by
+  full ID.  The dicts are populated by listing sch/ and idea/ once; each entry
+  starts as an empty-state node that lazily reads its files on demand.
+* Each on-disk file is owned by exactly one in-memory object.  Objects are
+  dirtied by their own setters (or on non-disk creation) and register with the
+  Catalog's dirty set; nothing dirties anything recursively.
+* flush() writes all new files (flush_new) then all overwrites (flush_overwrite).
+  Overwrites go through safety.write_allowed / queue_overwrite so, globally,
+  new files land before overwrites and only overwrites of the allowed-to-change
+  files ever touch an existing file.
+"""
+
+import json
+import os
+
+from . import ids
+from . import safety
+from .errors import DhHlError, HarnessError
+
+_UNLOADED = object()  # sentinel: state not yet loaded from disk
+
+
+# ---------------------------------------------------------------------------
+# Sub-objects
+# ---------------------------------------------------------------------------
+
+class Commentary:
+    """One commentary file: comment/{ts}.txt or comment/{ts}_{importance}.txt."""
+
+    def __init__(self, schedule, timestamp, importance, text=_UNLOADED, is_new=False):
+        self.schedule = schedule
+        self.timestamp = timestamp
+        self.importance = importance  # int or None
+        self._text = text
+        if is_new:
+            self.schedule.catalog._mark_dirty(self)
+
+    @property
+    def filename(self):
+        if self.importance is None:
+            return "{}.txt".format(self.timestamp)
+        return "{}_{:d}.txt".format(self.timestamp, self.importance)
+
+    @property
+    def path(self):
+        return os.path.join(self.schedule.comment_dir, self.filename)
+
+    @property
+    def text(self):
+        if self._text is _UNLOADED:
+            with open(self.path, "r", encoding="utf-8") as f:
+                self._text = f.read()
+        return self._text
+
+    def flush_new(self):
+        safety.makedirs_tracked(self.schedule.comment_dir)
+        safety.new_file(self.path, self.text)
+
+    def flush_overwrite(self):
+        pass
+
+
+class Benchmark:
+    """One benchmark file: bench/{hostname}_{ts}.json holding a benchmark JSON
+    object (see idea.md "Benchmark JSON Format")."""
+
+    def __init__(self, schedule, filename, data=_UNLOADED, is_new=False):
+        self.schedule = schedule
+        self.filename = filename
+        self._data = data
+        if is_new:
+            self.schedule.catalog._mark_dirty(self)
+
+    @property
+    def path(self):
+        return os.path.join(self.schedule.bench_dir, self.filename)
+
+    @property
+    def data(self):
+        if self._data is _UNLOADED:
+            with open(self.path, "r", encoding="utf-8") as f:
+                self._data = json.load(f)
+        return self._data
+
+    def flush_new(self):
+        safety.makedirs_tracked(self.schedule.bench_dir)
+        safety.new_file(self.path, json.dumps(self.data, indent=1) + "\n")
+
+    def flush_overwrite(self):
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Schedule node
+# ---------------------------------------------------------------------------
+
+class ScheduleNode:
+    def __init__(self, catalog, full_id, is_new=False, source=None):
+        self.catalog = catalog
+        self.full_id = full_id
+        self.is_new = is_new
+        self._source = source if source is not None else _UNLOADED
+        self._parent_id = _UNLOADED       # None (root) / str / _UNLOADED
+        self._result = _UNLOADED          # str / _UNLOADED
+        self._result_dirty = False
+        self._commentary = _UNLOADED      # list[Commentary]
+        self._benchmarks = _UNLOADED      # list[Benchmark]
+        # Derived child edges (filled by Catalog._ensure_linked):
+        self.child_idea_ids = None        # list[str] or None if not linked
+        if is_new:
+            self.catalog._mark_dirty(self)
+
+    # -- identity --------------------------------------------------------
+    @property
+    def timestamp(self):
+        return ids.schedule_timestamp(self.full_id)
+
+    @property
+    def hash(self):
+        return ids.schedule_hash(self.full_id)
+
+    # -- paths -----------------------------------------------------------
+    @property
+    def dir(self):
+        return os.path.join(self.catalog.sch_dir, self.full_id)
+
+    @property
+    def comment_dir(self):
+        return os.path.join(self.dir, "comment")
+
+    @property
+    def bench_dir(self):
+        return os.path.join(self.dir, "bench")
+
+    # -- source ----------------------------------------------------------
+    @property
+    def source(self):
+        if self._source is _UNLOADED:
+            with open(os.path.join(self.dir, "generator.cpp"), "rb") as f:
+                self._source = f.read().decode("utf-8")
+        return self._source
+
+    # -- parent ----------------------------------------------------------
+    @property
+    def parent_id(self):
+        if self._parent_id is _UNLOADED:
+            p = os.path.join(self.dir, "parent.txt")
+            if os.path.exists(p):
+                with open(p, "r", encoding="utf-8") as f:
+                    self._parent_id = f.read().strip()
+            else:
+                self._parent_id = None
+        return self._parent_id
+
+    def is_root(self):
+        return self.parent_id is None
+
+    def parent_idea(self):
+        if self.is_root():
+            return None
+        return self.catalog.get_idea(self.parent_id)
+
+    def is_major(self):
+        """Root, or the canonical schedule of its parent idea."""
+        if self.is_root():
+            return True
+        idea = self.parent_idea()
+        return idea is not None and idea.canonical == self.full_id
+
+    # -- result ----------------------------------------------------------
+    @property
+    def result(self):
+        if self._result is _UNLOADED:
+            p = os.path.join(self.dir, "result.txt")
+            if os.path.exists(p):
+                with open(p, "r", encoding="utf-8") as f:
+                    self._result = f.read().strip()
+            else:
+                self._result = "c++ error"  # default (worst)
+        return self._result
+
+    def set_result(self, value):
+        assert value in ("c++ error", "halide error", "success")
+        self._result = value
+        self._result_dirty = True
+        self.catalog._mark_dirty(self)
+
+    # -- commentary ------------------------------------------------------
+    @property
+    def commentary(self):
+        if self._commentary is _UNLOADED:
+            self._commentary = []
+            cdir = self.comment_dir
+            if os.path.isdir(cdir):
+                for name in os.listdir(cdir):
+                    if not name.endswith(".txt"):
+                        continue
+                    stem = name[:-len(".txt")]
+                    # Filename is {ts}.txt or {ts}_{importance}.txt.  The ts
+                    # itself contains '_', so split off a trailing _<int> only.
+                    importance = None
+                    base = stem
+                    idx = stem.rfind("_")
+                    if idx != -1:
+                        tail = stem[idx + 1:]
+                        try:
+                            importance = int(tail)
+                            base = stem[:idx]
+                        except ValueError:
+                            importance = None
+                            base = stem
+                    # Guard: base must be a valid timestamp; else treat whole
+                    # stem as timestamp with no importance.
+                    if not ids.is_timestamp(base):
+                        base, importance = stem, None
+                    self._commentary.append(
+                        Commentary(self, base, importance))
+        return self._commentary
+
+    def add_commentary(self, text, importance=None):
+        ts = self.catalog.fresh_timestamp()
+        c = Commentary(self, ts, importance, text=text, is_new=True)
+        # Ensure list is loaded then append so subsequent reads see it.
+        self.commentary.append(c)
+        return c
+
+    # -- benchmarks ------------------------------------------------------
+    @property
+    def benchmarks(self):
+        if self._benchmarks is _UNLOADED:
+            self._benchmarks = []
+            bdir = self.bench_dir
+            if os.path.isdir(bdir):
+                for name in sorted(os.listdir(bdir)):
+                    if name.endswith(".json"):
+                        self._benchmarks.append(Benchmark(self, name))
+        return self._benchmarks
+
+    def add_benchmark(self, hostname, timestamp, data):
+        filename = "{}_{}.json".format(hostname, timestamp)
+        b = Benchmark(self, filename, data=data, is_new=True)
+        self.benchmarks.append(b)
+        return b
+
+    # -- flush -----------------------------------------------------------
+    def flush_new(self):
+        if not self.is_new:
+            return
+        safety.makedirs_tracked(self.dir)
+        safety.new_file(os.path.join(self.dir, "generator.cpp"), self.source)
+        if self.parent_id is not None:
+            safety.new_file(os.path.join(self.dir, "parent.txt"),
+                            self.parent_id + "\n")
+        if self._result_dirty:
+            safety.write_allowed(os.path.join(self.dir, "result.txt"),
+                                 self._result + "\n")
+
+    def flush_overwrite(self):
+        if self.is_new:
+            return
+        if self._result_dirty:
+            safety.write_allowed(os.path.join(self.dir, "result.txt"),
+                                 self._result + "\n")
+        # An existing root schedule that gained a parent (force_parent_idea):
+        if self._parent_id_added:
+            safety.new_file(os.path.join(self.dir, "parent.txt"),
+                            self._parent_id + "\n")
+        # fix_canonical re-parented an existing node (overwrite):
+        if self._parent_id_overwritten:
+            safety.queue_overwrite(os.path.join(self.dir, "parent.txt"),
+                                   self._parent_id + "\n")
+
+    # force_parent_idea sets this on an existing root node.
+    _parent_id_added = False
+    # fix_canonical re-parents an existing (non-root) node: OVERWRITES parent.txt.
+    _parent_id_overwritten = False
+
+    def set_parent_existing_root(self, idea_id):
+        assert not self.is_new
+        self._parent_id = idea_id
+        self._parent_id_added = True
+        self.catalog._mark_dirty(self)
+
+    def set_parent_overwrite(self, idea_id):
+        """Re-parent an existing node by overwriting parent.txt.  Only used by
+        fix_canonical (see note in idea.md safety rules -- parent.txt is not in
+        the documented overwrite-allowed list; flagged for author review)."""
+        assert not self.is_new
+        self._parent_id = idea_id
+        self._parent_id_overwritten = True
+        self.catalog._mark_dirty(self)
+
+
+# ---------------------------------------------------------------------------
+# Idea node
+# ---------------------------------------------------------------------------
+
+class IdeaNode:
+    def __init__(self, catalog, full_id, is_new=False, proposal_text=None):
+        self.catalog = catalog
+        self.full_id = full_id
+        self.is_new = is_new
+        self._proposal_text = (proposal_text if proposal_text is not None
+                               else _UNLOADED)
+        self._canonical = _UNLOADED       # None / str / _UNLOADED
+        self._canonical_dirty = False
+        # Derived child edges (filled by Catalog._ensure_linked):
+        self.child_schedule_ids = None
+        if is_new:
+            self.catalog._mark_dirty(self)
+
+    @property
+    def proposal_name(self):
+        return ids.idea_proposal_name(self.full_id)
+
+    @property
+    def parent_id(self):
+        return ids.idea_parent_id(self.full_id)
+
+    @property
+    def timestamp(self):
+        # An idea's implicit timestamp is its parent schedule's timestamp.
+        return ids.schedule_timestamp(self.parent_id)
+
+    def parent_schedule(self):
+        return self.catalog.get_schedule(self.parent_id)
+
+    @property
+    def dir(self):
+        return os.path.join(self.catalog.idea_dir, self.full_id)
+
+    @property
+    def proposal_text(self):
+        if self._proposal_text is _UNLOADED:
+            with open(os.path.join(self.dir, "proposal.txt"), "r",
+                      encoding="utf-8") as f:
+                self._proposal_text = f.read()
+        return self._proposal_text
+
+    # -- canonical schedule (presence/absence file) ----------------------
+    @property
+    def canonical(self):
+        """Full ID of the canonical schedule, or None."""
+        if self._canonical is _UNLOADED:
+            p = os.path.join(self.dir, "canonical.txt")
+            if os.path.exists(p):
+                with open(p, "r", encoding="utf-8") as f:
+                    self._canonical = f.read().strip()
+            else:
+                self._canonical = None
+        return self._canonical
+
+    def canonical_lines(self):
+        """Raw stripped lines of canonical.txt (for fix_canonical, which must
+        cope with a merge-conflicted file holding two IDs)."""
+        p = os.path.join(self.dir, "canonical.txt")
+        if not os.path.exists(p):
+            return []
+        with open(p, "r", encoding="utf-8") as f:
+            return [ln.strip() for ln in f if ln.strip()]
+
+    def set_canonical(self, schedule_id):
+        self._canonical = schedule_id
+        self._canonical_dirty = True
+        self.catalog._mark_dirty(self)
+
+    @property
+    def importance(self):
+        """Derived; float('-inf') if no canonical schedule, else max of the
+        canonical schedule's commentary importances (0 if there are none)."""
+        canon_id = self.canonical
+        if canon_id is None:
+            return float("-inf")
+        canon = self.catalog.get_schedule(canon_id)
+        imps = [c.importance for c in canon.commentary if c.importance is not None]
+        if not imps:
+            return 0
+        return max(imps)
+
+    def flush_new(self):
+        if not self.is_new:
+            return
+        safety.makedirs_tracked(self.dir)
+        safety.new_file(os.path.join(self.dir, "proposal.txt"),
+                        self.proposal_text)
+        if self._canonical_dirty and self._canonical is not None:
+            safety.write_allowed(os.path.join(self.dir, "canonical.txt"),
+                                 self._canonical + "\n")
+
+    def flush_overwrite(self):
+        if self.is_new:
+            return
+        if self._canonical_dirty and self._canonical is not None:
+            safety.write_allowed(os.path.join(self.dir, "canonical.txt"),
+                                 self._canonical + "\n")
+
+
+# ---------------------------------------------------------------------------
+# Current idea state
+# ---------------------------------------------------------------------------
+
+class CurrentIdeaState:
+    """Parsed current_idea_state.txt.  Never raises on parse; competing/absent
+    states are recorded and surfaced only when a caller needs a definite state.
+
+    kind is one of: 'missing', 'no_idea', 'idea', 'conflict'.
+    """
+
+    def __init__(self, catalog):
+        self.catalog = catalog
+        self.kind = None
+        self.timestamp = None       # for 'no_idea'
+        self.idea_id = None         # for 'idea'
+        self.parsed_lines = []      # canonical re-encoded strings of every
+                                    # valid state found (for conflict reporting)
+        self._dirty = False
+        self._load()
+
+    @property
+    def path(self):
+        return os.path.join(self.catalog.catalog_dir, "current_idea_state.txt")
+
+    def _load(self):
+        if not os.path.exists(self.path):
+            self.kind = "missing"
+            return
+        found = []  # list of ('no_idea', ts) or ('idea', id)
+        with open(self.path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                v = _parse_state_line(line)
+                if v is not None:
+                    found.append(v)
+        self.parsed_lines = [_encode_state(v) for v in found]
+        if len(found) == 0:
+            self.kind = "conflict"  # file exists but nothing parsed = cruft
+        elif len(found) == 1:
+            v = found[0]
+            if v[0] == "no_idea":
+                self.kind, self.timestamp = "no_idea", v[1]
+            else:
+                self.kind, self.idea_id = "idea", v[1]
+        else:
+            self.kind = "conflict"
+
+    def set_no_idea(self, timestamp):
+        self.kind, self.timestamp, self.idea_id = "no_idea", timestamp, None
+        self._dirty = True
+        self.catalog._mark_dirty(self)
+
+    def set_idea(self, idea_id):
+        self.kind, self.idea_id, self.timestamp = "idea", idea_id, None
+        self._dirty = True
+        self.catalog._mark_dirty(self)
+
+    def encode(self):
+        if self.kind == "no_idea":
+            return _encode_state(("no_idea", self.timestamp))
+        if self.kind == "idea":
+            return _encode_state(("idea", self.idea_id))
+        raise DhHlError("cannot encode current idea state of kind " + str(self.kind))
+
+    def flush_new(self):
+        if self._dirty:
+            safety.write_allowed(self.path, self.encode() + "\n")
+
+    def flush_overwrite(self):
+        # write_allowed already defers to overwrite when the file exists.
+        pass
+
+
+def _parse_state_line(line):
+    """Return ('no_idea', ts) / ('idea', idea_id) / None (cruft)."""
+    inner = _unwrap(line, "dendritic_hl_root")
+    if inner is not None and ids.is_timestamp(inner):
+        return ("no_idea", inner)
+    inner = _unwrap(line, "dendritic_hl_idea")
+    if inner is not None and ids.is_idea_id(inner):
+        return ("idea", inner)
+    return None
+
+
+def _unwrap(line, name):
+    prefix = name + "("
+    if line.startswith(prefix) and line.endswith(")"):
+        return line[len(prefix):-1]
+    return None
+
+
+def _encode_state(v):
+    if v[0] == "no_idea":
+        return "dendritic_hl_root({})".format(v[1])
+    return "dendritic_hl_idea({})".format(v[1])
+
+
+# ---------------------------------------------------------------------------
+# Catalog
+# ---------------------------------------------------------------------------
+
+class Catalog:
+    def __init__(self, catalog_dir, workspace_path):
+        self.catalog_dir = catalog_dir
+        self.workspace_path = workspace_path
+        self.sch_dir = os.path.join(catalog_dir, "sch")
+        self.idea_dir = os.path.join(catalog_dir, "idea")
+        self.bin_dir = os.path.join(catalog_dir, "bin")
+        self._schedules = None
+        self._ideas = None
+        self._current_idea = None
+        self._linked = False
+        self._dirty = {}            # id(obj) -> obj
+        self._last_timestamp = None  # for fresh_timestamp monotonicity
+
+    def exists(self):
+        return os.path.isdir(self.catalog_dir)
+
+    # -- timestamps ------------------------------------------------------
+    def fresh_timestamp(self):
+        """A timestamp strictly greater than any previously handed out this
+        run (busy-wait past duplicates so names never collide)."""
+        ts = ids.now_timestamp()
+        while self._last_timestamp is not None and ts <= self._last_timestamp:
+            ts = ids.now_timestamp()
+        self._last_timestamp = ts
+        return ts
+
+    # -- lazy dict loading ----------------------------------------------
+    @property
+    def schedules(self):
+        if self._schedules is None:
+            self._schedules = {}
+            if os.path.isdir(self.sch_dir):
+                for name in os.listdir(self.sch_dir):
+                    if ids.is_schedule_id(name):
+                        self._schedules[name] = ScheduleNode(self, name)
+        return self._schedules
+
+    @property
+    def ideas(self):
+        if self._ideas is None:
+            self._ideas = {}
+            if os.path.isdir(self.idea_dir):
+                for name in os.listdir(self.idea_dir):
+                    if ids.is_idea_id(name):
+                        self._ideas[name] = IdeaNode(self, name)
+        return self._ideas
+
+    @property
+    def current_idea_state(self):
+        if self._current_idea is None:
+            self._current_idea = CurrentIdeaState(self)
+        return self._current_idea
+
+    def get_schedule(self, full_id):
+        node = self.schedules.get(full_id)
+        if node is None:
+            raise DhHlError("no such schedule node: " + full_id)
+        return node
+
+    def get_idea(self, full_id):
+        node = self.ideas.get(full_id)
+        if node is None:
+            raise DhHlError("no such idea node: " + full_id)
+        return node
+
+    def current_idea_node(self):
+        """The IdeaNode referenced by 'some current idea', or None for 'no
+        idea'.  Raises on parse errors/conflict."""
+        cis = self.current_idea_state
+        if cis.kind == "no_idea":
+            return None
+        if cis.kind == "idea":
+            return self.get_idea(cis.idea_id)
+        raise DhHlError(self._current_idea_problem_message())
+
+    def _current_idea_problem_message(self):
+        cis = self.current_idea_state
+        if cis.kind == "missing":
+            return "current_idea_state.txt is missing"
+        # conflict
+        msg = ["current_idea_state.txt does not encode a single state."]
+        if cis.parsed_lines:
+            msg.append("Competing states found:")
+            msg.extend("  " + ln for ln in cis.parsed_lines)
+        else:
+            msg.append("No valid state could be parsed.")
+        msg.append("Suggestion: use `dh_hl new_root` to recover.")
+        return "\n".join(msg)
+
+    # -- derived edges ---------------------------------------------------
+    def _ensure_linked(self):
+        if self._linked:
+            return
+        for s in self.schedules.values():
+            s.child_idea_ids = []
+        for i in self.ideas.values():
+            i.child_schedule_ids = []
+        # schedule -> child ideas (from idea IDs, no file reads)
+        for idea in self.ideas.values():
+            parent = idea.parent_id
+            s = self.schedules.get(parent)
+            if s is not None:
+                s.child_idea_ids.append(idea.full_id)
+        # idea -> child schedules (reads every parent.txt; all-or-nothing)
+        for s in self.schedules.values():
+            pid = s.parent_id
+            if pid is not None:
+                idea = self.ideas.get(pid)
+                if idea is not None:
+                    idea.child_schedule_ids.append(s.full_id)
+        self._linked = True
+
+    def child_ideas(self, schedule):
+        self._ensure_linked()
+        return [self.ideas[i] for i in schedule.child_idea_ids]
+
+    def child_schedules(self, idea):
+        self._ensure_linked()
+        return [self.schedules[s] for s in idea.child_schedule_ids]
+
+    # -- edge mutation w/ invariant checks ------------------------------
+    def link_new_child_schedule(self, idea, schedule):
+        """Make (new) *schedule* a child of *idea*, enforcing invariants.
+
+        Invariant: idea's parent schedule must be strictly older than the
+        child schedule.  (The 'parent of idea is a major schedule' invariant is
+        enforced when the idea is created.)
+        """
+        if idea.timestamp >= schedule.timestamp:
+            raise DhHlError(
+                "tree invariant violation: idea's parent schedule "
+                "(timestamp {}) is not older than child schedule (timestamp {})"
+                .format(idea.timestamp, schedule.timestamp))
+        schedule._parent_id = idea.full_id  # new node; written in flush_new
+        # keep derived edges consistent if already linked
+        if self._linked:
+            schedule.child_idea_ids = schedule.child_idea_ids or []
+            idea.child_schedule_ids.append(schedule.full_id)
+
+    def create_schedule(self, source, parent_idea=None):
+        """Create a brand-new schedule node holding *source* (a str).  If
+        parent_idea is given, link it (checking invariants); else it's a root."""
+        ts = self.fresh_timestamp()
+        h = ids.sha256_hex(source)
+        full_id = ids.make_schedule_id(ts, h)
+        node = ScheduleNode(self, full_id, is_new=True, source=source)
+        node._parent_id = None
+        node._result_dirty = False
+        self.schedules[full_id] = node
+        if self._linked:
+            node.child_idea_ids = []
+        if parent_idea is not None:
+            self.link_new_child_schedule(parent_idea, node)
+        return node
+
+    def reparent_existing_schedule(self, idea, schedule):
+        """Re-parent an EXISTING schedule under *idea* (overwrites parent.txt).
+        Enforces the timestamp invariant.  Used only by fix_canonical."""
+        if idea.timestamp >= schedule.timestamp:
+            raise DhHlError(
+                "tree invariant violation: idea's parent schedule (timestamp "
+                "{}) is not older than child schedule (timestamp {})".format(
+                    idea.timestamp, schedule.timestamp))
+        old_parent = schedule.parent_id
+        schedule.set_parent_overwrite(idea.full_id)
+        if self._linked:
+            if old_parent in self.ideas:
+                op = self.ideas[old_parent]
+                if schedule.full_id in op.child_schedule_ids:
+                    op.child_schedule_ids.remove(schedule.full_id)
+            idea.child_schedule_ids.append(schedule.full_id)
+
+    def create_idea(self, parent_schedule, proposal_name, proposal_text):
+        if not ids.is_proposal_name(proposal_name):
+            raise DhHlError(
+                "proposal name must be 1..72 chars of [A-Za-z0-9_]: "
+                + repr(proposal_name))
+        if not parent_schedule.is_major():
+            raise DhHlError(
+                "parent of an idea must be a major schedule (root or a "
+                "canonical schedule); {} is minor".format(
+                    self.format_schedule_id(parent_schedule)))
+        full_id = ids.make_idea_id(proposal_name, parent_schedule.full_id)
+        if full_id in self.ideas:
+            raise DhHlError(
+                "proposal name {!r} already used under this schedule".format(
+                    proposal_name))
+        node = IdeaNode(self, full_id, is_new=True, proposal_text=proposal_text)
+        self.ideas[full_id] = node
+        if self._linked:
+            node.child_schedule_ids = []
+            parent_schedule.child_idea_ids.append(full_id)
+        return node
+
+    # -- dirty / flush ---------------------------------------------------
+    def _mark_dirty(self, obj):
+        self._dirty[id(obj)] = obj
+
+    def ensure_created(self):
+        """Create the catalog directory skeleton if absent."""
+        safety.makedirs_tracked(self.sch_dir)
+        safety.makedirs_tracked(self.idea_dir)
+        safety.makedirs_tracked(self.bin_dir)
+        gi = os.path.join(self.catalog_dir, ".gitignore")
+        if not os.path.exists(gi):
+            safety.new_file(gi, "bin\n")
+
+    def flush(self):
+        objs = list(self._dirty.values())
+        for o in objs:
+            o.flush_new()
+        for o in objs:
+            o.flush_overwrite()
+
+    # -- ID formatting (short IDs) --------------------------------------
+    def format_schedule_id(self, node):
+        return _format_schedule_short(self, node)
+
+    def format_idea_id(self, node):
+        return _format_idea_short(self, node)
+
+    # -- ID resolution ---------------------------------------------------
+    def resolve_schedule(self, s):
+        return _resolve_schedule(self, s)
+
+    def resolve_idea(self, s):
+        return _resolve_idea(self, s)
+
+
+# ---------------------------------------------------------------------------
+# Short ID resolution
+# ---------------------------------------------------------------------------
+
+def _ambiguous(catalog, matches, kind):
+    """Build a DhHlError listing matches oldest-to-newest."""
+    ordered = sorted(matches, key=lambda n: n.timestamp)
+    lines = ["ambiguous {} ID; matches:".format(kind)]
+    if kind == "schedule":
+        lines += ["  " + n.full_id for n in ordered]
+    else:
+        lines += ["  " + n.full_id for n in ordered]
+    return DhHlError("\n".join(lines))
+
+
+def _match_ideas(catalog, hash_prefix, name_prefix):
+    if not all(c in "0123456789abcdef" for c in hash_prefix):
+        return []
+    out = []
+    for idea in catalog.ideas.values():
+        if ids.schedule_hash(idea.parent_id).startswith(hash_prefix) \
+                and idea.proposal_name.startswith(name_prefix):
+            out.append(idea)
+    return out
+
+
+def _resolve_idea(catalog, s):
+    # Full ID?
+    if ids.is_idea_id(s):
+        node = catalog.ideas.get(s)
+        if node is None:
+            raise DhHlError("no such idea node: " + s)
+        return node
+    # Short: {hash prefix}.{proposal name prefix}
+    if "." not in s:
+        raise DhHlError("not a valid idea ID: " + repr(s))
+    hp, _, pp = s.partition(".")
+    if "." in pp:
+        raise DhHlError("not a valid idea short ID: " + repr(s))
+    matches = _match_ideas(catalog, hp, pp)
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise DhHlError("no idea node matches short ID: " + repr(s))
+    raise _ambiguous(catalog, matches, "idea")
+
+
+def _resolve_schedule(catalog, s):
+    # Full ID?
+    if ids.is_schedule_id(s):
+        node = catalog.schedules.get(s)
+        if node is None:
+            raise DhHlError("no such schedule node: " + s)
+        return node
+    matches = _match_schedules(catalog, s)
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise DhHlError("no schedule node matches short ID: " + repr(s))
+    raise _ambiguous(catalog, matches, "schedule")
+
+
+def _is_hex(s):
+    return len(s) > 0 and all(c in "0123456789abcdef" for c in s)
+
+
+def _match_schedules(catalog, s):
+    parts = s.split(".")
+    # Form: bare {hash prefix} (hex only, nonempty)
+    if len(parts) == 1:
+        if not _is_hex(parts[0]):
+            raise DhHlError("not a valid schedule ID: " + repr(s))
+        return [n for n in catalog.schedules.values()
+                if n.hash.startswith(parts[0])]
+    # Form: root.{hash prefix}
+    if parts[0] == "root" and len(parts) == 2:
+        hp = parts[1]
+        if not _is_hex(hp):
+            raise DhHlError("root.<hash prefix> needs a nonempty hex prefix: "
+                            + repr(s))
+        return [n for n in catalog.schedules.values()
+                if n.is_root() and n.hash.startswith(hp)]
+    # Form: {idea short id}.canon  or  {idea short id}.{hash prefix}
+    idea_part, _, last = s.rpartition(".")
+    ideas = _resolve_idea_matches_lenient(catalog, idea_part)
+    out = []
+    if last == "canon":
+        for idea in ideas:
+            c = idea.canonical
+            if c is not None:
+                out.append(catalog.schedules[c])
+    else:
+        if not _is_hex(last) and last != "":
+            raise DhHlError("not a valid schedule short ID: " + repr(s))
+        for idea in ideas:
+            for sch in catalog.child_schedules(idea):
+                if sch.hash.startswith(last):
+                    out.append(sch)
+    # dedupe by full_id
+    seen, uniq = set(), []
+    for n in out:
+        if n.full_id not in seen:
+            seen.add(n.full_id)
+            uniq.append(n)
+    return uniq
+
+
+def _resolve_idea_matches_lenient(catalog, idea_part):
+    """Like _resolve_idea but returns *all* matches (no single-match error);
+    accepts a full idea ID or a {hp}.{pp} short form."""
+    if ids.is_idea_id(idea_part):
+        node = catalog.ideas.get(idea_part)
+        return [node] if node is not None else []
+    hp, dot, pp = idea_part.partition(".")
+    if dot == "" or "." in pp:
+        return []
+    return _match_ideas(catalog, hp, pp)
+
+
+# ---------------------------------------------------------------------------
+# Short ID formatting (output)
+# ---------------------------------------------------------------------------
+
+_MIN_HASH = 6
+
+
+def _format_idea_short(catalog, idea):
+    parent_hash = ids.schedule_hash(idea.parent_id)
+    name = idea.proposal_name
+    for hlen in range(_MIN_HASH, len(parent_hash) + 1):
+        cand = "{}.{}".format(parent_hash[:hlen], name)
+        try:
+            if catalog.resolve_idea(cand).full_id == idea.full_id:
+                return cand
+        except DhHlError:
+            pass
+    return idea.full_id  # ambiguous even at full hash: fall back
+
+
+def _format_schedule_short(catalog, node):
+    h = node.hash
+    if node.is_root():
+        for hlen in range(_MIN_HASH, len(h) + 1):
+            cand = "root.{}".format(h[:hlen])
+            if _resolves_to(catalog, cand, node):
+                return cand
+        return node.full_id
+    idea = node.parent_idea()
+    idea_short = _format_idea_short(catalog, idea)
+    if "." not in idea_short and not ids.is_idea_id(idea_short):
+        return node.full_id
+    # Prefer .canon when applicable.
+    if idea.canonical == node.full_id:
+        cand = "{}.canon".format(idea_short)
+        if _resolves_to(catalog, cand, node):
+            return cand
+    for hlen in range(_MIN_HASH, len(h) + 1):
+        cand = "{}.{}".format(idea_short, h[:hlen])
+        if _resolves_to(catalog, cand, node):
+            return cand
+    return node.full_id
+
+
+def _resolves_to(catalog, cand, node):
+    try:
+        return catalog.resolve_schedule(cand).full_id == node.full_id
+    except DhHlError:
+        return False

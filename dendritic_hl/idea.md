@@ -29,6 +29,10 @@ My goals for the Dendritic Halide Harness (`dendritic_hl.py`, shortened as `dh_h
 
 * Implemented as a **Python 3 package** for now even though I liketh it not.
   It is launched by the `./dh_hl` stub.
+  **Dependency scope:** Python 3 standard library ONLY (argparse, hashlib,
+  json, subprocess, atexit, signal, os, ...). No third-party pip packages,
+  so whoever inherits this prototype needs no install step. The vendored
+  `ninja_syntax.py` counts as stdlib-equivalent for our purposes.
 
 * In the end, this will only be a sketchy prototype,
   as there is only 2 months left in my internship.
@@ -484,12 +488,23 @@ and think about whether that actually makes sense.
 
 (2) Use the `bin` directory of the catalog directory as temporary storage.
 
-Use the `ninja` build tool to
-* compile the C++ workspace file to a Halide generator executable
+**Build driver split (decided):** use `ninja` only for the param-independent
+steps, and drive everything param-dependent from Python `subprocess`:
+* Ninja builds phase 1 (the C++ workspace file -> Halide generator executable)
+  and compiles `RunGenMain.o`. These are built ONCE and don't depend on
+  generator parameters.
+* Python drives the param-dependent phases directly with `subprocess`
+  (serially, no parallelism): run the generator to emit outputs (phase 2),
+  link the standalone binary (phase 4), and, for `profile`, run the benchmark.
+  For `profile` this per-param-set work is a Python `for` loop; don't push the
+  loop into ninja (see the Profile Tool's explicit note).
+
+The steps performed are:
+* compile the C++ workspace file to a Halide generator executable (ninja)
 * run the generator to emit the AOT static library, header, `registration.cpp`,
-  and the `conceptual.stmt` file, using `target=host-profile`
+  and the `conceptual.stmt` file, using `target=host-profile` (Python)
 * link `RunGenMain` against the generated `registration.cpp` + static library
-  to finish a standalone benchmarkable binary.
+  to finish a standalone benchmarkable binary (Python)
 
 **Generator name.** `GenGen` still requires `-g <name>` even when only one
 generator is registered, but under the single-generator assumption (see Goals)
@@ -917,8 +932,21 @@ Tools NEVER overwrite or modify existing files, except for:
 * `current_idea_state.txt`
 * `result.txt`
 * `canonical.txt` for `fix_canonical` tool
+* `parent.txt` for `fix_canonical` tool (see note below)
 
 Accordingly, use `"x"` mode or equivalent when creating new files.
+
+*`parent.txt` overwrite exception (`fix_canonical`):* the `fix_canonical`
+description re-parents the *newer* competing canonical schedule so it becomes
+the canonical schedule (hence a child) of a freshly created resolution idea
+node. Because a schedule's parent edge is stored solely in its `parent.txt`,
+and the newer schedule already has a `parent.txt` pointing at the original
+idea, honoring that description requires **overwriting** the newer schedule's
+`parent.txt`. This is the sole tool permitted to overwrite `parent.txt`, and
+like the other overwrites it is deferred and not rolled back. (This is a
+deliberate exception to the otherwise strict anti-`parent.txt`-overwrite
+stance; the whole file layout exists to avoid `parent.txt` churn, but this
+rare recovery tool is the documented escape hatch.)
 
 We furthermore must make all changes to the catalog atomic as much as possible.
 For any tool run, record a list of new files and new directories created
@@ -930,6 +958,29 @@ If the tool fails, an `atexit` handler will run that deletes all those recorded 
 so we don't delete new files when the tool succeeds!)
 Again, be very very careful about new vs. existing directories.
 Don't delete any directories you didn't create.
+
+*What counts as "the tool fails" (rollback) vs. a catalogued bad outcome:*
+The rollback is for **harness/logic failures** -- an unexpected exception, a
+pre-flight validation error, an environment problem -- i.e. cases where the
+in-memory changes are incomplete or untrustworthy and must be undone. It is
+**not** triggered by a subprocess reporting a bad *build outcome*. Recording a
+schedule node whose C++ failed to compile (`c++ error`) or whose Halide
+generator failed (`halide error`) is the build/profile tool **succeeding at
+its cataloguing job** (recall the goal: "all C++ source code ever compiled
+will be catalogued"). Concretely, for `build`/`profile`:
+
+* Pre-flight validation problems (e.g. no current idea node, unresolved ID)
+  are raised **before** any node is created, so rollback has nothing to undo.
+* A `c++ error` / `halide error` build outcome, and the "generator list is not
+  exactly one name" harness error, are **not** raised as rollback-triggering
+  exceptions. They are recorded in memory (for the generator-count case,
+  simply *skip* the result-state update per the Build Tool), the single
+  end-of-tool flush + commit runs so the node **persists**, and only then does
+  the process exit with a nonzero status to signal the failure to the caller.
+
+So flushing stays a single step strictly separated from the main logic (per
+the Tool Internal Design); "did a subprocess fail" affects only the process
+**exit code**, never whether we flush.
 
 OVERRIDING SAFETY RULE: never use "recursive directory delete" functions.
 If you delete files and directories in the opposite order as creation,
