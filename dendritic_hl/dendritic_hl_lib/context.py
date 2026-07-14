@@ -15,8 +15,9 @@ def catalog_dir_for(workspace_path):
 
 class Context:
     def __init__(self, workspace_path):
-        self.workspace_path = workspace_path
         self.catalog = Catalog(catalog_dir_for(workspace_path), workspace_path)
+        # Reuse the catalog's absolutized path so the two never diverge.
+        self.workspace_path = self.catalog.workspace_path
         self._workspace_bytes = None
 
     # -- workspace file --------------------------------------------------

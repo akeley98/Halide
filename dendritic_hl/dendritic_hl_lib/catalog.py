@@ -521,11 +521,15 @@ def _encode_state(v):
 
 class Catalog:
     def __init__(self, catalog_dir, workspace_path):
-        self.catalog_dir = catalog_dir
-        self.workspace_path = workspace_path
-        self.sch_dir = os.path.join(catalog_dir, "sch")
-        self.idea_dir = os.path.join(catalog_dir, "idea")
-        self.bin_dir = os.path.join(catalog_dir, "bin")
+        # Absolutize once, here at the boundary where paths enter the model, so
+        # nothing downstream can hit a relative-vs-absolute mismatch across a
+        # subprocess cwd change (e.g. the profiler JSON path handed to a child
+        # running in bin_dir).  Everything derived below is therefore absolute.
+        self.catalog_dir = os.path.abspath(catalog_dir)
+        self.workspace_path = os.path.abspath(workspace_path)
+        self.sch_dir = os.path.join(self.catalog_dir, "sch")
+        self.idea_dir = os.path.join(self.catalog_dir, "idea")
+        self.bin_dir = os.path.join(self.catalog_dir, "bin")
         self._schedules = None
         self._ideas = None
         self._current_idea = None
