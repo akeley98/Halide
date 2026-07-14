@@ -45,7 +45,8 @@ My goals for the Dendritic Halide Harness (`dendritic_hl.py`, shortened as `dh_h
   "transparent"-ish on-disk state for catalog, designed to minimize merge conflicts.
   This is also why I say "catalog" and not "repository".
 
-* Implemented in **one Python 3 file** for now even though I liketh it not
+* Implemented as a **Python 3 package** for now even though I liketh it not.
+  It is launched by the `./dh_hl` stub.
 
 * In the end, this will only be a sketchy prototype, as I'm a lowly intern
   with not that much time in the grand scheme of things.
