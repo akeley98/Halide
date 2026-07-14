@@ -310,7 +310,10 @@ def cmd_profile(args):
 
             # Benchmark run monopolizes the machine (serial; no parallelism).
             bench_ts = ctx.catalog.fresh_timestamp()  # busy-waits past dups
-            json_out = os.path.join(bin_dir, "profile_out.json")
+            # MUST be absolute: it is handed to the benchmark child via
+            # HL_PROFILER_JSON_OUTPUT, and the child runs with cwd=bin_dir, so a
+            # bin_dir-relative path would be resolved against bin_dir twice.
+            json_out = os.path.abspath(os.path.join(bin_dir, "profile_out.json"))
             if os.path.exists(json_out):
                 os.remove(json_out)
             if _run_benchmark(bin_dir, json_out) != 0:

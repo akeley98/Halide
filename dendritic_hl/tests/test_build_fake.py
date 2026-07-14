@@ -1,6 +1,7 @@
 """build/profile logic with all subprocess steps stubbed (no Halide)."""
 
 import json
+import os
 
 import pytest
 
@@ -103,6 +104,32 @@ def test_profile_records_two_benchmarks(workspace, fake_build, tmp_path, capsys)
     assert len(obj["benchmark"]) == 2
     assert [b["parameters"] for b in obj["benchmark"]] == [{"offset": 5},
                                                            {"offset": 20}]
+
+
+def test_profile_json_path_is_absolute_with_relative_workspace(
+        workspace, fake_build, tmp_path, monkeypatch, capsys):
+    """Regression: with a RELATIVE workspace arg (the normal CLI case), the
+    profiler output path must be absolute, because it is handed to a child that
+    runs with cwd=bin_dir -- a bin_dir-relative path gets resolved twice and
+    the JSON is written nowhere we can read it."""
+    monkeypatch.chdir(tmp_path)  # so "gen.cpp" is a relative workspace path
+
+    seen = {}
+
+    def spy_bench(bin_dir, json_out):
+        seen["json_out"] = json_out
+        with open(json_out, "w") as f:
+            json.dump({"pipelines": [{"name": "x"}]}, f)
+        return 0
+    monkeypatch.setattr(build, "_run_benchmark", spy_bench)  # overrides fake
+
+    tools.cmd_new_root(ns(workspace="gen.cpp"))
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as e:
+        build.cmd_profile(ns(workspace="gen.cpp", parameters=None))
+    assert e.value.code == 0
+    assert os.path.isabs(seen["json_out"]), \
+        "profiler JSON path must be absolute, got " + repr(seen["json_out"])
 
 
 # ---- pure helper: parameter formatting ------------------------------------
