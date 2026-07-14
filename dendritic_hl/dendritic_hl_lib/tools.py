@@ -50,6 +50,29 @@ def _current_idea_description(catalog):
     return "PARSE ERROR: no valid state could be parsed"
 
 
+def _print_current_idea_details(catalog):
+    """If the current idea state names an idea, report on it: whether the idea
+    node actually exists, and (if so) the status of its canonical schedule."""
+    cis = catalog.current_idea_state
+    if cis.kind != "idea":
+        return
+    idea = catalog.ideas.get(cis.idea_id)
+    if idea is None:
+        # Syntactically valid but dangling -- defensive helpfulness in case the
+        # current idea state ever lives outside git / gets out of sync.
+        print("  WARNING: current idea state references a nonexistent idea node:")
+        print("    " + cis.idea_id)
+        return
+    canon = idea.canonical
+    if canon is None:
+        print("  Current idea's canonical schedule: none")
+    elif canon in catalog.schedules:
+        print("  Current idea's canonical schedule: "
+              + catalog.format_schedule_id(catalog.schedules[canon]))
+    else:
+        print("  Current idea's canonical schedule: " + canon + " (missing!)")
+
+
 INCONSISTENT_WARNING = """\
 AGENTS: If this is the first time editing this file this session,
 this means the file was edited without correct harness tracking.
@@ -70,6 +93,7 @@ def cmd_status(args):
         return
     catalog = ctx.catalog
     print("Current idea state: " + _current_idea_description(catalog))
+    _print_current_idea_details(catalog)
 
     h = ctx.workspace_hash
     matching = [n for n in catalog.schedules.values() if n.hash == h]
@@ -193,10 +217,33 @@ def cmd_new_idea(args):
     ctx.require_workspace()
     ctx.ensure_catalog_rw()
     node = ctx.resolve_schedule_arg(args.schedule)
+    if not node.is_major():
+        raise DhHlError(_minor_schedule_advice(ctx.catalog, node))
     text = _read_file_or_stdin(args.proposal)
     idea = ctx.catalog.create_idea(node, args.proposal_name, text)
     ctx.finish()
     print("Created idea " + ctx.catalog.format_idea_id(idea))
+
+
+def _minor_schedule_advice(catalog, node):
+    """Actionable message when new_idea targets a minor schedule (its parent
+    must be a major schedule).  A minor schedule is never a root, so it always
+    has a parent idea."""
+    parent = node.parent_idea()
+    lines = ["cannot add an idea to a minor schedule ({}); ideas must hang off "
+             "a major schedule.".format(catalog.format_schedule_id(node))]
+    if parent.canonical is not None:
+        canon = catalog.format_schedule_id(catalog.schedules[parent.canonical])
+        lines.append(
+            "Its parent idea's canonical schedule is {0}; branch the new idea "
+            "off that instead:\n    dh_hl new_idea {0} <name> <proposal file>"
+            .format(canon))
+    else:
+        lines.append(
+            "Its parent idea has no canonical schedule yet. If this schedule "
+            "builds and you're happy it implements the idea, run `dh_hl canon` "
+            "to make it canonical (then it can host new ideas).")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -219,9 +266,14 @@ def cmd_canon(args):
     if idea.canonical is not None:
         if idea.canonical == node.full_id:
             raise DhHlError("this schedule is already the canonical schedule")
+        blocker = catalog.format_schedule_id(catalog.schedules[idea.canonical])
         raise DhHlError(
-            "idea already has a canonical schedule; use `dh_hl new_idea` / "
-            "`dh_hl set_idea` to explore a variation instead")
+            "idea already has a canonical schedule ({0}).\n"
+            "To record the current schedule as a variation, branch a new idea "
+            "off that canonical schedule and explore under it:\n"
+            "    dh_hl new_idea {0} <name> <proposal file>\n"
+            "    dh_hl set_idea <the new idea's ID>\n"
+            "then rebuild and `dh_hl canon`.".format(blocker))
     # Sanity: canon target should be a child of the current idea.
     if node.parent_id != idea.full_id:
         raise DhHlError("schedule is not a child of the current idea")

@@ -410,8 +410,11 @@ Otherwise, the status is "workspace inconsistent, unexpected current idea state"
 **Outputs:**
 
 * Give the current idea state
-  (no current idea/some current idea/parse error/missing/etc.)
-  Try to print errors cleanly in this case.
+  (no current idea/some current idea/parse error/missing/etc.).
+  Try to print errors cleanly if something is wrong with the state on disk.
+  If the current idea node exists, print the status of its canonical schedule (none, or ID of it).
+  If the current idea state is syntactically correct but references a nonexistent idea node,
+  advise of that too (defensive helpfulness, in case we want the current idea state out of git)
 
 * Gives the status as one of
     - "workspace inconsistent, unknown schedule"
@@ -712,7 +715,8 @@ Requirements:
 
 If the command fails due to the last requirement:
     * Advise this was already done if the schedule node is already the canonical schedule.
-    * Advise the `dh_hl new_idea` and `dh_hl set_idea` tools otherwise.
+    * Advise the `dh_hl new_idea {canonical ID}` and `dh_hl set_idea {canonical ID}` tools otherwise,
+      where the `{canonical ID}` is the ID of the major schedule that blocked this command.
 
 There is intentionally no "change canonical schedule" tool.
 
@@ -779,6 +783,14 @@ The schedule node must be a major schedule.
 Error if this would cause an ID collision (i.e. the proposal name is already used).
 
 Gives back the ID of the new idea node.
+
+If the schedule node is a minor schedule, advise:
+* If its parent idea node already has a canonical schedule,
+  give its ID and advise passing it explicitly to the `new_idea` tool
+* If its parent idea node has no canonical schedule,
+  advise `dh_hl canon` tool is appropriate if the current schedule builds
+  and you are happy it correctly implements the idea.
+* (no other cases -- minor schedules are not root nodes by definition)
 
 
 ### List Ideas Tool
