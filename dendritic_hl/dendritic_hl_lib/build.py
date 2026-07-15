@@ -19,7 +19,7 @@ import sys
 
 from . import ids
 from . import safety
-from .context import Context
+from .context import Context, read_text_or_stdin
 from .errors import DhHlError, HarnessError
 from . import ninja_syntax
 
@@ -87,11 +87,11 @@ def _param_tokens(params):
 
 
 def _load_params_object(path):
-    """A generator-parameters file for `build`: a single JSON object."""
+    """A generator-parameters file for `build`: a single JSON object.
+    "-" reads from stdin, like every other file input."""
     if path is None:
         return {}
-    with open(path, "r", encoding="utf-8") as f:
-        obj = json.load(f)
+    obj = json.loads(read_text_or_stdin(path))
     if not isinstance(obj, dict):
         raise DhHlError("parameters file must hold a JSON object")
     return obj
@@ -99,11 +99,10 @@ def _load_params_object(path):
 
 def _load_params_list(path):
     """A generator-parameters file for `profile`: [{}] default, [obj] for a
-    single object, or the list verbatim."""
+    single object, or the list verbatim.  "-" reads from stdin."""
     if path is None:
         return [{}]
-    with open(path, "r", encoding="utf-8") as f:
-        obj = json.load(f)
+    obj = json.loads(read_text_or_stdin(path))
     if isinstance(obj, dict):
         return [obj]
     if isinstance(obj, list):

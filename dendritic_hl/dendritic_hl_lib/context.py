@@ -13,6 +13,16 @@ def catalog_dir_for(workspace_path):
     return workspace_path + ".dh_hl"
 
 
+def read_text_or_stdin(path):
+    """Read a text input argument.  Universally, "-" means read from stdin;
+    otherwise *path* is a filename.  (Workspace filenames are exempt -- they
+    are real read/write paths, not content streams.)"""
+    if path == "-":
+        return sys.stdin.read()
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
 class Context:
     def __init__(self, workspace_path):
         self.catalog = Catalog(catalog_dir_for(workspace_path), workspace_path)

@@ -68,6 +68,16 @@ def test_atexit_rollback_restores_partial_mutation(run_cli, workspace):
         os.listdir(os.path.join(cat_dir, "idea")) == []
 
 
+def test_new_idea_proposal_from_stdin(run_cli, workspace):
+    """The `-` = stdin convention, as an agent would pipe it via <<EOF."""
+    run_cli("new_root", str(workspace))
+    r = run_cli("new_idea", str(workspace), "vec", "-",
+                input="Vectorize wider.\nMore detail.\n")
+    assert r.returncode == 0
+    idea_root = os.path.join(str(workspace) + ".dh_hl", "idea")
+    assert len(os.listdir(idea_root)) == 1
+
+
 def test_successful_command_is_not_rolled_back(run_cli, workspace):
     """Sanity: without injection, the new idea persists (commit disarmed it)."""
     run_cli("new_root", str(workspace))

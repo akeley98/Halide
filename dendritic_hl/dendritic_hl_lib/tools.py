@@ -6,9 +6,8 @@ rollback handler is disarmed.
 """
 
 import json
-import sys
 
-from .context import Context
+from .context import Context, read_text_or_stdin
 from .errors import DhHlError
 
 
@@ -16,11 +15,8 @@ from .errors import DhHlError
 # helpers
 # ---------------------------------------------------------------------------
 
-def _read_file_or_stdin(path):
-    if path == "-":
-        return sys.stdin.read()
-    with open(path, "r", encoding="utf-8") as f:
-        return f.read()
+# Backwards-compatible alias; "-" -> stdin handling now lives in context.
+_read_file_or_stdin = read_text_or_stdin
 
 
 def _first_line_72(text):

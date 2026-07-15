@@ -51,10 +51,12 @@ def _build_parser():
     sp.add_argument("schedule", help="schedule ID")
 
     sp = add("build")
-    sp.add_argument("parameters", nargs="?", help="generator parameters JSON file")
+    sp.add_argument("parameters", nargs="?",
+                    help="generator parameters JSON file ('-' for stdin)")
 
     sp = add("profile")
-    sp.add_argument("parameters", nargs="?", help="generator parameters JSON file")
+    sp.add_argument("parameters", nargs="?",
+                    help="generator parameters JSON file ('-' for stdin)")
 
     add("canon")
 

@@ -132,6 +132,20 @@ def test_profile_json_path_is_absolute_with_relative_workspace(
         "profiler JSON path must be absolute, got " + repr(seen["json_out"])
 
 
+def test_profile_params_from_stdin(workspace, fake_build, monkeypatch, capsys):
+    """`-` reads the parameters JSON from stdin, like every other file input."""
+    import io
+    tools.cmd_new_root(ns(workspace=str(workspace)))
+    capsys.readouterr()
+    monkeypatch.setattr("sys.stdin", io.StringIO('[{"offset": 1}, {"offset": 2}]'))
+    with pytest.raises(SystemExit) as e:
+        build.cmd_profile(ns(workspace=str(workspace), parameters="-"))
+    assert e.value.code == 0
+    obj = _result(workspace, capsys)
+    assert [b["parameters"] for b in obj["benchmark"]] == [{"offset": 1},
+                                                           {"offset": 2}]
+
+
 # ---- pure helper: parameter formatting ------------------------------------
 
 @pytest.mark.parametrize("value,expected", [
