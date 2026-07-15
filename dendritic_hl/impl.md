@@ -607,3 +607,43 @@ So we are guaranteed not to end up in an infinite loop
 even if the catalog state is cooked.
 
 FUTURE: use the `importance` stuff to filter to less info.
+
+
+## Tests
+
+There is a `tests/` directory holding a `pytest` suite for the harness.
+
+**Test-only dependencies.** The `dh_hl` package itself is Python-3-standard-library
+ONLY (see the Dependency scope goal in [idea.md](idea.md)). The **tests**, which
+are never shipped or imported by the package, are allowed two extra packages:
+
+* `pytest` -- the test runner (fixtures, `tmp_path`, `monkeypatch`, parametrize).
+* `hypothesis` -- property-based testing, used for the ID round-trip properties
+  in `test_ids.py`.
+
+Install these *only* into a throwaway environment; do NOT add them to any
+runtime path. On this machine they live in a git-ignored virtualenv:
+
+    python3 -m venv dendritic_hl/.venv
+    dendritic_hl/.venv/bin/python -m pip install pytest hypothesis
+
+(A venv rather than a global `pip install` because the system Python here is
+Homebrew's, which refuses global installs under PEP 668. Any environment with
+the two packages works.)
+
+**Running.** From the `dendritic_hl/` directory:
+
+    .venv/bin/python -m pytest -m "not halide"   # fast; no Halide needed
+    .venv/bin/python -m pytest                    # full suite
+
+Most tests are Halide-free (they exercise the catalog model, tools, short IDs,
+safety/rollback, and build/profile logic with the subprocess steps stubbed).
+The genuinely end-to-end tests are marked `halide` (registered in `pytest.ini`)
+and auto-skip unless the local `~/Halide` build and `ninja` are present.
+
+**Test-only hook in shipped code.** `safety.new_file` honors a
+`DH_HL_TEST_FAIL_AFTER=<n>` environment variable that raises after the n-th new
+file created in a run. It is a no-op unless that variable is set, and exists
+solely so a subprocess test can prove the `atexit` rollback restores a partial
+mutation end-to-end (the real rollback path only fires at true interpreter
+exit). It is the one concession to testability in otherwise test-agnostic code.
