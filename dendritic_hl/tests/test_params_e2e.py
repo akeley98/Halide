@@ -112,6 +112,16 @@ def test_build_parameter_changes_stmt_loop_bound(run_cli, tiled_ws, tmp_path):
     stmt = os.path.join(ws + ".dh_hl", "bin", "dh_hl_gen.stmt")
     assert run_cli("new_root", ws).returncode == 0
 
+    # NOTE: the `x.xi, 0, N)` fragments below encode what I observed of this
+    # Halide build's .stmt syntax (empirically, not from a spec):
+    #   * a for-loop prints as `for (<var>, <min>, <max>)` with an INCLUSIVE
+    #     max -- not the `(min, extent)` form Halide's mainline IRPrinter uses.
+    #     So `output.split(x, xo, xi, F)` yields inner loop `x.xi, 0, F-1)`
+    #     (F=8 -> 7, 16 -> 15, 32 -> 31), the constant we key on.
+    #   * the split var keeps its given name `xi`, fully qualified as
+    #     `output.s0.x.xi` (stage.dim.var); matching the `x.xi` tail is enough.
+    # If a Halide upgrade changes either convention, update these fragments.
+
     # Default GeneratorParam (split_factor=8): inner split loop bound is 7.
     assert run_cli("build", ws).returncode == 0
     text = open(stmt).read()
