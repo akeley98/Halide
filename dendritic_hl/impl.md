@@ -516,3 +516,33 @@ A worked, tested generator + ninja build is under
 
 The ninja file is named `build_ninja.txt` (not `build.ninja`) so it escapes
 this repo's `*.ninja*` gitignore rule and can be committed; hence the `-f`.
+
+
+### History Tool -- Implementation Details
+
+    dh_hl history {workspace file name} [schedule ID]
+
+Walk the branch of the tree starting from the referenced schedule node,
+going up towards a root node.
+
+Starting at the referenced schedule node, print:
+
+* Its ID
+* Its child idea nodes in the same format as `dh_hl list_ideas`.
+  Mark the child idea node that is the parent of the previously printed schedule node.
+  Try to recycle common code plz.
+* For each commentary file, print its timestamp on one line,
+  and print the first up-to 72 characters of the first line of the commentary text.
+
+After each printed schedule node, move on to its parent idea node's parent schedule node,
+and stop after printing the root schedule node reached.
+
+Add some minimal formatting to make it look nice.
+Put conspicuous dividers between the info printed for each schedule node.
+
+When traversing up the tree,
+check that the two edges follow the tree structure timestamp invariant.
+So we are guaranteed not to end up in an infinite loop
+even if the catalog state is cooked.
+
+FUTURE: use the `importance` stuff to filter to less info.

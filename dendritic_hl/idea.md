@@ -347,7 +347,6 @@ depending on the number of parent idea nodes of the referenced schedule node.
 
 ### Build Tool
 
-
     dh_hl build {workspace file name} [parameters file]
 
 This tool tries to compile the workspace file and add/update a schedule node for it.
@@ -383,6 +382,8 @@ The parameters file is in Generator Parameters JSON Object Format
 
 This tool exits successfully iff no harness errors occurred
 and all subprocesses succeeded.
+
+NOTE: [details omitted](impl.md)
 
 
 ### Profile Tool
@@ -596,8 +597,7 @@ Print out state of the referenced idea node as a JSON object, with key/value pai
 
 Walk the branch of the tree starting from the referenced schedule node,
 going up towards a root node.
-
-Starting at the referenced schedule node, print:
+For each schedule node, the tool prints:
 
 * Its ID
 * Its child idea nodes in the same format as `dh_hl list_ideas`.
@@ -606,18 +606,7 @@ Starting at the referenced schedule node, print:
 * For each commentary file, print its timestamp on one line,
   and print the first up-to 72 characters of the first line of the commentary text.
 
-After each printed schedule node, move on to its parent idea node's parent schedule node,
-and stop after printing the root schedule node reached.
-
-Add some minimal formatting to make it look nice.
-Put conspicuous dividers between the info printed for each schedule node.
-
-When traversing up the tree,
-check that the two edges follow the tree structure timestamp invariant.
-So we are guaranteed not to end up in an infinite loop
-even if the catalog state is cooked.
-
-FUTURE: use the `importance` stuff to filter to less info.
+NOTE: [details omitted](impl.md)
 
 
 ### Fix Canonical Tool
