@@ -34,6 +34,10 @@ This contains files and directories holding state:
   Scan the `idea` nodes directory (to be defined)
   for nodes whose full IDs have the correct `parent id`.
 
+  *Alternate design* had multiple parent ideas possible (DAG not tree),
+  which was helping the "git compatibility" goal (e.g. encode merge conflict resolution),
+  but just raised too many tough cases for a prototype with questionable payoff.
+
 * **Result:** `result.txt`,
   holding `c++ error`, `halide error`, or `success`.
   The default value is `c++ error`.

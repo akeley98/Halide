@@ -4,7 +4,7 @@ The process of scheduling Halide code -- whether by hand or automated -- is ofte
 Schedules evolve over time into other schedules, and some plans don't work out and get back-tracked.
 What I want is a system that stores a "catalog" of schedules, organized into a historic tree structure.
 
-My goals for the Dendritic Halide Harness (`dendritic_hl.py`, shortened as `dh_hl`) are:
+My goals for the Dendritic Halide Harness (`dh_hl`) are:
 
 * **Long Term Memory Device:** Give agents a system for long-term
   coordination and progress tracking.
@@ -79,8 +79,8 @@ this should be done by adding a legitimate child idea node.
 * The parent of an idea node must be older than (have strictly
   lower timestamp than) each child schedule node of the idea.
 
-These rules only have to be checked to the extent that tools
-will not add new violations of the requirements.
+Unless otherwise specified, tools only avoid creating new violations,
+and do not diagnose existing violations.
 
 *History note:* idea nodes used to have timestamps as well,
 and this made the timestamp invariant easier, but made
@@ -89,7 +89,7 @@ and this made the timestamp invariant easier, but made
 
 ### Timestamp Format
 
-Always use UTC time, format with `strftime("%Y-%m-%dT%H%M%S_%fZ")` (microsecond precision).
+UTC time, formatted with `strftime("%Y-%m-%dT%H%M%S_%fZ")` (microsecond precision).
 These are sortable lexicographically, assuming the year is between 1000 and 9999 CE.
 We assume these increase monotonically even though leap seconds screw us.
 (Note, we avoid `.` due to short IDs, to be described later).
@@ -110,9 +110,6 @@ sha256, lowercase hex digits.
   Exactly 90 characters.
 
 * **Edges:** 0 or 1 parent idea nodes, 0 or more child idea nodes.
-  *Alternate design* had multiple parent ideas possible (DAG not tree),
-  which was helping the "git compatibility" goal,
-  but just raised too many tough cases for a prototype.
 
 * **Result:** C++ compiler error, Halide compiler error, or success.
 
@@ -175,15 +172,12 @@ The short ID resolves successfully iff it matches exactly 1 node.
 If there's more than 1 match, the error message lists all matching IDs from oldest-to-newest.
 The timestamp of an idea is implicitly the timestamp of its parent schedule (break ties arbitrarily).
 
-Whenever tools output IDs for nodes, they should output short IDs
-whenever possible.  Figure some heuristics for creating reasonable
-unambiguous short IDs, but include at least 6 hash characters (like
-git) to minimize risk that short IDs become ambiguous.
-Fall back on outputting full IDs if the generated short ID is ambiguous.
+Tools output short IDs whenever possible, using at least 6 hash
+characters (like git) to minimize the risk of ambiguity.
+If a generated short ID would still be ambiguous, the tool falls back
+to the full ID.
 
-FUTURE: may add an override for this
-(so use a helper function to format short IDs,
-so there's a common place where this override can be implemented)
+FUTURE: an override may be added to force a particular short-ID format.
 
 Unless otherwise stated, any of the `{...}` components may be empty.
 
@@ -250,7 +244,7 @@ due to errors in the existing `current_idea_state.txt`.
 
     dh_hl help [command]
 
-List commands briefly if no `[command]` given, otherwise give description of the named command.
+With no `[command]`, lists all commands briefly; with a `[command]`, describes that one.
 
 
 ### Status Tool
@@ -286,6 +280,9 @@ and give basic information on the current catalog state.
     - "workspace consistent"
       (unambiguous schedule node found)
 
+* On either inconsistent status, also prints a warning that the workspace
+  may have been edited outside the harness (see Rationale below).
+
 
 NOTE: [details omitted](impl.md) <!-- Update both docs if you change the tool! -->
 
@@ -314,8 +311,8 @@ parent the schedule to an idea that has nothing to do with what is actually bein
 
     dh_hl restore {workspace file name} {schedule ID}
 
-Copy the schedule node's C++ schedule to the workspace file,
-and update the current idea node state as follows,
+Copies the schedule node's C++ schedule to the workspace file,
+and updates the current idea state as follows,
 depending on the number of parent idea nodes of the referenced schedule node.
 
 * **No parents:** set to "no current idea" state, embedding the timestamp of the schedule node.
@@ -327,20 +324,20 @@ depending on the number of parent idea nodes of the referenced schedule node.
 
     dh_hl build {workspace file name} [parameters file]
 
-This tool tries to compile the workspace file and add/update a schedule node for it.
+This tool compiles the workspace file and adds/updates a schedule node for it. It:
 
-1. Find or create the edited schedule node
-2. Compile the Halide binary
-3. Conditionally update the result state of the edited schedule node
-4. Print the ID of the edited schedule node
+1. Finds or creates the edited schedule node.
+2. Compiles the Halide binary.
+3. Conditionally updates the result state of the edited schedule node.
+4. Prints the ID of the edited schedule node.
 
 The edited schedule node is:
 
 * If `dh_hl status` would give an unambiguous schedule node,
   that schedule node is the one this tool edits.
 * Otherwise, if there is no current idea node,
-  give an error, and suggest the `set_idea` and `new_root` tools.
-* Otherwise, add a new child schedule node to the current idea node
+  the tool errors, suggesting the `set_idea` and `new_root` tools.
+* Otherwise, the tool adds a new child schedule node to the current idea node,
   holding a copy of the workspace file.
 
 The build, along with a `conceptual.stmt` file,
@@ -393,7 +390,7 @@ NOTE: [details omitted](impl.md) <!-- Update both docs if you change the tool! -
 
     dh_hl canon {workspace file name}
 
-Set the canonical schedule of the current idea node to the schedule node named by `dh_hl status`.
+Sets the canonical schedule of the current idea node to the schedule node named by `dh_hl status`.
 This is a schedule node that holds a copy of the workspace schedule.
 
 Requirements:
@@ -403,8 +400,8 @@ Requirements:
     * The current idea node must not already have a canonical schedule
 
 If the command fails due to the last requirement:
-    * Advise this was already done if the schedule node is already the canonical schedule.
-    * Advise the `dh_hl new_idea {canonical ID}` and `dh_hl set_idea` tools otherwise,
+    * If the schedule node is already the canonical schedule, the tool notes it was already done.
+    * Otherwise, it advises the `dh_hl new_idea {canonical ID}` and `dh_hl set_idea` tools,
       where the `{canonical ID}` is the ID of the major schedule that blocked this command.
 
 There is intentionally no "change canonical schedule" tool.
@@ -414,9 +411,9 @@ There is intentionally no "change canonical schedule" tool.
 
     dh_hl comment {workspace file name} {commentary file} [schedule ID]
 
-Add a new commentary file to the referenced schedule node,
-contents copied from the passed `commentary file`.
-The commentary file has no importance value.
+Adds a new commentary file to the referenced schedule node,
+with contents copied from the passed `commentary file`.
+The commentary has no importance value.
 
 
 ### Comment With Importance Tool
@@ -430,18 +427,18 @@ Like the `comment` tool but with the addition of the importance value.
 
     dh_hl new_root {workspace file name}
 
-Hash the file and look for existing schedule nodes with the same hash.
-If any of them are major schedules, issue an error,
+Hashes the file and looks for existing schedule nodes with the same hash.
+If any of them are major schedules, the tool errors,
 giving IDs of all such schedule nodes.
 
-Otherwise, create a new root node schedule node that contains a
-copy of the workspace file, and set the current idea state to
-"no current idea" embedding the timestamp of the new schedule node.
+Otherwise, it creates a new root schedule node containing a
+copy of the workspace file, and sets the current idea state to
+"no current idea", embedding the timestamp of the new schedule node.
 
-This tool must succeed regardless of the contents of the current idea
-state on disk. However, if parsing the existing file yielded multiple
-encoded current idea states, have the additional effect of adding
-commentary to the new schedule node in the form:
+This tool succeeds regardless of the contents of the current idea
+state on disk. If parsing the existing file yields multiple
+encoded current idea states, it additionally adds
+commentary to the new schedule node of the form:
 
         dh_hl new_root tool: automated merge conflict recovery
         [one line for each encoded current idea state parsed,
@@ -455,23 +452,23 @@ This is just a temporary "bare minimum" merge conflict resolution.
 
     dh_hl set_idea {workspace file name} {idea ID}
 
-Update the current idea state to "some current idea",
+Updates the current idea state to "some current idea",
 embedding the given idea node ID.
-It's an error if the ID doesn't resolve to a single idea node that actually exists.
+It is an error if the ID doesn't resolve to a single existing idea node.
 
 
 ### New Idea Tool
 
     dh_hl new_idea {workspace file name} {proposal name} {proposal file} [schedule ID]
 
-Add a new child idea node to the referenced schedule node.
-The schedule node must be a major schedule.
+Adds a new child idea node to the referenced schedule node,
+which must be a major schedule.
 
-Error if this would cause an ID collision (i.e. the proposal name is already used).
+It is an error if this would cause an ID collision (i.e. the proposal name is already used).
 
 Gives back the ID of the new idea node.
 
-If the schedule node is a minor schedule, advise:
+If the schedule node is a minor schedule, the tool advises:
 * If its parent idea node already has a canonical schedule,
   give its ID and advise passing it explicitly to the `new_idea` tool
 * If its parent idea node has no canonical schedule,
@@ -484,9 +481,9 @@ If the schedule node is a minor schedule, advise:
 
     dh_hl list_ideas {workspace file name} [schedule ID]
 
-Error if the referenced schedule node is not a major schedule.
+It is an error if the referenced schedule node is not a major schedule.
 
-For each child idea node of the referenced schedule node, print 3 lines:
+For each child idea node of the referenced schedule node, prints three lines:
 
 * The ID of the idea node
 * The proposal name (indent by 2)
@@ -497,20 +494,18 @@ For each child idea node of the referenced schedule node, print 3 lines:
 
     dh_hl view_idea {workspace file name} {idea ID}
 
-Print the referenced idea node's
+Prints the referenced idea node's
 
 * proposal name
 * full proposal text
 * list of child schedule IDs, one line each
-
-Add some minimal formatting to make it look nice.
 
 
 ### Force Parent Idea Tool
 
     dh_hl force_parent_idea {workspace file name} {idea ID} [schedule ID]
 
-Add the referenced schedule node to be a child and the canonical
+Adds the referenced schedule node as a child and the canonical
 schedule of the referenced idea node.
 
 This fails if:
@@ -525,7 +520,7 @@ Rarely needed, mostly for when a new root node was created and you regret it.
 
     dh_hl json_schedule_info {workspace file name} [schedule ID]
 
-Print out state of the referenced schedule node as a JSON object, with key/value pairs
+Prints the state of the referenced schedule node as a JSON object, with key/value pairs
 
 * `id`: full ID of node
 
@@ -554,7 +549,7 @@ Print out state of the referenced schedule node as a JSON object, with key/value
 
     dh_hl json_idea_info {workspace file name} {idea ID}
 
-Print out state of the referenced idea node as a JSON object, with key/value pairs
+Prints the state of the referenced idea node as a JSON object, with key/value pairs
 
 * `id`: full ID of node
 
@@ -575,16 +570,15 @@ Print out state of the referenced idea node as a JSON object, with key/value pai
 
     dh_hl history {workspace file name} [schedule ID]
 
-Walk the branch of the tree starting from the referenced schedule node,
-going up towards a root node.
-For each schedule node, the tool prints:
+Walks the branch of the tree from the referenced schedule node
+up toward a root node.
+For each schedule node, prints:
 
 * Its ID
-* Its child idea nodes in the same format as `dh_hl list_ideas`.
-  Mark the child idea node that is the parent of the previously printed schedule node.
-  Try to recycle common code plz.
-* For each commentary file, print its timestamp on one line,
-  and print the first up-to 72 characters of the first line of the commentary text.
+* Its child idea nodes in the same format as `dh_hl list_ideas`,
+  marking the child idea node that is the parent of the previously printed schedule node.
+* For each commentary file, its timestamp on one line,
+  and the first up-to-72 characters of the first line of the commentary text.
 
 NOTE: [details omitted](impl.md) <!-- Update both docs if you change the tool! -->
 
@@ -593,22 +587,21 @@ NOTE: [details omitted](impl.md) <!-- Update both docs if you change the tool! -
 
     dh_hl fix_canonical {workspace file name} {idea ID}
 
-Scan the file storing the canonical schedule ID for the referenced idea node.
-There should be two IDs (from the merge conflict).
-Modify the catalog graph so that
+After a merge conflict, the referenced idea node's canonical schedule may
+record two competing IDs. This tool resolves that by modifying the catalog
+graph so that:
 
 * The older canonical schedule becomes the canonical schedule
   of the referenced idea node.
-* Said canonical schedule has a new child idea node added whose
-  canonical schedule is the newer canonical schedule.
-  The proposal name and text indicates a resolved merge conflict.
-* Child idea node has proposal name `fix_canonical_{timestamp}`
-  and a proposal text that explains it was auto-generated by `fix_canonical`.
+* That canonical schedule gains a new child idea node whose
+  canonical schedule is the newer of the two competing schedules.
+* The new child idea node has proposal name `fix_canonical_{timestamp}`
+  and a proposal text noting it was auto-generated by `fix_canonical`.
 
 
 ## Generator Parameters JSON Object Format
 
-Object containing generator name / parameter value pairs.
+Object mapping generator parameter names to values.
 Each value can be bool, number, or string.
 All pairs go to the Halide generator as `key=value`.
 
