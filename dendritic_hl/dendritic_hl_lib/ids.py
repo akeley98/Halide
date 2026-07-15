@@ -1,4 +1,4 @@
-"""Timestamps, hashes, and full/short ID handling for dendritic_hl.
+"""Timestamps, hashes, and full ID handling for dendritic_hl.
 
 Full IDs are the stable, on-disk identifiers.  Short IDs are the convenient
 human/agent-facing form; they are *resolved* against a catalog (see catalog.py)
