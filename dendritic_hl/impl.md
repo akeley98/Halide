@@ -289,7 +289,7 @@ and all subprocesses succeeded.
 
 FUTURE: configurable Halide library location.
 For now just define a magic constant `~/Halide/build/`
-which will work on this computer at least.
+which will work on David's MacBook at least.
 
 FUTURE: switch to CMake if absolutely huge payoff would happen (I hate CMake).
 
@@ -523,7 +523,7 @@ scrape the `available Generators are:` list, which holds a single name under
 the single-generator assumption) and passes a **fixed** `-f` basename such as
 `dh_hl_gen`; this decoupled variant was also tested end-to-end.
 
-**Gotchas that cost time (all confirmed on this machine):**
+**Gotchas that cost time (all confirmed on David's MacBook):**
 
 * `HalideBuffer.h` and `HalideRuntime.h` are **not** in `build/include/`
   (which only has `Halide.h`); they live in `~/Halide/src/runtime/`,
@@ -622,7 +622,7 @@ are never shipped or imported by the package, are allowed two extra packages:
   in `test_ids.py`.
 
 Install these *only* into a throwaway environment; do NOT add them to any
-runtime path. On this machine they live in a git-ignored virtualenv:
+runtime path. On David's MacBook they live in a git-ignored virtualenv:
 
     python3 -m venv dendritic_hl/.venv
     dendritic_hl/.venv/bin/python -m pip install pytest hypothesis
