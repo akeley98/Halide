@@ -50,7 +50,7 @@ This contains files and directories holding state:
 
 *Merge risk:* `parent.txt` merge conflict if two branches retroactively parented
 a root schedule node to two different idea nodes.
-No automatic fix provided -- this power should be used very sparingly anyway.
+No automatic fix provided: this power should be used very sparingly anyway.
 
 *Merge risk:* `result.txt` conflict.
 Unlikely but could happen due to committing a failed build that
@@ -132,7 +132,7 @@ which Python 3 is compiled to work around.
 Mac limit is `1024` characters.
 
 
-### Status Tool -- Implementation Details
+### Status Tool — Implementation Details
 
     dh_hl status {workspace file name}
 
@@ -189,7 +189,7 @@ Otherwise, the status is "workspace inconsistent, unexpected current idea state"
         Likely causes include user action, and git checkouts / merges.
 
 
-### Build Tool -- Implementation Details
+### Build Tool — Implementation Details
 
     dh_hl build {workspace file name} [parameters file]
 
@@ -296,7 +296,7 @@ which will work on David's MacBook at least.
 FUTURE: switch to CMake if absolutely huge payoff would happen (I hate CMake).
 
 
-### Profile Tool -- Implementation Details
+### Profile Tool — Implementation Details
 
     dh_hl profile {workspace file name} [parameters file]
 
@@ -400,8 +400,8 @@ Again, be very very careful about new vs. existing directories.
 Don't delete any directories you didn't create.
 
 *What counts as "the tool fails" (rollback) vs. a catalogued bad outcome:*
-The rollback is for **harness/logic failures** -- an unexpected exception, a
-pre-flight validation error, an environment problem -- i.e. cases where the
+The rollback is for **harness/logic failures** — an unexpected exception, a
+pre-flight validation error, an environment problem — i.e. cases where the
 in-memory changes are incomplete or untrustworthy and must be undone. It is
 **not** triggered by a subprocess reporting a bad *build outcome*. Recording a
 schedule node whose C++ failed to compile (`c++ error`) or whose Halide
@@ -539,27 +539,27 @@ the single-generator assumption) and passes a **fixed** `-f` basename such as
   `runtime.a` needs linking (unlike Halide's own root `Makefile`, which emits
   with `no_runtime`). Only `-lpthread -ldl` are needed at link time.
 
-Phase 1 -- build the generator executable (the `GenGen` main lives inside
+Phase 1 — build the generator executable (the `GenGen` main lives inside
 `libHalide_GenGen.a`):
 
     c++ -std=c++17 -O2 -I$H/include -I$H/../tools \
         generator.cpp -o generator_exe \
         $H/tools/libHalide_GenGen.a -L$H/src -lHalide -Wl,-rpath,$H/src
 
-Phase 2 -- run the generator; append generator params as trailing `key=value`
+Phase 2 — run the generator; append generator params as trailing `key=value`
 tokens (formatted per the `%d`/`%r` rule above):
 
     ./generator_exe -g brighten -o . -f brighten [key=value ...] \
         -e static_library,c_header,registration,stmt,conceptual_stmt \
         target=host-profile
 
-Phase 3 -- compile `RunGenMain` (note the `src/runtime` include):
+Phase 3 — compile `RunGenMain` (note the `src/runtime` include):
 
     c++ -c -std=c++17 -O2 -fno-exceptions -DHALIDE_NO_PNG -DHALIDE_NO_JPEG \
         -I$H/include -I$H/../src/runtime -I$H/../tools -I. \
         $H/../tools/RunGenMain.cpp -o RunGenMain.o
 
-Phase 4 -- link the standalone binary:
+Phase 4 — link the standalone binary:
 
     c++ -std=c++17 -O2 RunGenMain.o brighten.registration.cpp brighten.a \
         -o brighten.rungen -lpthread -ldl
@@ -581,7 +581,7 @@ The ninja file is named `build_ninja.txt` (not `build.ninja`) so it escapes
 this repo's `*.ninja*` gitignore rule and can be committed; hence the `-f`.
 
 
-### History Tool -- Implementation Details
+### History Tool — Implementation Details
 
     dh_hl history {workspace file name} [schedule ID]
 
@@ -619,8 +619,8 @@ There is a `tests/` directory holding a `pytest` suite for the harness.
 ONLY (see the Dependency scope goal in [idea.md](idea.md)). The **tests**, which
 are never shipped or imported by the package, are allowed two extra packages:
 
-* `pytest` -- the test runner (fixtures, `tmp_path`, `monkeypatch`, parametrize).
-* `hypothesis` -- property-based testing, used for the ID round-trip properties
+* `pytest` — the test runner (fixtures, `tmp_path`, `monkeypatch`, parametrize).
+* `hypothesis` — property-based testing, used for the ID round-trip properties
   in `test_ids.py`.
 
 Install these *only* into a throwaway environment; do NOT add them to any
@@ -663,7 +663,7 @@ argv it builds. Consequences to keep in mind:
   change. `pytest` points straight at the break, and the fix is mechanical.
 * Because the fixture *replaces* these functions, the fake tests never run
   their real bodies, so edits *inside* a body (e.g. compiler flags in `_link`,
-  ninja rules in `_write_ninja`) are invisible to them -- those bodies are
+  ninja rules in `_write_ninja`) are invisible to them — those bodies are
   covered only by the opt-in `halide`-marked `test_halide.py`.
 
 So the two tiers are complementary: fake-build pins the orchestration fast and

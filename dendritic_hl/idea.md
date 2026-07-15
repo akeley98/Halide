@@ -1,6 +1,6 @@
-# Dendritic Halide Harness -- Harness for agentic Halide scheduling
+# Dendritic Halide Harness — Harness for agentic Halide scheduling
 
-The process of scheduling Halide code -- whether by hand or automated -- is often a sort of tree search.
+The process of scheduling Halide code — whether by hand or automated — is often a sort of tree search.
 Schedules evolve over time into other schedules, and some plans don't work out and get back-tracked.
 What I want is a system that stores a "catalog" of schedules, organized into a historic tree structure.
 
@@ -475,7 +475,7 @@ If the schedule node is a minor schedule, the tool advises:
 * If its parent idea node has no canonical schedule,
   advise `dh_hl canon` tool is appropriate if the current schedule builds
   and you are happy it correctly implements the idea.
-* (no other cases -- minor schedules are not root nodes by definition)
+* (no other cases: minor schedules are not root nodes by definition)
 
 
 ### List Ideas Tool
