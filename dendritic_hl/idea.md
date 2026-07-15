@@ -531,6 +531,7 @@ Lists all schedule nodes matching some criterion:
   Error if a root node is given.
 
 * `list_child_schedules`: list all children of the given idea node.
+  (This partially overlaps the `view_idea` tool, with different verbosity).
 
 * `list_equal_schedules`: list all schedule nodes with the same hash as the given schedule.
 
