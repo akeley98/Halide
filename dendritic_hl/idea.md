@@ -340,7 +340,8 @@ The edited schedule node is:
 * Otherwise, the tool adds a new child schedule node to the current idea node,
   holding a copy of the workspace file.
 
-The build, along with a `conceptual.stmt` file,
+The build, along with a plain `.stmt` and a `conceptual.stmt` file
+(the lowered and pre-lowering loop nests, respectively),
 is in the gitignore'd `bin` directory of the catalog directory.
 Depending on the build outcome, the result state of the edited schedule node is updated to one of:
 

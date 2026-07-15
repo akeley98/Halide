@@ -146,6 +146,37 @@ def test_profile_params_from_stdin(workspace, fake_build, monkeypatch, capsys):
                                                            {"offset": 2}]
 
 
+def test_emit_requests_both_stmt_forms(monkeypatch):
+    """build (with_stmt=True) asks the generator for both the plain `stmt` and
+    `conceptual_stmt`; profile (with_stmt=False) asks for neither."""
+    seen = {}
+
+    def spy(cmd, cwd=None, env=None):
+        seen["cmd"] = cmd
+        return 0
+    monkeypatch.setattr(build, "_run_streamed", spy)
+
+    build._emit("bin", "gen", {}, with_stmt=True)
+    emits = seen["cmd"][seen["cmd"].index("-e") + 1].split(",")
+    assert "stmt" in emits and "conceptual_stmt" in emits
+
+    build._emit("bin", "gen", {}, with_stmt=False)
+    emits = seen["cmd"][seen["cmd"].index("-e") + 1].split(",")
+    assert "stmt" not in emits and "conceptual_stmt" not in emits
+
+
+def test_build_prints_both_stmt_paths(workspace, fake_build, capsys):
+    tools.cmd_new_root(ns(workspace=str(workspace)))
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as e:
+        build.cmd_build(ns(workspace=str(workspace)))
+    assert e.value.code == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert any(ln.endswith(".stmt") and not ln.endswith(".conceptual.stmt")
+               for ln in lines)
+    assert any(ln.endswith(".conceptual.stmt") for ln in lines)
+
+
 # ---- pure helper: parameter formatting ------------------------------------
 
 @pytest.mark.parametrize("value,expected", [

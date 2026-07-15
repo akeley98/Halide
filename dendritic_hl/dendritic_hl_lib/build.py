@@ -176,7 +176,8 @@ def _discover_generator_name(bin_dir):
 def _emit(bin_dir, gen_name, params, with_stmt):
     emits = ["static_library", "c_header", "registration"]
     if with_stmt:
-        emits.append("conceptual_stmt")
+        # Both the plain lowered loop nest and the conceptual (pre-lowering) form.
+        emits += ["stmt", "conceptual_stmt"]
     cmd = (["./" + _GEN_EXE, "-g", gen_name, "-o", ".", "-f", _OUT_BASENAME]
            + _param_tokens(params)
            + ["-e", ",".join(emits), "target=host-profile"])
@@ -242,7 +243,7 @@ def cmd_build(args):
         # Phase 1: C++ -> generator exe.  Failure => c++ error outcome.
         if _ninja_build(bin_dir, ninja_path, [_GEN_EXE]) != 0:
             _upgrade_result(node, "c++ error")
-            _finish_and_exit(ctx, node, ok=False, stmt_path=None)
+            _finish_and_exit(ctx, node, ok=False)
 
         # Generator-count harness check (after C++ compiled): no result update.
         gen_name = _discover_generator_name(bin_dir)
@@ -254,18 +255,19 @@ def cmd_build(args):
         # Phase 2: emit (with conceptual_stmt for build).
         if _emit(bin_dir, gen_name, params, with_stmt=True) != 0:
             _upgrade_result(node, "halide error")
-            _finish_and_exit(ctx, node, ok=False, stmt_path=None)
+            _finish_and_exit(ctx, node, ok=False)
         _upgrade_result(node, "success")
 
         # Phase 4: link a standalone benchmarkable binary.
         if _link(bin_dir) != 0:
             raise HarnessError("failed to link the standalone RunGen binary")
 
-        stmt_path = os.path.join(bin_dir, _OUT_BASENAME + ".conceptual.stmt")
-        _finish_and_exit(ctx, node, ok=True, stmt_path=stmt_path)
+        stmt_paths = [os.path.join(bin_dir, _OUT_BASENAME + ".stmt"),
+                      os.path.join(bin_dir, _OUT_BASENAME + ".conceptual.stmt")]
+        _finish_and_exit(ctx, node, ok=True, stmt_paths=stmt_paths)
     except HarnessError as e:
         print("dh_hl: " + str(e), file=sys.stderr)
-        _finish_and_exit(ctx, node, ok=False, stmt_path=None)
+        _finish_and_exit(ctx, node, ok=False)
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +288,7 @@ def cmd_profile(args):
 
         if _ninja_build(bin_dir, ninja_path, [_GEN_EXE]) != 0:
             _upgrade_result(node, "c++ error")
-            _finish_and_exit(ctx, node, ok=False, stmt_path=None)
+            _finish_and_exit(ctx, node, ok=False)
 
         gen_name = _discover_generator_name(bin_dir)
 
@@ -328,10 +330,10 @@ def cmd_profile(args):
                 continue
             node.add_benchmark(hostname, bench_ts, bench_obj)
 
-        _finish_and_exit(ctx, node, ok=all_ok, stmt_path=None)
+        _finish_and_exit(ctx, node, ok=all_ok)
     except HarnessError as e:
         print("dh_hl: " + str(e), file=sys.stderr)
-        _finish_and_exit(ctx, node, ok=False, stmt_path=None)
+        _finish_and_exit(ctx, node, ok=False)
 
 
 def _build_benchmark_obj(json_out, hostname, params):
@@ -358,11 +360,11 @@ def _build_benchmark_obj(json_out, hostname, params):
 # shared finish
 # ---------------------------------------------------------------------------
 
-def _finish_and_exit(ctx, node, ok, stmt_path):
-    """Flush the (possibly failed-outcome) node exactly once, print the stmt
-    path and node ID, then exit with a status reflecting *ok*."""
-    if stmt_path is not None:
-        print(stmt_path)
+def _finish_and_exit(ctx, node, ok, stmt_paths=None):
+    """Flush the (possibly failed-outcome) node exactly once, print any emitted
+    stmt paths and the node ID, then exit with a status reflecting *ok*."""
+    for p in stmt_paths or ():
+        print(p)
     ctx.finish()
     # Node ID is the last thing printed (after all subprocess output).
     print(ctx.catalog.format_schedule_id(node))

@@ -43,10 +43,14 @@ def test_build_and_profile_real_halide(brighten_ws, tmp_path, capsys):
     with pytest.raises(SystemExit) as e:
         build.cmd_build(ns(workspace=str(brighten_ws)))
     assert e.value.code == 0
-    # build prints the conceptual.stmt path; it should really exist.
-    out = capsys.readouterr().out.splitlines()
-    stmt = out[0]
-    assert stmt.endswith(".conceptual.stmt") and os.path.isfile(stmt)
+    # build prints both emitted stmt paths; both should really exist on disk.
+    printed = capsys.readouterr().out.splitlines()
+    stmt_lines = [ln for ln in printed if ln.endswith(".stmt")]
+    plain = [ln for ln in stmt_lines if ln.endswith(".stmt")
+             and not ln.endswith(".conceptual.stmt")]
+    conceptual = [ln for ln in stmt_lines if ln.endswith(".conceptual.stmt")]
+    assert len(plain) == 1 and os.path.isfile(plain[0])
+    assert len(conceptual) == 1 and os.path.isfile(conceptual[0])
 
     params = tmp_path / "p.json"
     params.write_text('[{"offset": 5}, {"offset": 30}]')

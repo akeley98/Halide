@@ -230,7 +230,8 @@ steps, and drive everything param-dependent from Python `subprocess`:
 The steps performed are:
 * compile the C++ workspace file to a Halide generator executable (ninja)
 * run the generator to emit the AOT static library, header, `registration.cpp`,
-  and the `conceptual.stmt` file, using `target=host-profile` (Python)
+  and both the plain `.stmt` and `conceptual.stmt` files, using
+  `target=host-profile` (Python)
 * link `RunGenMain` against the generated `registration.cpp` + static library
   to finish a standalone benchmarkable binary (Python)
 
@@ -255,8 +256,9 @@ workspace file. This enforces the assumption rather than silently picking one.
 
 [RunGenMain doc](https://halide-lang.org/docs/md_doc_2_run_gen.html)
 
-Print the file name (in the `bin/`) directory of the `conceptual.stmt` file.
-It can be overwritten by future builds.
+Print the file names (in the `bin/` directory) of the emitted `.stmt` and
+`conceptual.stmt` files.
+They can be overwritten by future builds.
 Pipe the output `stdout` and `stderr` to the harness's `stdout` and `stderr`.
 
 See the **Reference Build Commands** subsection below for a tested,
@@ -312,7 +314,7 @@ The list of generator parameters JSON objects for the command is
 Steps 2 and 3 of the `dh_hl build` command are modified to become a loop over this list.
 Build the C++ to Halide generator once, then, for each object in the list,
 
-* Generate the Halide binary from the generator (no `stmt` needed this time).
+* Generate the Halide binary from the generator (no `.stmt`/`conceptual.stmt` needed this time).
 * Update result state of the edited schedule node as in `dh_hl build`, step 3.
 * Run the binary with `--verbose --benchmarks=all --estimate_all` (FUTURE: `--estimate_all` isn't great)
   and with `HL_PROFILER_JSON_OUTPUT=...` to get profiler JSON data out.
@@ -515,7 +517,7 @@ tri-state (a) empty (unknown state), (b) doesn't exist, (c) exists.
 
 The following was tested end-to-end against the local Halide build at
 `~/Halide/build/` and produces a standalone binary that both benchmarks
-(via the profiler) and emits the `conceptual.stmt`. In these examples the
+(via the profiler) and emits the `.stmt` and `conceptual.stmt`. In these examples the
 name `brighten` is used for both `-g` (generator name) and `-f` (output
 basename) since the example generator registers `brighten`. The real tool
 instead **discovers** the `-g` name (run the generator exe with no `-g` and
@@ -529,7 +531,7 @@ the single-generator assumption) and passes a **fixed** `-f` basename such as
   (which only has `Halide.h`); they live in `~/Halide/src/runtime/`,
   so `RunGenMain` must be compiled with `-I ~/Halide/src/runtime`.
 * The `conceptual_stmt` emit produces a file with extension **`.conceptual.stmt`**,
-  not `.conceptual_stmt`.
+  not `.conceptual_stmt`. (The plain `stmt` emit produces `.stmt`.)
 * Compile `RunGenMain` with `-fno-exceptions -DHALIDE_NO_PNG -DHALIDE_NO_JPEG`
   so it doesn't drag in libpng/libjpeg; benchmarking uses random/estimated
   inputs, so no image I/O is needed.
@@ -548,7 +550,7 @@ Phase 2 -- run the generator; append generator params as trailing `key=value`
 tokens (formatted per the `%d`/`%r` rule above):
 
     ./generator_exe -g brighten -o . -f brighten [key=value ...] \
-        -e static_library,c_header,registration,conceptual_stmt \
+        -e static_library,c_header,registration,stmt,conceptual_stmt \
         target=host-profile
 
 Phase 3 -- compile `RunGenMain` (note the `src/runtime` include):
