@@ -284,7 +284,7 @@ and give basic information on the current catalog state.
   may have been edited outside the harness (see Rationale below).
 
 
-NOTE: [details omitted](impl.md) <!-- Update both docs if you change the tool! -->
+NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
 
 
 **Rationale:**
@@ -359,7 +359,7 @@ The parameters file is in Generator Parameters JSON Object Format
 This tool exits successfully iff no harness errors occurred
 and all subprocesses succeeded.
 
-NOTE: [details omitted](impl.md) <!-- Update both docs if you change the tool! -->
+NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
 
 
 ### Profile Tool
@@ -384,7 +384,7 @@ saved and the schedule node result state updated each time.
 
 Doesn't fail irrecoverably if some builds fail; the tool skips them and moves on.
 
-NOTE: [details omitted](impl.md) <!-- Update both docs if you change the tool! -->
+NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
 
 
 ### Canon Tool
@@ -581,7 +581,7 @@ For each schedule node, prints:
 * For each commentary file, its timestamp on one line,
   and the first up-to-72 characters of the first line of the commentary text.
 
-NOTE: [details omitted](impl.md) <!-- Update both docs if you change the tool! -->
+NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
 
 
 ### Fix Canonical Tool
