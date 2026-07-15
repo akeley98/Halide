@@ -128,6 +128,63 @@ which Python 3 is compiled to work around.
 Mac limit is `1024` characters.
 
 
+### Status Tool -- Implementation Details
+
+    dh_hl status {workspace file name}
+
+This is a purely read-only command.
+
+If there's no catalog directory, advise `dh_hl new_root {workspace file name}` and exit.
+Otherwise, the tool tries to find a schedule node that already holds the workspace file
+and give basic information on the current catalog state.
+
+**Search:**
+
+Hash the workspace file and look for schedule nodes with matching hashes.
+
+If none exist, the status is "workspace inconsistent, unknown schedule".
+
+Otherwise, if the current idea state is parsable and holds the "no current idea" state,
+and there exists a schedule node that
+(a) has a matching hash,
+(b) is a root node,
+(c) has a timestamp matching the timestamp embedded in the current idea state,
+*then* that schedule node is the **unambiguous schedule node**
+and the status is "workspace consistent".
+
+Otherwise, if the current idea state is parsable and holds the "some current idea" state,
+and there exists a schedule node that
+(a) has a matching hash,
+(b) has its parent idea node matching the one embedded in the current idea state,
+*then* that schedule node is the **unambiguous schedule node**
+and the status is "workspace consistent".
+
+Otherwise, the status is "workspace inconsistent, unexpected current idea state".
+
+**Outputs:**
+
+* Give the current idea state
+  (no current idea/some current idea/parse error/missing/etc.).
+  Try to print errors cleanly if something is wrong with the state on disk.
+  If the current idea node exists, print the status of its canonical schedule (none, or ID of it).
+  If the current idea state is syntactically correct but references a nonexistent idea node,
+  advise of that too (defensive helpfulness, in case we want the current idea state out of git)
+
+* Gives the status as one of
+    - "workspace inconsistent, unknown schedule"
+    - "workspace inconsistent, unexpected current idea state"
+    - "workspace consistent"
+
+* If the workspace is consistent, print the ID of the unambiguous schedule node.
+
+* If the workspace is inconsistent, give the warning
+
+        AGENTS: If this is the first time editing this file this session,
+        this means the file was edited without correct harness tracking.
+        DO NOT PROCEED, unless you have been advised otherwise.
+        Likely causes include user action, and git checkouts / merges.
+
+
 ### Build Tool -- Implementation Details
 
     dh_hl build {workspace file name} [parameters file]

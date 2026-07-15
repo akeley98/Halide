@@ -261,55 +261,33 @@ This is a purely read-only command.
 Agents MUST run this on a workspace file first,
 before the first edit to the file.
 
-If there's no catalog directory, advise `dh_hl new_root {workspace file name}` and exit.
+If there's no catalog directory,
+the tool advises `dh_hl new_root {workspace file name}` and exits.
 Otherwise, the tool tries to find a schedule node that already holds the workspace file
 and give basic information on the current catalog state.
 
-**Search:**
-
-Hash the workspace file and look for schedule nodes with matching hashes.
-
-If none exist, the status is "workspace inconsistent, unknown schedule".
-
-Otherwise, if the current idea state is parsable and holds the "no current idea" state,
-and there exists a schedule node that
-(a) has a matching hash,
-(b) is a root node,
-(c) has a timestamp matching the timestamp embedded in the current idea state,
-*then* that schedule node is the **unambiguous schedule node**
-and the status is "workspace consistent".
-
-Otherwise, if the current idea state is parsable and holds the "some current idea" state,
-and there exists a schedule node that
-(a) has a matching hash,
-(b) has its parent idea node matching the one embedded in the current idea state,
-*then* that schedule node is the **unambiguous schedule node**
-and the status is "workspace consistent".
-
-Otherwise, the status is "workspace inconsistent, unexpected current idea state".
-
 **Outputs:**
 
-* Give the current idea state
-  (no current idea/some current idea/parse error/missing/etc.).
-  Try to print errors cleanly if something is wrong with the state on disk.
-  If the current idea node exists, print the status of its canonical schedule (none, or ID of it).
-  If the current idea state is syntactically correct but references a nonexistent idea node,
-  advise of that too (defensive helpfulness, in case we want the current idea state out of git)
+* Gives the current idea state,
+  whether the current idea node exists,
+  and the canonical schedule for it, if any.
+
+* Gives the ID of the **unambiguous schedule node**, if it exists.
+  This is the schedule node that holds a copy of the workspace file (matched by hash)
+  and has a parenting status matching the current idea state:
+    - **no current idea:** is a root node whose timestamp matches the current idea state
+    - **some current idea:** its parent is the current idea node.
 
 * Gives the status as one of
     - "workspace inconsistent, unknown schedule"
+      (could not find any stored schedule matching the current workspace file)
     - "workspace inconsistent, unexpected current idea state"
+      (found stored schedule in catalog, but none were unambiguous)
     - "workspace consistent"
+      (unambiguous schedule node found)
 
-* If the workspace is consistent, print the ID of the unambiguous schedule node.
 
-* If the workspace is inconsistent, give the warning
-
-        AGENTS: If this is the first time editing this file this session,
-        this means the file was edited without correct harness tracking.
-        DO NOT PROCEED, unless you have been advised otherwise.
-        Likely causes include user action, and git checkouts / merges.
+NOTE: [details omitted](impl.md) <!-- Update both docs if you change the tool! -->
 
 
 **Rationale:**
@@ -383,7 +361,7 @@ The parameters file is in Generator Parameters JSON Object Format
 This tool exits successfully iff no harness errors occurred
 and all subprocesses succeeded.
 
-NOTE: [details omitted](impl.md)
+NOTE: [details omitted](impl.md) <!-- Update both docs if you change the tool! -->
 
 
 ### Profile Tool
@@ -407,6 +385,8 @@ once using each generator parameters object, with a benchmark object
 saved and the schedule node result state updated each time.
 
 Doesn't fail irrecoverably if some builds fail; the tool skips them and moves on.
+
+NOTE: [details omitted](impl.md) <!-- Update both docs if you change the tool! -->
 
 
 ### Canon Tool
@@ -606,7 +586,7 @@ For each schedule node, the tool prints:
 * For each commentary file, print its timestamp on one line,
   and print the first up-to 72 characters of the first line of the commentary text.
 
-NOTE: [details omitted](impl.md)
+NOTE: [details omitted](impl.md) <!-- Update both docs if you change the tool! -->
 
 
 ### Fix Canonical Tool
