@@ -895,11 +895,20 @@ def _format_idea_short(catalog, idea):
 
 
 def _format_schedule_short(catalog, node):
+    def good_candidate(catalog, cand):
+        # Internal helper: checks candidate schedule short ID and see if
+        # it unambiguously resolves to the full ID we're shortening.
+        # Silently convert "ambiguous" errors to False.
+        try:
+            return catalog.resolve_schedule(cand).full_id == node.full_id
+        except DhHlError:
+            return False
+
     h = node.hash
     if node.is_root():
         for hlen in range(_MIN_HASH, len(h) + 1):
             cand = "root.{}".format(h[:hlen])
-            if _resolves_to(catalog, cand, node):
+            if good_candidate(catalog, cand):
                 return cand
         return node.full_id
     idea = node.parent_idea()
@@ -909,17 +918,10 @@ def _format_schedule_short(catalog, node):
     # Prefer .canon when applicable.
     if idea.canonical == node.full_id:
         cand = "{}.canon".format(idea_short)
-        if _resolves_to(catalog, cand, node):
+        if good_candidate(catalog, cand):
             return cand
     for hlen in range(_MIN_HASH, len(h) + 1):
         cand = "{}.{}".format(idea_short, h[:hlen])
-        if _resolves_to(catalog, cand, node):
+        if good_candidate(catalog, cand):
             return cand
     return node.full_id
-
-
-def _resolves_to(catalog, cand, node):
-    try:
-        return catalog.resolve_schedule(cand).full_id == node.full_id
-    except DhHlError:
-        return False
