@@ -23,6 +23,9 @@ COMMAND_HELP = {
     "set_idea": "Set the current idea state to an existing idea node.",
     "new_idea": "Add a child idea node (proposal) to a major schedule.",
     "list_ideas": "List the child idea nodes of a major schedule.",
+    "list_sibling_schedules": "List schedules sharing a parent idea with the given schedule.",
+    "list_child_schedules": "List the child schedules of an idea node.",
+    "list_equal_schedules": "List schedules with the same source hash as the given one.",
     "view_idea": "Show an idea node's proposal and child schedules.",
     "force_parent_idea": "Parent a root schedule to an idea as its canonical (rare).",
     "json_schedule_info": "Dump a schedule node's full state as JSON.",
@@ -82,6 +85,15 @@ def _build_parser():
     sp = add("list_ideas")
     sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
 
+    sp = add("list_sibling_schedules")
+    sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
+
+    sp = add("list_child_schedules")
+    sp.add_argument("idea", help="idea ID")
+
+    sp = add("list_equal_schedules")
+    sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
+
     sp = add("view_idea")
     sp.add_argument("idea", help="idea ID")
 
@@ -116,6 +128,9 @@ _DISPATCH = {
     "set_idea": tools.cmd_set_idea,
     "new_idea": tools.cmd_new_idea,
     "list_ideas": tools.cmd_list_ideas,
+    "list_sibling_schedules": tools.cmd_list_sibling_schedules,
+    "list_child_schedules": tools.cmd_list_child_schedules,
+    "list_equal_schedules": tools.cmd_list_equal_schedules,
     "view_idea": tools.cmd_view_idea,
     "force_parent_idea": tools.cmd_force_parent_idea,
     "json_schedule_info": tools.cmd_json_schedule_info,

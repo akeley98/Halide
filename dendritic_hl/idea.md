@@ -502,6 +502,44 @@ Prints the referenced idea node's
 * list of child schedule IDs, one line each
 
 
+### History Tool
+
+    dh_hl history {workspace file name} [schedule ID]
+
+Walks the branch of the tree from the referenced schedule node
+up toward a root node.
+For each schedule node, prints:
+
+* Its ID
+* Its child idea nodes in the same format as `dh_hl list_ideas`,
+  marking the child idea node that is the parent of the previously printed schedule node.
+* For each commentary file, its timestamp on one line,
+  and the first up-to-72 characters of the first line of the commentary text.
+
+NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
+
+
+### List Schedules Tools
+
+    dh_hl list_sibling_schedules {workspace file name} [schedule ID]
+    dh_hl list_child_schedules {workspace file name} {idea ID}
+    dh_hl list_equal_schedules {workspace file name} [schedule ID]
+
+Lists all schedule nodes matching some criterion:
+
+* `list_sibling_schedules`: list all schedule nodes that have the same parent as the given schedule.
+  Error if a root node is given.
+
+* `list_child_schedules`: list all children of the given idea node.
+
+* `list_equal_schedules`: list all schedule nodes with the same hash as the given schedule.
+
+Each schedule is printed in the same manner as `dh_hl history`
+(ignoring the "marking the child idea node" part),
+with a clear separator between each.
+There is no predefined order of the schedules.
+
+
 ### Force Parent Idea Tool
 
     dh_hl force_parent_idea {workspace file name} {idea ID} [schedule ID]
@@ -565,23 +603,6 @@ Prints the state of the referenced idea node as a JSON object, with key/value pa
 * `canonical_schedule`: null if no canonical schedule, otherwise string full ID of the canonical schedule
 
 * `importance`: number if finite, null for negative infinity
-
-
-### History Tool
-
-    dh_hl history {workspace file name} [schedule ID]
-
-Walks the branch of the tree from the referenced schedule node
-up toward a root node.
-For each schedule node, prints:
-
-* Its ID
-* Its child idea nodes in the same format as `dh_hl list_ideas`,
-  marking the child idea node that is the parent of the previously printed schedule node.
-* For each commentary file, its timestamp on one line,
-  and the first up-to-72 characters of the first line of the commentary text.
-
-NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
 
 
 ### Fix Canonical Tool

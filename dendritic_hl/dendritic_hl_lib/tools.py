@@ -352,31 +352,38 @@ def cmd_view_idea(args):
 # history
 # ---------------------------------------------------------------------------
 
+def _print_schedule_node(ctx, node, marked_idea_id=None):
+    """Print one schedule node's block: an ID header, its child ideas (in
+    `list_ideas` format, optionally marking one), and its commentary.  The
+    leading `#` rule doubles as the separator between blocks.  Shared by
+    `history` and the list-schedules tools."""
+    catalog = ctx.catalog
+    print("#" * 72)
+    print("Schedule: " + catalog.format_schedule_id(node))
+    print("-" * 72)  # "-" keeps the ID visually attached to its own contents
+
+    ideas = catalog.child_ideas(node)
+    if ideas:
+        print("Ideas:")
+    for idea in sorted(ideas, key=lambda i: i.full_id):
+        marker = "* " if idea.full_id == marked_idea_id else "  "
+        _print_idea_listing(ctx, idea, marker=marker)
+
+    if node.commentary:
+        print("Commentary:")
+    for c in sorted(node.commentary, key=lambda c: c.timestamp):
+        print("  " + c.timestamp)
+        print("  " + _first_line_72(c.text))
+
+
 def cmd_history(args):
     ctx = Context(args.workspace)
     ctx.require_workspace()
     ctx.require_catalog_ro()
-    catalog = ctx.catalog
     node = ctx.resolve_schedule_arg(args.schedule)
     prev_idea_id = None  # the idea whose parent is the previously printed sched
     while node is not None:
-        print("#" * 72)
-        print("Schedule: " + catalog.format_schedule_id(node))
-        print("-" * 72)  # Use "-" to make the ID and its contents less visually separated than "#"
-
-        ideas = catalog.child_ideas(node)
-        if ideas:
-            print("Ideas:")
-        for idea in sorted(ideas, key=lambda i: i.full_id):
-            marker = "* " if idea.full_id == prev_idea_id else "  "
-            _print_idea_listing(ctx, idea, marker=marker)
-
-        if node.commentary:
-            print("Commentary:")
-        for c in sorted(node.commentary, key=lambda c: c.timestamp):
-            print("  " + c.timestamp)
-            print("  " + _first_line_72(c.text))
-
+        _print_schedule_node(ctx, node, marked_idea_id=prev_idea_id)
         if node.is_root():
             break
         idea = node.parent_idea()
@@ -390,6 +397,48 @@ def cmd_history(args):
             print("!! tree timestamp invariant violated walking up; stopping")
             break
         node = parent_schedule
+
+
+# ---------------------------------------------------------------------------
+# list_sibling_schedules / list_child_schedules / list_equal_schedules
+# ---------------------------------------------------------------------------
+
+def _print_schedule_list(ctx, nodes):
+    ordered = sorted(nodes, key=lambda n: n.timestamp)
+    if not ordered:
+        print("(no matching schedule nodes)")
+        return
+    for n in ordered:
+        _print_schedule_node(ctx, n)
+
+
+def cmd_list_sibling_schedules(args):
+    ctx = Context(args.workspace)
+    ctx.require_workspace()
+    ctx.require_catalog_ro()
+    node = ctx.resolve_schedule_arg(args.schedule)
+    if node.is_root():
+        raise DhHlError(
+            "list_sibling_schedules needs a non-root schedule; a root node has "
+            "no parent idea, hence no siblings")
+    _print_schedule_list(ctx, ctx.catalog.child_schedules(node.parent_idea()))
+
+
+def cmd_list_child_schedules(args):
+    ctx = Context(args.workspace)
+    ctx.require_workspace()
+    ctx.require_catalog_ro()
+    idea = ctx.catalog.resolve_idea(args.idea)
+    _print_schedule_list(ctx, ctx.catalog.child_schedules(idea))
+
+
+def cmd_list_equal_schedules(args):
+    ctx = Context(args.workspace)
+    ctx.require_workspace()
+    ctx.require_catalog_ro()
+    node = ctx.resolve_schedule_arg(args.schedule)
+    equal = [n for n in ctx.catalog.schedules.values() if n.hash == node.hash]
+    _print_schedule_list(ctx, equal)
 
 
 # ---------------------------------------------------------------------------
