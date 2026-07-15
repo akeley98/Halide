@@ -9,6 +9,15 @@ Failure handling follows impl.md Tool Safety Requirements: bad build *outcomes*
 (`c++ error` / `halide error`) and the generator-count harness error are NOT
 rollback-triggering exceptions; the node is still flushed/committed, and only
 the process exit code reflects the failure.
+
+TEST COUPLING: the module-level `_`-prefixed helpers that shell out to the
+toolchain -- `_write_ninja`, `_ninja_build`, `_discover_generator_name`,
+`_emit`, `_link`, `_run_benchmark` -- are monkeypatch seams. tests/test_build_fake.py
+replaces them (by name, with matching signatures) so build/profile logic can be
+exercised without a real Halide build, and `_emit`'s argv is inspected directly.
+Treat their names and signatures as a lightly load-bearing test contract:
+renaming, inlining, or re-signaturing one means updating that fixture in the
+same change. See impl.md "Tests".
 """
 
 import json

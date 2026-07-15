@@ -649,3 +649,22 @@ file created in a run. It is a no-op unless that variable is set, and exists
 solely so a subprocess test can prove the `atexit` rollback restores a partial
 mutation end-to-end (the real rollback path only fires at true interpreter
 exit). It is the one concession to testability in otherwise test-agnostic code.
+
+**Monkeypatch seams (build/profile).** `tests/test_build_fake.py` exercises the
+`build`/`profile` orchestration without a real Halide toolchain by using
+`pytest`'s `monkeypatch` to replace, *by name*, the `build.py` helpers that
+shell out: `_write_ninja`, `_ninja_build`, `_discover_generator_name`, `_emit`,
+`_link`, `_run_benchmark`. A test also calls `_emit` directly and inspects the
+argv it builds. Consequences to keep in mind:
+
+* These helpers' **names and signatures are a lightly load-bearing test
+  contract.** Renaming, inlining, or re-signaturing one breaks the fixture
+  (`monkeypatch.setattr` raises on a missing attribute); update it in the same
+  change. `pytest` points straight at the break, and the fix is mechanical.
+* Because the fixture *replaces* these functions, the fake tests never run
+  their real bodies, so edits *inside* a body (e.g. compiler flags in `_link`,
+  ninja rules in `_write_ninja`) are invisible to them -- those bodies are
+  covered only by the opt-in `halide`-marked `test_halide.py`.
+
+So the two tiers are complementary: fake-build pins the orchestration fast and
+always; the Halide test verifies the real toolchain integration when present.
