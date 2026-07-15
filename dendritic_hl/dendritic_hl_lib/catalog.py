@@ -1,6 +1,6 @@
 """In-memory model of a dendritic_hl catalog, with lazy load + dirty flush.
 
-Design (see idea.md "Tool Internal Design"):
+Design (see impl.md "Tool Internal Design"):
 
 * A Catalog owns one CurrentIdeaState and two dicts (schedules, ideas) keyed by
   full ID.  The dicts are populated by listing sch/ and idea/ once; each entry
@@ -301,7 +301,7 @@ class ScheduleNode:
 
     def set_parent_overwrite(self, idea_id):
         """Re-parent an existing node by overwriting parent.txt.  Only used by
-        fix_canonical (see note in idea.md safety rules -- parent.txt is not in
+        fix_canonical (see note in impl.md safety rules -- parent.txt is not in
         the documented overwrite-allowed list; flagged for author review)."""
         assert not self.is_new
         self._parent_id = idea_id

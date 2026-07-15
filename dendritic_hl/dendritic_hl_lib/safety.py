@@ -4,7 +4,7 @@ Tools create new files/directories through this module so that, if the tool
 fails, an atexit handler can delete exactly what was created -- in reverse
 order, so directories are empty when removed.
 
-OVERRIDING SAFETY RULE (from idea.md): never use recursive directory delete.
+OVERRIDING SAFETY RULE (from impl.md): never use recursive directory delete.
 We only ever os.remove() files we created and os.rmdir() directories we
 created, in reverse creation order.  os.rmdir refuses non-empty directories,
 which is a second line of defense against catastrophe.

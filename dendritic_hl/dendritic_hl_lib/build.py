@@ -1,11 +1,11 @@
 """The `build` and `profile` tools: two-phase Halide build + benchmarking.
 
-Per the decided build-driver split (idea.md Build Tool): ninja builds the
+Per the decided build-driver split (impl.md Build Tool): ninja builds the
 param-independent steps once (the C++ workspace -> generator executable, and
 RunGenMain.o); Python drives the param-dependent steps serially with
 subprocess (generator emit -> link -> optional benchmark run).
 
-Failure handling follows idea.md Tool Safety Requirements: bad build *outcomes*
+Failure handling follows impl.md Tool Safety Requirements: bad build *outcomes*
 (`c++ error` / `halide error`) and the generator-count harness error are NOT
 rollback-triggering exceptions; the node is still flushed/committed, and only
 the process exit code reflects the failure.
@@ -23,7 +23,7 @@ from .context import Context, read_text_or_stdin
 from .errors import DhHlError, HarnessError
 from . import ninja_syntax
 
-# ---- Halide location (magic constants; see idea.md FUTURE notes) -----------
+# ---- Halide location (magic constants; see impl.md FUTURE notes) -----------
 HALIDE_BUILD = os.path.expanduser("~/Halide/build")
 HALIDE_ROOT = os.path.expanduser("~/Halide")
 
@@ -68,7 +68,7 @@ def _format_param_value(v):
     """Format a generator parameter value as a key=value token payload.
 
     Whole numbers with %d, non-whole with a full-precision repr (no roundoff);
-    see the NB in the Build Tool section of idea.md."""
+    see the NB in the Build Tool section of impl.md."""
     if isinstance(v, bool):
         return "true" if v else "false"
     if isinstance(v, int):
