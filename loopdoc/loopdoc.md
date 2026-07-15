@@ -224,7 +224,10 @@ produce hist:
 Each stage has its **own dimension list**, built from its own left-hand side:
 
 > An update stage loops over the **free `Var`s** appearing on its left-hand
-> side **plus the `RVar`s** of any `RDom` it uses. Default order, innermost
+> side **plus the `RVar`s** of the one `RDom` it uses — an update definition may
+> reference **at most one** `RDom` (two distinct ones is rejected, *"Multiple
+> reduction domains found in definition"*; several reduction axes come from a
+> single multi-dimensional `RDom`, e.g. `RDom r(0, 4, 0, 5)`). Default order, innermost
 > first: the `RVar`s are innermost — and *within* the `RVar`s the first-declared
 > dimension (`r.x`) is the **innermost** loop, matching the `Var` convention
 > that the first dimension varies fastest. This order follows the `RDom`'s
