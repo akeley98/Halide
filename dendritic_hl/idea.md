@@ -29,6 +29,7 @@ The goals of the Dendritic Halide Harness (`dh_hl`) are:
   This is also why it's "catalog" and not "repository".
 
 * **Support for Parallel Agent Sessions:**
+  TODO: this is the part that doesn't exist yet.
   Each agent session is tracked historically as a "session node".
   The catalog data structure on-disk is robust to multiple concurrent agent sessions,
   and implements a machine-wide lockout that prevents benchmarking from
@@ -150,6 +151,32 @@ may be used as an out-of-band method to recommend the "official" parameter value
   If there exists a canonical schedule with no commentary containing importance values: 0
   Otherwise: maximum of all commentary importance values.
   Note: this design means adding commentary with negative importance can "demote" a 0-importance node.
+
+
+# (Temporary) The Goals of the new Session/Concurrency Rewrite
+
+* Harness now needs to be able to handle concurrent usage and locking.
+  I need locking both to prevent simultaneous catalog edits and to force monopolizing the machine
+  when running profiling.
+
+* New session nodes, used to represent a single main agent or sub-agent session.
+  It's opened with a seed idea node, gets closed with an output schedule node,
+  and contains a private workspace containing an untracked C++ schedule and current idea state.
+
+* The session nodes form a graph separate from the main idea/schedule graph,
+  tracking history of sessions and main/sub-agent relations.
+  A production usage may not care about this history, but it'll be useful for research.
+
+* The catalog alone is now the only artifact that is intended to be checked into git.
+  Get rid of the concurrency-killing single workspace file, `bin/`, and current idea state.
+  Since there's no C++ file in plain sight anymore,
+  the "final schedule" will have to be deduced by querying the results of the recent session.
+
+* Each agent needs to have a "current session", which controls which session node they're associated with.
+  Most `dh_hl` commands will require a current session argument (`-s` `--session`)
+  and a current catalog directory argument (`-C` `--catalog`).
+  The latter takes the place of deducing the catalog directory from the (eliminated) single workspace file.
+  This is made easier with session handles.
 
 
 ### Session Node State
