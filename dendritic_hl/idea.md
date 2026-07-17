@@ -221,6 +221,13 @@ The convention is this: there usually should be only one terminus,
 it should be closed,
 and its output schedule is the "final result" of LLM-guided scheduling so far.
 
+Advice: there should be only one top-level (main) agent,
+working on a level 0 session.
+All concurrency should be from sub-agents,
+assigned sub-sessions of level 1+ depth.
+This serializes creation of top-level sessions,
+preventing unexpected multiple termini.
+
 
 ## Full and Short IDs
 
@@ -295,7 +302,6 @@ The `tmp.` prefix is to emphasize how fragile these handles are.
 If you need to identify a session in commentary or other text checked-in to the catalog,
 use the full session ID.
 
-TODO impl details.
 NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
 
 
@@ -308,26 +314,37 @@ It is in `~/.cache/dendritic_hl/`,
 with the `~/.cache` portion overridable with the `XDG_CACHE_HOME` environment variable.
 
 
-### The Machine Lock
+### Locking
 
-All tools acquire the machine lock, usually concurrently.
+All tools acquire the **machine lock**, usually concurrently.
 The profiling step of `profile` and any `exec_exclusive` command
 acquire the machine lock exclusively.
 
-TODO impl details.
+All tools that access a catalog acquire an exclusive per-catalog **catalog lock**.
+
+All tools that require a current session (`-s`) acquire an exclusive per-session **session lock**,
+except for a subset of read-only commands, marked when their syntax is introduced.
+This locking *never* fails for correct usage: failure to acquire is diagnosed as an error
+(two concurrent agents using the same session).
+
 NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
 
 
 ## Tools
 
 The tools are invoked with `dh_hl {tool name} args...`.
-All tools accept, and most require, the arguments:
+There are two frequest arguments:
 
 * `-C`, `--catalog`: gives the directory name (must end with `.dh_hl`) for the current catalog.
 
 * `-s`, `--session`: gives the session node full ID OR a session handle.
-  If both a session handle and `-C`/`--catalog` are given,
-  the two must argee exactly on the catalog directory.
+  A session handle may substitute for a mandatory `-C` argument;
+  if both are given, the catalog directory must match.
+
+Tools that *require* a current session have `-s` shown as an explicit argument,
+but note `-C` is implicitly required if `-s` passed a session node full ID.
+Tools that *require* only a catalog directory have `-C` shown as an explicit argument.
+However, all tools accept both arguments, for simplicity.
 
 The "current session" is the session node referenced by the above 2 arguments.
 The "current idea state" and "workspace C++ file" implicitly refer to the
@@ -341,15 +358,13 @@ corresponding session private workspace state.
 
 `[schedule ID]`, if not given explicitly,
 implies the unambiguous schedule node ID that would be given by `dh_hl status`,
-or an error if no unambiguous schedule node ID would be given.
+or an error if no current session (`-s`) or no unambiguous schedule node ID would be given.
 It is rarely needed to pass this.
 
 The "current idea node" is nothing, if the current idea state encodes "no current idea",
 and otherwise the idea node referenced by the "some current idea" state.
 Commands that explicitly edit the current idea state must not error out
 due to errors in the existing `current_idea_state.txt`.
-
-TODO: Should I spell out explicitly per-tool whether the catalog dir / session ID are required?
 
 
 ### Help Tool
@@ -361,7 +376,8 @@ With no `[command]`, lists all commands briefly; with a `[command]`, describes t
 
 ### Status Tool
 
-    dh_hl status
+    # Does not acquire session lock
+    dh_hl status -s ...
 
 This is a purely read-only command.
 Agents MUST run this on startup, before first editing the workspace C++ file.
@@ -390,6 +406,7 @@ and give basic information on the current catalog state.
     - **some current idea:** its parent is the current idea node.
 
 * The status as one of
+    - "no workspace C++ file"
     - "workspace inconsistent, unknown schedule"
       (could not find any stored schedule matching the current workspace C++ file)
     - "workspace inconsistent, unexpected current idea state"
@@ -428,7 +445,7 @@ git merging could cause the session private workspace to desync.
 
 ### Restore Tool
 
-    dh_hl restore {schedule ID}
+    dh_hl restore -s ... {schedule ID}
 
 Copies the schedule node's C++ schedule to the workspace C++ file,
 and updates the current idea state as follows,
@@ -441,7 +458,7 @@ depending on the number of parent idea nodes of the referenced schedule node.
 
 ### Build Tool
 
-    dh_hl build [parameters file]
+    dh_hl build -s ... [parameters file]
 
 This tool compiles the workspace file and adds/updates a schedule node for it. It:
 
@@ -484,7 +501,7 @@ NOTE: [link to implementation details](impl.md) <!-- Update both docs if you cha
 
 ### Profile Tool
 
-    dh_hl profile [parameters file]
+    dh_hl profile -s ... [parameters file]
 
 This is like `dh_hl build` except
 * The Halide binary is run with Andrew Adams's new profiler tool
@@ -516,7 +533,7 @@ NOTE: [link to implementation details](impl.md) <!-- Update both docs if you cha
 
 ### Canon Tool
 
-    dh_hl canon
+    dh_hl -s ... canon
 
 Sets the canonical schedule of the current idea node to the schedule node named by `dh_hl status`.
 This is a schedule node that holds a copy of the workspace schedule.
@@ -537,7 +554,7 @@ There is intentionally no "change canonical schedule" tool.
 
 ### Comment Tool
 
-    dh_hl comment {commentary file} [schedule ID]
+    dh_hl comment -C ... {commentary file} [schedule ID]
 
 Adds a new commentary file to the referenced schedule node,
 with contents copied from the passed `commentary file`.
@@ -546,14 +563,14 @@ The commentary has no importance value.
 
 ### Comment With Importance Tool
 
-    dh_hl comment_importance {commentary file} {importance} [schedule ID]
+    dh_hl comment_importance -C ... {commentary file} {importance} [schedule ID]
 
 Like the `comment` tool but with the addition of the importance value.
 
 
 ### New Root Tool
 
-    dh_hl new_root
+    dh_hl new_root -s ...
 
 Hashes the file and looks for existing schedule nodes with the same hash.
 If any of them are major schedules, the tool errors,
@@ -581,7 +598,7 @@ Or just do it now if it's naturally part of the current batch of changes.
 
 ### Set Idea Tool
 
-    dh_hl set_idea {idea ID}
+    dh_hl set_idea -s ... {idea ID}
 
 Updates the current idea state to "some current idea",
 embedding the given idea node ID.
@@ -590,7 +607,7 @@ It is an error if the ID doesn't resolve to a single existing idea node.
 
 ### New Idea Tool
 
-    dh_hl new_idea {proposal name} {proposal file} [schedule ID]
+    dh_hl new_idea -s ... {proposal name} {proposal file} [schedule ID]
 
 Adds a new child idea node to the referenced schedule node,
 which must be a major schedule.
@@ -610,7 +627,7 @@ If the schedule node is a minor schedule, the tool advises:
 
 ### List Ideas Tool
 
-    dh_hl list_ideas [schedule ID]
+    dh_hl list_ideas -C ... [schedule ID]
 
 It is an error if the referenced schedule node is not a major schedule.
 
@@ -623,8 +640,9 @@ For each child idea node of the referenced schedule node, prints three lines:
 
 ### View Idea Tools
 
-    dh_hl view_idea {idea ID}
-    dh_hl view_session_idea  # References current session's seed idea node
+    # All commands do not acquire session lock
+    dh_hl view_idea -C ... {idea ID}
+    dh_hl view_session_idea -s ...
 
 Prints the referenced idea node's
 
@@ -632,10 +650,12 @@ Prints the referenced idea node's
 * full proposal text
 * list of child schedule IDs, one line each
 
+`view_session_idea` references the current session's seed idea.
+
 
 ### History Tool
 
-    dh_hl history [schedule ID]
+    dh_hl history -C ... [schedule ID]
 
 Walks the branch of the tree from the referenced schedule node
 up toward a root node.
@@ -652,9 +672,9 @@ NOTE: [link to implementation details](impl.md) <!-- Update both docs if you cha
 
 ### List Schedules Tools
 
-    dh_hl list_sibling_schedules [schedule ID]
-    dh_hl list_child_schedules {idea ID}
-    dh_hl list_equal_schedules [schedule ID]
+    dh_hl list_sibling_schedules -C ... [schedule ID]
+    dh_hl list_child_schedules -C ... {idea ID}
+    dh_hl list_equal_schedules -C ... [schedule ID]
 
 Lists all schedule nodes matching some criterion:
 
@@ -674,7 +694,7 @@ There is no predefined order of the schedules.
 
 ### View Commentary Tool
 
-    dh_hl view_commentary [schedule ID]
+    dh_hl view_commentary -C ... [schedule ID]
 
 Print all commentary of the referenced schedule node.
 
@@ -687,7 +707,8 @@ Prints each commentary file separated by dividers, with its
 
 ### View Session Commentary Tool
 
-    dh_hl view_session_commentary
+    # Does not acquire session lock
+    dh_hl view_session_commentary -s ...
 
 Similar to `view_commentary`, except
 
@@ -697,7 +718,7 @@ Similar to `view_commentary`, except
 
 ### Force Parent Idea Tool
 
-    dh_hl force_parent_idea {idea ID} [schedule ID]
+    dh_hl force_parent_idea -C ... {idea ID} [schedule ID]
 
 Adds the referenced schedule node as a child and the canonical
 schedule of the referenced idea node.
@@ -743,7 +764,7 @@ for a parent schedule that's exclusively its own.
 
 ### New Catalog Tool
 
-    dh_hl new_catalog {proposal name} {proposal file} {input C++ file}
+    dh_hl new_catalog -C ... {proposal name} {proposal file} {input C++ file}
 
 Creates a new catalog directory with the bare minimum state to get started:
 
@@ -753,8 +774,9 @@ Creates a new catalog directory with the bare minimum state to get started:
 
 * One top-level session node (terminus) seeded with that idea node.
 
-The catalog gets stored in the directory named by the `-C` option.
-The tool errors if that directory already exists.
+The new catalog directory is named by the `-C` argument.
+The requirement for `-C` is *opposite* all other commands:
+it is an error if the named directory *does* exist.
 
 The behavior is as-if a single schedule node were created,
 and then a new session/idea pair created with that schedule as the parent schedule.
@@ -763,7 +785,7 @@ The new session node has no parent session.
 
 ### New Sub Session Tool
 
-    dh_hl new_sub_session {proposal name} {proposal file} [schedule ID]
+    dh_hl new_sub_session -s ... {proposal name} {proposal file} [schedule ID]
 
 Create a new session/idea pair, with the given parent schedule.
 The new session is a child of the current session with 1 greater depth.
@@ -771,7 +793,7 @@ The new session is a child of the current session with 1 greater depth.
 
 ### New Successor Session Tool
 
-    dh_hl new_successor_session {proposal name} {proposal file}
+    dh_hl new_successor_session -s ... {proposal name} {proposal file}
 
 The current session must be self-closed and have depth 0.
 Create a new session/idea pair, with the output schedule of the current session as the parent schedule.
@@ -779,8 +801,8 @@ Create a new session/idea pair, with the output schedule of the current session 
 
 ### List Sessions Tools
 
-    dh_hl list_open_sessions
-    dh_hl list_termini
+    dh_hl list_open_sessions -C ...
+    dh_hl list_termini -C ...
 
 List all open session nodes or all termini ("terminuses") of the current catalog.
 Give both full session IDs and session handles.
@@ -788,7 +810,7 @@ Give both full session IDs and session handles.
 
 ### Close Session Tool
 
-    dh_hl close_session [schedule ID]
+    dh_hl close_session -s ... [schedule ID]
 
 Set the given schedule node to be the current session's output schedule node.
 Error if the current session already has an output schedule node,
@@ -798,33 +820,58 @@ In the latter case, remind the caller of the `comment_importance` tool.
 
 ### Delist Session Tool
 
-    dh_hl delist_session
+    dh_hl delist_session -s ...
 
 Set the is-delisted flag of the current session to true.
 Useful to get rid of old abandoned sessions in the open sessions or termini list.
 
 
-### Copy Schedule Tools
+### Copy Schedule, ID-of Schedule Tools
 
-    dh_hl copy_schedule_node {output file} [schedule ID]
-    dh_hl copy_terminus_schedule {output file}
-    dh_hl copy_workspace_schedule {output file}
-    dh_hl copy_session_output {output file}
+    # All commands do not acquire the session lock
+    dh_hl copy_schedule -C ... {output file} [schedule ID]
+    dh_hl copy_terminus_schedule -C ... {output file}
+    dh_hl copy_session_seed_schedule -s ... {output file}
+    dh_hl copy_session_output -s ... {output file}
 
-Respectively, get the schedule from
+    dh_hl terminus_schedule_short_id -C ...
+    dh_hl seed_schedule_short_id -s ...
+    dh_hl session_output_short_id -s ...
 
-* the given schedule node
-* the unique terminus's output schedule (error if no unique terminus)
-* the current session's workspace
-* the current session's output schedule
+    dh_hl terminus_schedule_full_id -C ...
+    dh_hl seed_schedule_full_id -s ...
+    dh_hl session_output_full_id -s ...
 
-and write it to the output file.
+Find a certain schedule node (noun), and do something with it (verb):
+
+**Nouns:**
+
+* `schedule`: the schedule node id'd by `[schedule ID]`.
+
+* `terminus_schedule`: the output schedule of the unique terminus.
+  Error if there is not exactly one session node that is a terminus
+  or the terminus has no output schedule.
+
+* `session_seed_schedule`: the canonical schedule of the current session's seed idea.
+
+* `session_output`: the output schedule of the current session;
+  error if there is no output schedule yet.
+
+**Verbs:**
+
+* `copy`: write the C++ schedule to the given `{output file}`.
+
+* `full_id`: give the full ID of the schedule node
+
+* `short_id`: give a short ID of the schedule node (may fall back to full ID)
+
+NB see also `schedule_full_id`, `schedule_short_id`, `restore` tools.
 
 
 ### Workspace Location Tools
 
-    dh_hl workspace_schedule
-    dh_hl workspace_bin
+    dh_hl workspace_schedule -s ...
+    dh_hl workspace_bin -s ...
 
 Get the filename of the workspace C++ file or bin directory, respectively.
 
@@ -849,14 +896,15 @@ The `-s` session argument is not needed, but is accepted here for consistency.
 
 ### ID Translation Tools
 
-    dh_hl schedule_full_id [schedule ID]    # Print the full ID of the given schedule
-    dh_hl schedule_short_id [schedule ID]   # Print a short ID for the given schedule
-    dh_hl idea_full_id {idea ID}            # Print the full ID of the given idea node
-    dh_hl idea_short_id {idea ID}           # Print a short ID for the given idea node
-    dh_hl session_full_id                   # Print the full ID of the current session
-    dh_hl session_handle                    # Print the session handle for the current session
+    # All commands do not acquire session lock
+    dh_hl schedule_full_id -C ... [schedule ID]  # Print the full ID of the given schedule node
+    dh_hl schedule_short_id -C ... [schedule ID] # Print a short ID for the given schedule node
+    dh_hl idea_full_id -C ... {idea ID}          # Print the full ID of the given idea node
+    dh_hl idea_short_id -C ... {idea ID}         # Print a short ID for the given idea node
+    dh_hl session_full_id -s ...                 # Print the full ID of the current session
+    dh_hl session_handle -s ...                  # Print the session handle for the current session
 
-All ID translation commands must have a current catalog.
+On success: print out the ID/handle with a newline, and no other `stdout` output.
 
 Short ID getters may silently fall back to giving a full ID.
 However, the `session_handle` getter will never give back a session full ID:
@@ -866,7 +914,7 @@ this is load bearing for correctness, since it encodes more than a session full 
 
 ### JSON Schedule Info Tool
 
-    dh_hl json_schedule_info [schedule ID]
+    dh_hl json_schedule_info -C ... [schedule ID]
 
 Prints the state of the referenced schedule node as a JSON object, with key/value pairs
 
@@ -895,7 +943,7 @@ Prints the state of the referenced schedule node as a JSON object, with key/valu
 
 ### JSON Idea Info Tool
 
-    dh_hl json_idea_info {idea ID}
+    dh_hl json_idea_info -C ... {idea ID}
 
 Prints the state of the referenced idea node as a JSON object, with key/value pairs
 
@@ -916,7 +964,8 @@ Prints the state of the referenced idea node as a JSON object, with key/value pa
 
 ### JSON Session Tool
 
-    dh_hl json_session_info
+    # Does not acquire session lock
+    dh_hl json_session_info -s ...
 
 Prints the state of the current session as a JSON object, with key/value pairs
 
@@ -937,7 +986,7 @@ Prints the state of the current session as a JSON object, with key/value pairs
 
 ### JSON Export Tool
 
-    dh_hl json_export
+    dh_hl json_export -C ...
 
 Exports the entire catalog as a JSON object, with key/value pairs
 
@@ -953,7 +1002,7 @@ being JSON objects in the same format as the above JSON tools.
 
 ### Fix Canonical Tool
 
-    dh_hl fix_canonical {idea ID}
+    dh_hl fix_canonical -C ... {idea ID}
 
 After a merge conflict, the referenced idea node's canonical schedule may
 record two competing IDs. This tool resolves that by modifying the catalog

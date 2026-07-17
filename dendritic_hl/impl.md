@@ -248,7 +248,7 @@ Mac limit is `1024` characters; should be plenty.
 
 ## Status Tool — Implementation Details
 
-    dh_hl status
+    dh_hl status -s ...
 
 This is a purely read-only command.
 
@@ -258,9 +258,12 @@ and give basic information on the current catalog state.
 
 **Search:**
 
-Hash the workspace file and look for schedule nodes with matching hashes.
+Hash the workspace C++ file and look for schedule nodes with matching hashes.
 
-If none exist, the status is "workspace inconsistent, unknown schedule".
+If there is no workspace C++ file, the status is "no workspace C++ file".
+
+Otherwise, if no hash matches exist,
+the status is "workspace inconsistent, unknown schedule".
 
 Otherwise, if the current idea state is parsable and holds the "no current idea" state,
 and there exists a schedule node that
@@ -296,9 +299,30 @@ Otherwise, the status is "workspace inconsistent, unexpected current idea state"
   advise of that too (could happen due to a git checkout).
 
 * Gives the status as one of
+    - "no workspace C++ file"
     - "workspace inconsistent, unknown schedule"
     - "workspace inconsistent, unexpected current idea state"
     - "workspace consistent"
+
+* If the workspace C++ file is not found, print one of the following:
+
+        # Session depth = 0 and session closed
+        The current session is closed. Start a new one with
+          dh_hl new_successor_session
+
+        # Session depth = 0 and session open
+        To start editing a C++ schedule, consider one of
+          dh_hl terminus_schedule_short_id
+          dh_hl seed_schedule_short_id
+        to get the ID of a schedule to start editing, followed by
+          dh_hl restore {schedule ID}
+        to initialize the workspace
+
+        # Session depth != 0
+        AGENTS: the current session is a sub-agent session,
+        but was not initialized with a schedule for you to edit.
+        DO NOT PROCEED and report back to the main agent,
+        unless you have been advised to do otherwise.
 
 * If the workspace is consistent, print the ID of the unambiguous schedule node.
 
@@ -312,8 +336,8 @@ Otherwise, the status is "workspace inconsistent, unexpected current idea state"
 
 ## Build/Profile Tools — Implementation Details
 
-    dh_hl build [parameters file]
-    dh_hl profile [parameters file]
+    dh_hl build -s ... [parameters file]
+    dh_hl profile -s ... [parameters file]
 
 The steps are:
 
@@ -325,7 +349,7 @@ The steps are:
 (4) Print the ID of the edited schedule node
 
 **(1)** These steps require only the session private workspace.
-They are run with only the catalog lock and concurrent machine lock held.
+They are run with only the session lock and concurrent machine lock held.
 (See "Tool Safety — Lock Hierarchy")
 
 For step (1b), print the file names (in the `bin/` directory)
@@ -532,6 +556,7 @@ The locks are:
   Unlike the other locks, this lock isn't necessary with correct tool usage and just exists
   to give a prominent warning of "concurrent session use detected".
   The agent is allowed to work in the private session workspace without this lock.
+  Furthermore, the implicit translation of `[schedule ID]` args can run without the session lock.
 
 * Catalog Lock (`{catalog}/private/catalog.lock`):
   acquire exclusive access to the catalog directory,
@@ -572,6 +597,12 @@ so profiling runs can stall for a long time.
 If we assume all agents will eventually kick off profiling in finite time,
 eventually all agents will be waiting for the exclusive lock and one will proceed.
 
+Possible objection, unlocked read-only session node access:
+This is safe because the state is protected by the catalog lock,
+not the session lock.
+The session lock is for diagnosing *incorrect-usage*.
+The catalog lock is the truly load-bearing lock for preventing partial transactions.
+
 I want locking to work "by design" in an overarching abstraction,
 and not require most code to worry about whether the lock was held.
 Maybe,
@@ -581,8 +612,7 @@ Maybe,
 
 * `flush` methods for session node state assert that the session lock was held?
 
-* Machine lock acquired first thing in `main()`
-  or even before that if possible (minimze imports before lock).
+* Machine lock acquired first thing in `main()`.
 
 * `Catalog` either auto-locks or checks the catalog lock state from the safety system.
   Can assume the catalog lock is held if you already have this object or a catalog sub-object.
@@ -626,7 +656,6 @@ Each tool execution is short-lived and breaks into multiple phases
 I don't want any file opened or parsed more than once.
 
 There is a top-level `Catalog` object, owning
-* A single `CurrentIdeaState` object
 * A `Dict[str, IdeaNode]`: idea nodes by full ID
 * A `Dict[str, ScheduleNode]`: schedule nodes by full ID
 
@@ -683,7 +712,7 @@ tri-state (a) empty (unknown state), (b) doesn't exist, (c) exists.
 
 ### History Tool — Implementation Details
 
-    dh_hl history [schedule ID]
+    dh_hl history -C ... [schedule ID]
 
 Walk the branch of the tree starting from the referenced schedule node,
 going up towards a root node.
