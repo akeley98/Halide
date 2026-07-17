@@ -520,7 +520,37 @@ Make SIGQUIT raise `KeyboardInterrupt` and try to prevent `KeyboardInterrupt` an
 (But don't get stuck in an infinite loop if an `OSError` happens).
 Caveat: we can't stop SIGKILL or other hard crashers; atomicity fails in these cases.
 
-CLAUDE: upgrade this section to reference the real safety system and helpers implemented
+**As implemented** (`dendritic_hl_lib/safety.py`): the "common helper" is the
+`safety` module, a process-global registry.
+
+* `new_file(path, data)` creates a file with `O_CREAT|O_EXCL` and records it;
+  `new_dir(path)` / `makedirs_tracked(path)` create directories, recording only
+  the levels actually created. All recorded entries go on `_new_entries`
+  (a LIFO list of `("file"|"dir", path)`).
+* `write_allowed(path, data)` is for the allowed-to-change files: it `new_file`s
+  when the target is absent (so rollback can remove it) and otherwise defers an
+  overwrite via `queue_overwrite`. Deferred overwrites are applied by `commit()`
+  and are NOT rolled back.
+* `arm()` (called at the top of `main()`) registers the `atexit` handler
+  `_rollback` and maps `SIGQUIT`→`KeyboardInterrupt`.
+* `_rollback()` deletes `_new_entries` in reverse (files via `os.remove`, dirs
+  via `os.rmdir`, so a created dir is empty when removed); it swallows `OSError`
+  (drops that entry — no infinite loop) and retries the current entry on
+  `KeyboardInterrupt`.
+* `commit()` applies the deferred overwrites, then clears `_new_entries` so the
+  still-registered `atexit` handler becomes a no-op — this is the "disable as
+  the final step" described above.
+
+The flush itself lives on the model objects, not `safety`: `Catalog.flush()`
+calls every dirty object's `flush_new()` then every object's `flush_overwrite()`
+(see Tool Internal Design), and `Context.finish()` is `catalog.flush()` then
+`safety.commit()`. Test hook: `new_file` calls `_maybe_inject_failure()`, which
+honors `DH_HL_TEST_FAIL_AFTER` (see Tests).
+
+NOT YET: locks are unimplemented, so `_rollback` currently runs with no lock
+held. Once the catalog lock exists, rollback must run while it is still held —
+the OS releases the lock only at process exit, strictly after `atexit` (see
+Lock Hierarchy).
 
 *What counts as "the tool fails" (rollback) vs. a catalogued bad outcome:*
 The rollback is for **harness/logic failures** — an unexpected exception, a
@@ -626,19 +656,98 @@ You are responsible for ensuring the tree structure invariants are
 not violated even if it's not explicitly spelled out as a failure mode of the tool.
 Hence it's strongly advised to use a common helper function for checking and adding edges.
 
-CLAUDE: was this common helper implemented, and if so, give its name here.
+**As implemented:** there is not (yet) a single unified "add edge" helper; the
+checks live in the `Catalog` (`catalog.py`) methods that create edges:
+
+* `link_new_child_schedule(idea, schedule)` — enforces "idea's parent schedule
+  strictly older than the child schedule" when a build attaches a new child
+  schedule to an idea.
+* `create_idea(parent_schedule, ...)` — enforces "parent of an idea is a major
+  schedule" (`parent_schedule.is_major()`) and rejects proposal-name collisions.
+* `reparent_existing_schedule(idea, schedule)` — the `fix_canonical` re-parent;
+  re-checks the timestamp invariant.
+* `force_parent_idea` (in `tools.py`) checks root-ness / no-existing-canonical /
+  timestamp inline before calling `ScheduleNode.set_parent_existing_root`.
+
+FUTURE: consolidating these into one checked-edge helper is still advisable, and
+the new **session** edges (sub-session depth+1, successor depth-0↔0, and "parent
+session older than child") will want the same treatment. None of the session
+invariants are implemented yet.
 
 
 ### Tool Safety: Timestamp Conflicts
 
-CLAUDE: explain fresh timestamps and your minting scheme.
+**As implemented (single-writer):** `Catalog.fresh_timestamp()` returns
+`ids.now_timestamp()` (UTC, microsecond precision) busy-waited until it is
+strictly greater than `self._last_timestamp`, the last value handed out *this
+process*. That guarantees intra-process monotonic, distinct timestamps, which is
+all the current no-concurrency code needs. The `profile` benchmark loop leans on
+this: each iteration calls `fresh_timestamp()` for its `bench/{host}_{ts}.json`
+name, so a machine fast enough to emit two benchmarks in one microsecond simply
+spins until the clock ticks.
+
+**Planned minting scheme for concurrency (decided, not yet implemented):**
+resolve uniqueness at *mint time*, under the catalog lock — never at flush,
+because a schedule/session node's timestamp is baked into its full ID and
+propagates into other in-memory references before flush.
+
+* For **propagating IDs** (schedule and session nodes): keep the process-local
+  busy-wait AND add a single `os.path.exists` point-check on the candidate path
+  (`sch/{ts}_{hash}`, `session/{id}`); on a hit, re-mint and retry. One `stat`,
+  no enumeration of the (huge) timestamp population. Correct cross-process
+  because the catalog lock guarantees another process's node is already
+  committed to disk before we mint.
+* For **non-propagating artifacts** (`comment/{ts}.txt`, `bench/…json`): the
+  timestamp is only a filename, referenced by nothing. Benchmarks are already
+  safe (exclusive machine lock ⇒ one profiler at a time, plus the per-loop
+  busy-wait); commentary is serialized by the catalog lock. A stray same-µs
+  collision is caught by `O_EXCL`/`os.link` create-or-fail and handled by
+  re-minting at the write site.
+
+Hardening needed (Phase 0 of the plan): today a full-ID collision surfaces as an
+uncaught `FileExistsError` from `safety.new_file` (via `Catalog.create_schedule`
+/ `ScheduleNode.add_commentary`), which aborts rather than re-mints. The fix is
+catch-and-re-mint at those creation sites.
 
 
 ## Tool Internal Design
 
-CLAUDE: upgrade this section to reference the real functions/variables implemented
+**Current codebase map** (`dendritic_hl/dendritic_hl_lib/`, pre-session/-lock):
 
-CLAUDE: give top-down sketch of the codebase
+* `main.py` — argparse. `_build_parser()` builds the subcommands; `COMMAND_HELP`
+  (name→one-liner) drives `help`; `_DISPATCH` (name→`cmd_*`) routes. `main()`
+  calls `safety.arm()`, parses, dispatches, and turns `DhHlError` into a stderr
+  message + exit 1.
+* `errors.py` — `DhHlError` (user-facing; exit 1, triggers rollback) and
+  `HarnessError` (subclass; build-environment problems).
+* `ids.py` — pure ID/timestamp/hash helpers: `now_timestamp`, `sha256_hex`,
+  `make_schedule_id`/`is_schedule_id`/`schedule_timestamp`/`schedule_hash`,
+  `make_idea_id`/`is_idea_id`/`idea_proposal_name`/`idea_parent_id`.
+* `safety.py` — the rollback/overwrite/commit registry (see File Rollback).
+* `catalog.py` — the in-memory model (conceptual description below). `_UNLOADED`
+  sentinel; sub-objects `Commentary`, `Benchmark`; nodes `ScheduleNode`,
+  `IdeaNode`; the `CurrentIdeaState` parser; and the top-level `Catalog`
+  (lazy `schedules`/`ideas` dicts, `_ensure_linked` derived child edges, dirty
+  set `_dirty`, `flush()`, `fresh_timestamp()`, `create_schedule`/`create_idea`
+  and the edge helpers). Short-ID resolution/formatting are free functions
+  (`_resolve_schedule`, `_match_schedules`, `_format_schedule_short`, …) exposed
+  via `Catalog.resolve_*` / `format_*`.
+* `context.py` — `Context` binds one workspace file to its `Catalog`
+  (`catalog_dir_for(path)` = `path + ".dh_hl"`) and provides `workspace_hash`,
+  `unambiguous_schedule`, `resolve_schedule_arg`, and `finish()`
+  (= `catalog.flush()` + `safety.commit()`). `read_text_or_stdin` handles `-`.
+* `tools.py` — the non-build `cmd_*` functions plus shared print helpers
+  (`_print_schedule_node`, `_print_idea_listing`, …).
+* `build.py` — `cmd_build` / `cmd_profile`, with the toolchain steps behind the
+  monkeypatch seams `_write_ninja`, `_ninja_build`, `_discover_generator_name`,
+  `_emit`, `_link`, `_run_benchmark` (see Tests).
+
+**What the session/concurrency rework changes here** (forward-looking, partial):
+`Context` is currently anchored on a workspace *file* path — that anchor goes
+away in favor of `-C`/`-s`; `Catalog.__init__` stops taking a `workspace_path`;
+`CurrentIdeaState` moves from being owned by `Catalog` to per-session
+(private-workspace) state; `Catalog` gains a `sessions` dict and a `SessionNode`;
+and the lock layer (see Lock Hierarchy) wraps all of it. None of that exists yet.
 
 Obviousness and idiot-proofing are priorities for this prototype since
 this design may evolve quickly and isn't meant to scale to production uses.
@@ -737,6 +846,59 @@ So we are guaranteed not to end up in an infinite loop
 even if the catalog state is cooked.
 
 FUTURE: use the `importance` stuff to filter to less info.
+
+
+## Implementation Plan (session + concurrency rework)
+
+Recommended slicing for the session-nodes + locking rework. Each phase should
+end at a green test suite and a commit, so context stays bounded and phases can
+be split across sessions. Ordered so the most foundational/riskiest pieces come
+first. The `idea.md` tool specs are the behavior contract; keep the paired
+`NOTE: [link to implementation details]` sections in sync.
+
+**Phase 0 — timestamp hardening (small; do first).** Make node/commentary
+creation re-mint on collision instead of crashing (see "Tool Safety: Timestamp
+Conflicts"): `Catalog.create_schedule`, `create_idea`,
+`ScheduleNode.add_commentary`, `Catalog.fresh_timestamp`. Cheap, self-contained,
+de-risks the concurrency assumptions before locks exist. Touches `catalog.py`.
+
+**Phase 1 — machine directory + lock layer.** New module (e.g. `locks.py`) for
+`flock`-based machine/catalog/session locks and the `handles/` store (link
+idiom); honor `XDG_CACHE_HOME`. Add `exec` / `exec_exclusive`. Acquire the
+machine lock first thing in `main()`, and integrate rollback ordering (rollback
+runs under the still-held catalog lock). Self-contained and testable in
+isolation (XDG-isolated tmp dir; a "two `exec_exclusive` don't overlap" timing
+test). Touches new module + `main.py` + `safety.py`.
+
+**Phase 2 — de-anchor from the workspace file; add session storage.** The big
+mechanical diff. Replace `Context(workspace_path)` / `catalog_dir_for` with
+`-C`/`-s` resolution (handle lookup → `(catalog, session)`); drop the
+`workspace_path` arg from `Catalog.__init__`; move `CurrentIdeaState` into a
+per-session private-workspace object; add `SessionNode` + a `sessions` dict +
+the `session/{id}` and sibling `private/{id}` trees. Make `Catalog` construction
+acquire the catalog lock; add a lock-free session-workspace-path accessor. Port
+the existing ~75 tests to the new CLI shape. Touches `context.py`, `catalog.py`,
+`main.py`, most of `tools.py`, `tests/`.
+
+**Phase 3 — rephase `build`/`profile`.** Split into snapshot → compute (C++
+build; session + concurrent-machine locks only) → record (catalog lock; profile
+upgrades the machine lock to exclusive), per "Build/Profile Tools —
+Implementation Details". Move `bin/` into the session private workspace.
+Preserve the persist-failed-compiles behavior under the new lock placement.
+Touches `build.py`, `catalog.py`; the monkeypatch seams keep
+`tests/test_build_fake.py` mostly intact.
+
+**Phase 4 — session lifecycle + new tools.** `new_catalog`, `new_sub_session`,
+`new_successor_session`, `close_session`, `delist_session`,
+`list_open_sessions`, `list_termini`, the copy / id-of / workspace tools,
+`view_session_*`, `json_session_info`, `json_export`. Session-tree invariants
+(depth rules; parent older than child) via the checked-edge helper from "Tree
+Structure Invariants". Touches `tools.py`, `catalog.py`, `main.py`.
+
+**Phase 5 — backfill docs + locking tests.** Fill the remaining `CLAUDE:` TODOs
+(real lock-function references in Lock Hierarchy; username/hostname sanitization
+in Session Nodes on Disk; the test-locking plan below), and update this file's
+cross-references to the functions actually written.
 
 
 ## Tests
