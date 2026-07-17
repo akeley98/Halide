@@ -682,22 +682,32 @@ invariants are implemented yet.
 strictly greater than `self._last_timestamp`, the last value handed out *this
 process*. That guarantees intra-process monotonic, distinct timestamps, which is
 all the current no-concurrency code needs. The `profile` benchmark loop leans on
-this: each iteration calls `fresh_timestamp()` for its `bench/{host}_{ts}.json`
-name, so a machine fast enough to emit two benchmarks in one microsecond simply
-spins until the clock ticks.
+this: each benchmark name is now minted via `mint_timestamped_name` (see below),
+so a machine fast enough to emit two benchmarks in one microsecond simply spins
+until the clock ticks (and, once locks land, also skips any name another process
+already wrote).
 
-**Planned minting scheme for concurrency (decided, not yet implemented):**
-resolve uniqueness at *mint time*, under the catalog lock, **uniformly for every
-timestamped catalog name** — schedule dirs (`sch/{ts}_{hash}`), session dirs
-(`session/{id}`), commentary (`comment/{ts}.txt`), and benchmarks
-(`bench/{host}_{ts}.json`). To mint a name: busy-wait `fresh_timestamp()` for
-process-local monotonicity, then `os.path.exists` the full candidate path; on a
-hit, re-mint and retry. Both guards are needed and neither alone suffices: the
-busy-wait separates names minted within one process run (a multi-node creator
-like `new_catalog` mints several before any flush, so they aren't on disk yet),
-and the `stat` separates them from names another process already committed (the
-catalog lock guarantees those are on disk before we mint). One `stat` per name,
-no enumeration of the timestamp population.
+**Minting scheme for concurrency (implemented, Phase 0):** resolve uniqueness at
+*mint time*, under the catalog lock, **uniformly for every timestamped catalog
+name** — schedule dirs (`sch/{ts}_{hash}`), session dirs (`session/{id}`),
+commentary (`comment/{ts}.txt`), and benchmarks (`bench/{host}_{ts}.json`). To
+mint a name: busy-wait `fresh_timestamp()` for process-local monotonicity, then
+`os.path.exists` the full candidate path; on a hit, re-mint and retry. Both
+guards are needed and neither alone suffices: the busy-wait separates names
+minted within one process run (a multi-node creator like `new_catalog` mints
+several before any flush, so they aren't on disk yet), and the `stat` separates
+them from names another process already committed (the catalog lock guarantees
+those are on disk before we mint). One `stat` per name, no enumeration of the
+timestamp population.
+
+This is implemented as `Catalog.mint_timestamped_name(build_path)` in
+`catalog.py`, where `build_path` maps a candidate timestamp to the absolute path
+whose uniqueness must hold. Its callers: `Catalog.create_schedule` (mints over
+`sch/{id}`), `ScheduleNode.add_commentary` (over the `comment/` file, importance
+suffix included), and `ScheduleNode.add_benchmark` (over `bench/{host}_{ts}`).
+`add_benchmark` now mints internally and no longer takes an explicit timestamp
+argument — `build.py`'s profile loop just calls `node.add_benchmark(hostname,
+bench_obj)`. Session-dir minting will route through the same helper in Phase 4.
 
 **We deliberately standardize on this** even for names whose timestamp does not
 propagate into an ID (`comment`, `bench`), rather than special-casing them to
@@ -718,13 +728,16 @@ one mint path, and zero create-time retry branches.
 
 Idea nodes are outside this scheme: their ID is `{proposal}_{parent}` with no
 timestamp, so their uniqueness stays the proposal-name-collision check in
-`Catalog.create_idea`, unchanged.
+`Catalog.create_idea`, unchanged. (`fix_canonical` builds a `fix_canonical_{ts}`
+proposal name from `fresh_timestamp` for readability, but its uniqueness is
+still the idea-node collision check, so it does not use the mint helper.)
 
-Phase 0 of the plan: today (single-writer) a same-name collision would surface
-as an uncaught `FileExistsError` from `safety.new_file` (via
-`Catalog.create_schedule` / `ScheduleNode.add_commentary`), which never happens
-without concurrency. The mint helper above is what will make the `O_EXCL`
-reliably collision-free once there are concurrent writers.
+Phase 0 of the plan (done): the mint helper `Catalog.mint_timestamped_name` now
+makes the subsequent `O_EXCL` create collision-free once there are concurrent
+writers. Until the catalog lock exists (Phase 1) the `os.path.exists` guard is
+only the single-writer guard; the lock is what will make it a true concurrency
+guarantee, at which point a `FileExistsError` at create time becomes a
+"can't-happen" harness bug (raise → rollback, never retry).
 
 
 ## Tool Internal Design
@@ -873,11 +886,16 @@ be split across sessions. Ordered so the most foundational/riskiest pieces come
 first. The `idea.md` tool specs are the behavior contract; keep the paired
 `NOTE: [link to implementation details]` sections in sync.
 
-**Phase 0 — timestamp hardening (small; do first).** Make node/commentary
-creation re-mint on collision instead of crashing (see "Tool Safety: Timestamp
-Conflicts"): `Catalog.create_schedule`, `create_idea`,
-`ScheduleNode.add_commentary`, `Catalog.fresh_timestamp`. Cheap, self-contained,
-de-risks the concurrency assumptions before locks exist. Touches `catalog.py`.
+**Phase 0 — timestamp hardening (DONE).** Node/commentary/benchmark creation now
+re-mints on collision instead of crashing, via the shared
+`Catalog.mint_timestamped_name` helper (see "Tool Safety: Timestamp Conflicts"):
+callers are `Catalog.create_schedule`, `ScheduleNode.add_commentary`, and
+`ScheduleNode.add_benchmark` (the last dropped its explicit `timestamp` arg;
+`build.py`'s profile loop updated accordingly). `create_idea` is intentionally
+untouched (no timestamp in its ID). Covered by `tests/test_timestamp_mint.py`
+(the `os.path.exists` re-mint branch, deterministically); the genuine
+microsecond race is left uncovered with a FUTURE note there. Touched
+`catalog.py`, `build.py`.
 
 **Phase 1 — machine directory + lock layer.** New module (e.g. `locks.py`) for
 `flock`-based machine/catalog/session locks and the `handles/` store (link

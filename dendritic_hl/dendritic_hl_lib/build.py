@@ -319,7 +319,6 @@ def cmd_profile(args):
                 continue
 
             # Benchmark run monopolizes the machine (serial; no parallelism).
-            bench_ts = ctx.catalog.fresh_timestamp()  # busy-waits past dups
             # MUST be absolute: it is handed to the benchmark child via
             # HL_PROFILER_JSON_OUTPUT, and the child runs with cwd=bin_dir, so a
             # bin_dir-relative path would be resolved against bin_dir twice.
@@ -337,7 +336,7 @@ def cmd_profile(args):
                       file=sys.stderr)
                 all_ok = False
                 continue
-            node.add_benchmark(hostname, bench_ts, bench_obj)
+            node.add_benchmark(hostname, bench_obj)
 
         _finish_and_exit(ctx, node, ok=all_ok)
     except HarnessError as e:

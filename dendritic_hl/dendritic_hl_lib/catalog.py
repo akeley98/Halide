@@ -238,7 +238,13 @@ class ScheduleNode:
         return self._commentary
 
     def add_commentary(self, text, importance=None):
-        ts = self.catalog.fresh_timestamp()
+        def build_path(t):
+            if importance is None:
+                fn = "{}.txt".format(t)
+            else:
+                fn = "{}_{:d}.txt".format(t, importance)
+            return os.path.join(self.comment_dir, fn)
+        ts = self.catalog.mint_timestamped_name(build_path)
         c = Commentary(self, ts, importance, text=text, is_new=True)
         # Ensure list is loaded then append so subsequent reads see it.
         self.commentary.append(c)
@@ -256,8 +262,11 @@ class ScheduleNode:
                         self._benchmarks.append(Benchmark(self, name))
         return self._benchmarks
 
-    def add_benchmark(self, hostname, timestamp, data):
-        filename = "{}_{}.json".format(hostname, timestamp)
+    def add_benchmark(self, hostname, data):
+        ts = self.catalog.mint_timestamped_name(
+            lambda t: os.path.join(self.bench_dir,
+                                   "{}_{}.json".format(hostname, t)))
+        filename = "{}_{}.json".format(hostname, ts)
         b = Benchmark(self, filename, data=data, is_new=True)
         self.benchmarks.append(b)
         return b
@@ -552,6 +561,32 @@ class Catalog:
         self._last_timestamp = ts
         return ts
 
+    def mint_timestamped_name(self, build_path):
+        """Return a fresh timestamp string whose derived catalog path does not
+        already exist on disk, re-minting on collision.
+
+        *build_path* maps a candidate timestamp to the absolute path whose
+        uniqueness must be guaranteed (a schedule/session dir, a commentary
+        file, a benchmark file, ...).  This is the single mint path for every
+        timestamped catalog name (see impl.md "Tool Safety: Timestamp
+        Conflicts").  Two guards combine and neither alone suffices: the
+        process-local monotonic busy-wait in fresh_timestamp() separates names
+        minted within this run (a multi-node creator mints several before any
+        flush, so they aren't on disk yet), and the os.path.exists check
+        separates them from names another process has already committed.
+
+        Correctness rests on holding the catalog lock continuously across the
+        mint and the subsequent O_EXCL create; given that, the create cannot
+        collide.  That lock does not exist yet (Phase 1), so today this is only
+        the single-writer guard.  Idea nodes are outside this scheme: their ID
+        carries no timestamp, so their uniqueness stays the proposal-name
+        collision check in create_idea.
+        """
+        while True:
+            ts = self.fresh_timestamp()
+            if not os.path.exists(build_path(ts)):
+                return ts
+
     # -- lazy dict loading ----------------------------------------------
     @property
     def schedules(self):
@@ -668,8 +703,9 @@ class Catalog:
     def create_schedule(self, source, parent_idea=None):
         """Create a brand-new schedule node holding *source* (a str).  If
         parent_idea is given, link it (checking invariants); else it's a root."""
-        ts = self.fresh_timestamp()
         h = ids.sha256_hex(source)
+        ts = self.mint_timestamped_name(
+            lambda t: os.path.join(self.sch_dir, ids.make_schedule_id(t, h)))
         full_id = ids.make_schedule_id(ts, h)
         node = ScheduleNode(self, full_id, is_new=True, source=source)
         node._parent_id = None
