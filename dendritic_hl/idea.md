@@ -169,7 +169,7 @@ may be used as an out-of-band method to recommend the "official" parameter value
 
 * **Session Node Full ID:** `{depth}_{timestamp}_{username}@{hostname}`.
   This is, for now, intentionally de-anonymizing.
-  The `username` and `hostname` are sanitized (TODO: implement what's reasonable and document later).
+  The `username` and `hostname` are sanitized.
 
 * **Session Private Workspace** state: gitignore'd per-session-node state.
   This contains a session lock, current idea state, a workspace C++ schedule, and a `bin` directory.
@@ -291,6 +291,7 @@ These handles are of the form `tmp.` followed by a series of hex digits.
 They are lazily allocated for each unique `(catalog directory, session node full ID)` pair.
 
 **Warning:** as before, do not use session handles for long-term identification.
+The `tmp.` prefix is to emphasize how fragile these handles are.
 If you need to identify a session in commentary or other text checked-in to the catalog,
 use the full session ID.
 
@@ -310,7 +311,8 @@ with the `~/.cache` portion overridable with the `XDG_CACHE_HOME` environment va
 ### The Machine Lock
 
 All tools acquire the machine lock, usually concurrently.
-The `profile` and `exec_exclusive` tools acquire the machine lock exclusively.
+The profiling step of `profile` and any `exec_exclusive` command
+acquire the machine lock exclusively.
 
 TODO impl details.
 NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
@@ -472,6 +474,7 @@ Halide generator to fail; doesn't mean the entire schedule is bad.
 
 The parameters file is in Generator Parameters JSON Object Format
 (documented later); there are no parameters if the file is omitted.
+These parameters are passed through to the Halide generator.
 
 This tool exits successfully iff no harness errors occurred
 and all subprocesses succeeded.
@@ -504,6 +507,9 @@ once using each generator parameters object, with a benchmark object
 saved and the schedule node result state updated each time.
 
 Doesn't fail irrecoverably if some builds fail; the tool skips them and moves on.
+
+This tool exits successfully iff no harness errors occurred
+and all subprocesses succeeded.
 
 NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
 

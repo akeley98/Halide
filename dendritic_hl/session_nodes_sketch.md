@@ -189,7 +189,7 @@ half-written. That is achieved by writing a fully-formed temp file first and
 then atomically hard-linking it into place (create-or-fail); we never write
 content directly to the final name.
 
-(Edited) Claude-generated pseudocode:
+Pseudocode:
 
     # \n still works if catalog_dir_abspath somehow contains a \n,
     # and preserves readability compared to \0
@@ -215,9 +215,6 @@ content directly to the final name.
     os.unlink(tmp)                           # (harmless to leak on crash; it's re-derivable cache)
     return result
     # The loop cannot run out of prefixes without a full-length SHA256 collision.
-
-The `tmp.` prefix is to emphasize how fragile these handles are.
-They will not make any sense on another physical PC.
 
 **Translating from** a session handle requires no locking: read
 `handles/<handle>` and error out if it is missing or unparsable. This is safe

@@ -1,27 +1,26 @@
-Todo Claude's timestamp logic
-
 # Implementation Notes for Dendritic Halide Harness (dh_hl)
 
+CLAUDE: these "CLAUDE" notes ask for edits to the file.
+You don't have to do this immediately.
+This can be done before or after implementing the concurrency+session changes,
+whichever seems most natural.
 
-## Catalog Directory State
 
-Each `*.cpp` or `*.cc` or `*.c++` file in the workspace has a corresponding
-`*.dh_hl` "catalog directory" next to it, if it's ever input to `dh_hl`.
-The directory's name is the C++ filename with `.dh_hl` appended (e.g. `.cpp.dh_hl`)
+# Catalog Directory State
 
-The top-level catalog directory contains sub-directories
+The top-level catalog directory contains sub-directories for each node type:
 
-* `bin`
 * `idea`
 * `sch`
+* `session`
 
-and files
+as well as
 
-* `current_idea_state.txt`
-* `.gitignore`, ignores `bin`
+* `private` directory
+* `.gitignore`, ignores `private`
 
 
-### Schedule Nodes on Disk
+## Schedule Nodes on Disk
 
 Each schedule node is stored in a `sch/{id}` subdirectory of the catalog directory.
 This contains files and directories holding state:
@@ -68,7 +67,7 @@ new child idea nodes and schedules in another.
 It's possible for the two operations to be legal separately, but not together.
 
 
-### Idea Nodes on Disk
+## Idea Nodes on Disk
 
 Each idea node is stored in a `idea/{id}` subdirectory of the catalog directory.
 This contains files and directories holding state:
@@ -91,57 +90,170 @@ This contains files and directories holding state:
   Fix with `fix_canonical` tool.
 
 
+## Session Nodes on Disk
+
+Each session node is stored in a `session/{id}` subdirectory of the catalog directory.
+The gitignored session private workspace is stored separately to ensure git checkouts
+can cleanly create and destroy this directory.
+The state is:
+
+CLAUDE: implement whatever username/hostname sanitization you think is reasonable
+and document briefly here.
+
+* **ID:** directory name.
+
+* **Parent:** `parent.txt` holds a session node full ID plus a newline,
+  unless there is no parent, in which case this file doesn't exist.
+
+* **Seed Idea:** `seed_idea.txt` holds an idea node full ID plus a newline.
+
+* **Output Schedule:** `output_schedule.txt` holds a schedule node full ID plus a newline,
+  unless there is no output schedule, in which case this file doesn't exist.
+
+* **Delisted Flag:** Delisted iff `delisted.txt` exists; contents are ignored.
+
+* **Depth:** implied from the ID; parse all digits before the first `_`.
+  Note, the depth will always be formatted as-if by `%d`
+  (base 10, no redundant leading 0s etc.)
+
+* **Timestamp:** implied from the ID
+
+*Merge risk:* `output_schedule.txt`, no automatic fix provided.
+
+
+### Session Private Workspace
+
+Inside the `private/{session id}` sub-directory, there is
+
+* `session.lock`, lock file (contents ignored)
+
+* `generator.cpp`, workspace C++ file
+
+* `current_idea_state.txt`, current idea state
+
+* `bin/` directory
+
+Any command accessing `private/` or giving paths to it (`dh_hl bin` etc.)
+must initialize `private/{session id}` and its contents lazily,
+except for `generator.cpp` and `current_idea_state.txt` (we can't know this).
+This could desync from `session/` due to git checkouts.
+
+
 ### Current Idea State on Disk
 
-Stored in `current_idea_state.txt`, single line with trailing newline holding
+Stored in session private workspace as `current_idea_state.txt`.
+It's a single line with trailing newline holding
 
 * `dendritic_hl_root({timestamp})` to encode the "no current idea" state
 
 * `dendritic_hl_idea({idea node full ID})` to encode the "some current idea" state
 
-After a git merge conflict, there may be multiple lines encoding
-competing state values, plus extra cruft from git.
-We will use a simplistic algorithm where every line not parsing
-in one of the above two forms is assumed to be cruft.
-
-The parser for the current idea state must be robust to this merge
-conflict case. When this happens, report the competing state values
-and suggest the `new_root` tool.
-
-This info is part of an error message or the formatted output of the
-`status` tool.
-
-FUTURE: The `new_root` tool is a bare-minimum recovery strategy
-from merge conflicts. A production version of Dendritic Halide maybe
-can offer better tools, but at some point we're re-inventing git.
+FUTURE: there's a bunch of "merge conflict" handling that's not really useful at the moment.
+If it's relatively harmless, I'd like to keep it for now,
+in case circumstances cause me to again change my mind about gitignoring `current_idea_state.txt`.
 
 
-### Efficiency
+## Session Handles on Disk
+
+Each session handle is `tmp.` followed by a series of lowercase hex digits.
+The mappings from session handle to (catalog, session) are stored in the
+`handles/` sub-directory of the machine directory
+(e.g. `~/.cache/dendritic_hl/handles/tmp.3f9a`), one immutable file per handle,
+with the filename being the handle. (This is the machine-local alias store; it
+is distinct from the catalog's git-tracked session-node storage.)
+
+The scheme is **lock-free** in both directions. The key property that makes it
+safe under concurrency is that a handle file only ever becomes visible under
+its final name *already containing complete content* -- never empty or
+half-written. That is achieved by writing a fully-formed temp file first and
+then atomically hard-linking it into place (create-or-fail); we never write
+content directly to the final name.
+
+Pseudocode:
+
+    # \n still works if catalog_dir_abspath somehow contains a \n,
+    # and preserves readability compared to \0
+    encoded_pair = bytes(catalog_dir_abspath + "\n" + session_full_id + "\n", "utf-8")
+    H = sha256(encoded_pair).hexdigest()
+
+    # Stage the complete content in a temp file that is a SIBLING of the final
+    # handles (same directory => same filesystem, so os.link never hits EXDEV).
+    tmp = handles/.alloc.<pid>.<rand>
+    write(tmp, encoded_pair); close(tmp)     # fully written before it is ever linked
+
+    # Find the shortest hash prefix not already assigned to a different pair.
+    for k in 1,2,3,...:
+        cand = "tmp." + H[:k]
+        try:
+            os.link(tmp, handles/<cand>)     # atomic create-or-fail; content already complete
+            result = cand; break             # done, this is our handle
+        except FileExistsError:
+            if read(handles/<cand>) == encoded_pair:   # safe: <cand> is always complete
+                result = cand; break         # someone already allocated it for us; reuse
+            else:
+                continue                     # collision with a different pair -> lengthen
+    os.unlink(tmp)                           # (harmless to leak on crash; it's re-derivable cache)
+    return result
+    # The loop cannot run out of prefixes without a full-length SHA256 collision.
+
+**Translating from** a session handle requires no locking: read
+`handles/<handle>` and error out if it is missing or unparsable. This is safe
+precisely because of the link idiom above -- any name a reader can see points
+at complete bytes.
+
+**Allocating** a session handle (or finding the existing one) also requires no
+locking. The `os.link` create-or-fail is atomic and self-arbitrating: racing
+allocators for the same pair converge on the same handle (loser reads equal
+bytes and reuses), and racing allocators for different pairs that collide on a
+prefix simply lengthen. Note the concurrent machine lock would *not* help here
+even if held -- it is shared, so it does not serialize allocators -- and the
+exclusive one is reserved for profiling; the link idiom is what provides
+correctness, not a lock.
+
+Recommendation: be extremely tolerant of junk on disk. Never parse handle-file
+contents; encode the `(catalog, session)` pair to `bytes` once and do a raw
+bytes comparison against what is on disk, treating any unreadable/short/garbage
+file as "not a match" (so a crashed half-written `.alloc.*` temp, or any stray
+file, is simply skipped rather than trusted).
+
+FUTURE: an alternative design for idea/schedule node short IDs
+might also accept this "machine local, but never invalidated" tradeoff.
+For now, Claude advises sticking with the existing short ID scheme
+for ideas and schedules, and not risk perturbing the current code.
+There is a very small risk that an agent may receieve a short ID,
+try to use it later, and find it's now ambiguous
+due to another concurrent agent's action.
+For now, the mitigation is the 6-hash-char minimum rule,
+and always giving an explicit ambiguity error instead of guessing.
+
+
+## Efficiency
 
 This is not a super elegant format, which is kind of abusing the file system.
-For a production implementation, I should probably stop creating thousands of content-free files.
+For a production implementation, I should probably stop creating thousands of files.
 Furthermore the `sch/` and `idea/` directories will end up becoming large,
 requiring `O(n)` time for most tools.
 
 It's mainly my goal of avoiding difficult git merge conflicts that yielded this design,
-as creating separate files will not conflict, but editing a single "edge list" file will.
+as creating separate files will not conflict, but editing a single "node list" file will.
 
 A production implementation would probably require a more efficient graph format,
 along with tools for automatically resolving merge conflicts.
 
 This design is risky in light of Windows traditional `MAX_PATH=260` limit,
 which Python 3 is compiled to work around.
-Mac limit is `1024` characters.
+But we are already not portable to Windows for other reasons anyway.
+Mac limit is `1024` characters; should be plenty.
 
 
-### Status Tool — Implementation Details
+## Status Tool — Implementation Details
 
-    dh_hl status {workspace file name}
+    dh_hl status
 
 This is a purely read-only command.
 
-If there's no catalog directory, advise `dh_hl new_root {workspace file name}` and exit.
-Otherwise, the tool tries to find a schedule node that already holds the workspace file
+If there was no current session given, the tool errors.
+Otherwise, the tool tries to find a schedule node that already holds the workspace C++ file
 and give basic information on the current catalog state.
 
 **Search:**
@@ -169,12 +281,19 @@ Otherwise, the status is "workspace inconsistent, unexpected current idea state"
 
 **Outputs:**
 
+* The full IDs of the current session and its parent session (if any)
+
+* The is-delisted flag of the current session
+
+* The IDs of the session's seed idea node and output schedule node
+  (may be none for the latter)
+
 * Give the current idea state
   (no current idea/some current idea/parse error/missing/etc.).
   Try to print errors cleanly if something is wrong with the state on disk.
   If the current idea node exists, print the status of its canonical schedule (none, or ID of it).
   If the current idea state is syntactically correct but references a nonexistent idea node,
-  advise of that too (defensive helpfulness, in case we want the current idea state out of git)
+  advise of that too (could happen due to a git checkout).
 
 * Gives the status as one of
     - "workspace inconsistent, unknown schedule"
@@ -191,19 +310,37 @@ Otherwise, the status is "workspace inconsistent, unexpected current idea state"
         Likely causes include user action, and git checkouts / merges.
 
 
-### Build Tool — Implementation Details
+## Build/Profile Tools — Implementation Details
 
-    dh_hl build {workspace file name} [parameters file]
+    dh_hl build [parameters file]
+    dh_hl profile [parameters file]
 
-This tool tries to compile the workspace file and add/update a schedule node for it.
-There are four steps:
+The steps are:
 
-1. Find or create the edited schedule node
-2. Compile the Halide binary
-3. Conditionally update the result state of the edited schedule node
-4. Print the ID of the edited schedule node
+(1) Compile the Halide generator in the session private workspace `bin` directory
+(1b) (`build` only) further generate the Halide binary and `stmt` files
+(2) Find or create the edited schedule node
+(3a) (`profile` only) profiling loop, with machine exclusive lock
+(3) Update edited schedule node
+(4) Print the ID of the edited schedule node
 
-(1) The edited schedule node is:
+**(1)** These steps require only the session private workspace.
+They are run with only the catalog lock and concurrent machine lock held.
+(See "Tool Safety — Lock Hierarchy")
+
+For step (1b), print the file names (in the `bin/` directory)
+of the emitted `.stmt` and `conceptual.stmt` files.
+They can be overwritten by future builds.
+Pipe all compiler and generator output `stdout` and `stderr`
+to the harness's `stdout` and `stderr`.
+
+**(2)** At this point, the catalog lock must now be acquired.
+Furthermore, for profiling only, the machine lock must be upgraded
+to an exclusive lock (prior to catalog lock, per "Tool Safety — Lock Hierarchy").
+These late acquisitions ensure the expensive C++ compilation step
+doesn't needlessly block other agents from using `dh_hl`.
+
+The edited schedule node is:
 
 * If `dh_hl status` would give an unambiguous schedule node,
   that schedule node is the one this tool edits.
@@ -212,11 +349,22 @@ There are four steps:
 * Otherwise, add a new child schedule node to the current idea node
   holding a copy of the workspace file.
 
-Note `new_root` shouldn't be used often, hence this tool doesn't try
-to automate `new_root` and forces the user/agent to do it themselves
-and think about whether that actually makes sense.
+**(3)** The per-generator-paramaters-object generate/profile/results loop
+runs with the machine lock held exclusively, as mentioned.
+It is somewhat wasteful that the machine lock is still held exclusively
+during the Halide generator run, but a generator is fast enough and
+I don't need the complication.
 
-(2) Use the `bin` directory of the catalog directory as temporary storage.
+FUTURE: if it's really an issue, we can fission the loop into
+"compile all binaries" and "profile all binaries" loops.
+
+**(4)** Finally (after all other printing including the sub-processes),
+print the ID of the edited schedule node.
+
+Don't relinquish the locks: this last step is fast enough.
+
+
+### Build/Profile Decisions
 
 **Build driver split (decided):** use `ninja` only for the param-independent
 steps, and drive everything param-dependent from Python `subprocess`:
@@ -227,7 +375,8 @@ steps, and drive everything param-dependent from Python `subprocess`:
   (serially, no parallelism): run the generator to emit outputs (phase 2),
   link the standalone binary (phase 4), and, for `profile`, run the benchmark.
   For `profile` this per-param-set work is a Python `for` loop; don't push the
-  loop into ninja (see the Profile Tool's explicit note).
+  loop into ninja. This keeps David from getting paranoid about unexpected
+  parallelism (yes, I know about pools).
 
 The steps performed are:
 * compile the C++ workspace file to a Halide generator executable (ninja)
@@ -236,6 +385,10 @@ The steps performed are:
   `target=host-profile` (Python)
 * link `RunGenMain` against the generated `registration.cpp` + static library
   to finish a standalone benchmarkable binary (Python)
+
+See the [Reference Build Commands](reference_build_commands.md) file for the
+tested build/link recipe. For `profile`, keep the generator executable from
+phase 1 and re-run the emit + link + benchmark steps for each parameter set.
 
 **Generator name.** `GenGen` still requires `-g <name>` even when only one
 generator is registered, but under the single-generator assumption (see Goals)
@@ -258,90 +411,10 @@ workspace file. This enforces the assumption rather than silently picking one.
 
 [RunGenMain doc](https://halide-lang.org/docs/md_doc_2_run_gen.html)
 
-Print the file names (in the `bin/` directory) of the emitted `.stmt` and
-`conceptual.stmt` files.
-They can be overwritten by future builds.
-Pipe the output `stdout` and `stderr` to the harness's `stdout` and `stderr`.
+**Generator parameters.** when executing the generator,
+each numeric parameter value must be formatted with `%d` if it's a whole number,
+and with `%r` if not, to ensure no unexpected decimal points and no floating point roundoff.
 
-See the **Reference Build Commands** subsection below for a tested,
-contained example of the full generator + `RunGenMain` build.
-
-If the parameters file was given, it must hold a generator parameters JSON object
-(described later).
-Unpack the key/value pairs and pass them as generator parameters.
-If not given, it's as if an empty generator parameters JSON object was given.
-
-NB when executing the generator, each numeric parameter value must be
-formatted with `%d` if it's a whole number, and with `%r` if not,
-to ensure no floating point roundoff.
-
-(3) The result state of the schedule node gets updated to one of:
-
-* `c++ error`: couldn't even compile the C++ workspace file (worst)
-* `halide error`: passed said step, but Halide generator exited unsuccessfully
-* `success`: both steps exited successfully (best)
-
-However, update the result state to the better of the previous and new value.
-This is to account for how some generator parameter values may cause the
-Halide generator to fail; doesn't mean the entire schedule is bad.
-
-(4) Finally (after all other printing including the sub-processes),
-print the ID of the edited schedule node.
-
-This tool exits successfully iff no harness errors occurred
-and all subprocesses succeeded.
-
-FUTURE: configurable Halide library location.
-For now just define a magic constant `~/Halide/build/`
-which will work on David's MacBook at least.
-
-FUTURE: switch to CMake if absolutely huge payoff would happen (I hate CMake).
-
-
-### Profile Tool — Implementation Details
-
-    dh_hl profile {workspace file name} [parameters file]
-
-This is like `dh_hl build` except
-* The Halide binary is run with Andrew Adams's new profiler tool
-  and the benchmark results are recorded.
-* The parameters file may contain a list of generator parameters JSON object,
-  with each parameter set profiled in turn.
-
-The list of generator parameters JSON objects for the command is
-* `[{}]`, if the parameters file was not given
-* `[obj]`, if the parameters file encodes a single JSON object `obj`
-* The parsed contents of the parameters file, verbatim, if it's already a list
-
-Steps 2 and 3 of the `dh_hl build` command are modified to become a loop over this list.
-Build the C++ to Halide generator once, then, for each object in the list,
-
-* Generate the Halide binary from the generator (no `.stmt`/`conceptual.stmt` needed this time).
-* Update result state of the edited schedule node as in `dh_hl build`, step 3.
-* Run the binary with `--verbose --benchmarks=all --estimate_all` (FUTURE: `--estimate_all` isn't great)
-  and with `HL_PROFILER_JSON_OUTPUT=...` to get profiler JSON data out.
-* Add a new benchmark JSON object (documented later) to the edited schedule node's benchmarks set.
-  NOTE: this is unlikely but a Claude reviewer of the document recommended
-  busy waiting for the timestamp to change, so 2 benchmarks in the same microsecond
-  won't cause a benchmark name collision.
-
-Don't fail irrecoverably if some builds fail.
-Just skip it and move on.
-
-See the **Reference Build Commands** subsection under the Build Tool for the
-tested build/link recipe. For `profile`, keep the generator executable from
-phase 1 and re-run the emit + link + benchmark steps for each parameter set.
-
-IMPORTANT: each benchmark run must monopolize the entire computer
-(ignoring outside processes that we can't reasonably control).
-Ergo, no parallelizing benchmarking, no compiling while benchmarking.
-
-Implement the loop in Python; don't try to get `ninja` to build and
-profile everything, even if theoretically possible with pools,
-so I'm not paranoid when I have to inherit this software later.
-
-This tool exits successfully iff no harness errors occurred
-and no subprocesses exited unsuccessfully.
 
 
 ### Build/Profile Tool Future Work
@@ -363,6 +436,8 @@ to the Halide generator and RunGenMain.
 
 ## Tool Safety Requirements
 
+We require `flock` file locking to make concurrent harness usage safe.
+
 Tools can assume sha256 collisions never happen.
 
 Tools NEVER overwrite or modify existing files, except for:
@@ -375,8 +450,15 @@ Tools NEVER overwrite or modify existing files, except for:
 
 Accordingly, use `"x"` mode or equivalent when creating new files.
 
-*`parent.txt` overwrite exception (`fix_canonical`):* the `fix_canonical`
-description re-parents the *newer* competing canonical schedule so it becomes
+**OVERRIDING SAFETY RULE:** never use "recursive directory delete" functions.
+If you delete files and directories in the opposite order as creation,
+a directory will be empty when deleted, so `os.rmdir` will work.
+This rule prevents PERMANENT DAMAGE from bugs (like deleting my `home`).
+
+
+### `parent.txt` overwrite exemption for `fix_canonical`
+
+`fix_canonical` re-parents the *newer* competing canonical schedule so it becomes
 the canonical schedule (hence a child) of a freshly created resolution idea
 node. Because a schedule's parent edge is stored solely in its `parent.txt`,
 and the newer schedule already has a `parent.txt` pointing at the original
@@ -387,7 +469,10 @@ deliberate exception to the otherwise strict anti-`parent.txt`-overwrite
 stance; the whole file layout exists to avoid `parent.txt` churn, but this
 rare recovery tool is the documented escape hatch.)
 
-We furthermore must make all changes to the catalog atomic as much as possible.
+
+### Tool Safety: File Rollback
+
+Make all changes to the catalog atomic as much as possible.
 For any tool run, record a list of new files and new directories created
 (not existing directories touched).
 Use a common helper for this.
@@ -397,6 +482,22 @@ If the tool fails, an `atexit` handler will run that deletes all those recorded 
 so we don't delete new files when the tool succeeds!)
 Again, be very very careful about new vs. existing directories.
 Don't delete any directories you didn't create.
+
+So flushing stays a single step strictly separated from the main logic (per
+the Tool Internal Design); "did a subprocess fail" affects only the process
+**exit code**, never whether we flush.
+
+The "new files" don't include the workspace C++ file and the special case overwritten files.
+NEVER delete the workspace C++ file.
+Except for tmp files and private session workspace files,
+defer overwriting files as the FINAL step of tools, because we don't roll back these overwrites.
+So overwriting as late as possible minimizes the risk of crashing after the overwrite.
+
+Make SIGQUIT raise `KeyboardInterrupt` and try to prevent `KeyboardInterrupt` and exceptions from stopping the `atexit` handler.
+(But don't get stuck in an infinite loop if an `OSError` happens).
+Caveat: we can't stop SIGKILL or other hard crashers; atomicity fails in these cases.
+
+CLAUDE: upgrade this section to reference the real safety system and helpers implemented
 
 *What counts as "the tool fails" (rollback) vs. a catalogued bad outcome:*
 The rollback is for **harness/logic failures** — an unexpected exception, a
@@ -417,31 +518,98 @@ will be catalogued"). Concretely, for `build`/`profile`:
   end-of-tool flush + commit runs so the node **persists**, and only then does
   the process exit with a nonzero status to signal the failure to the caller.
 
-So flushing stays a single step strictly separated from the main logic (per
-the Tool Internal Design); "did a subprocess fail" affects only the process
-**exit code**, never whether we flush.
 
-**OVERRIDING SAFETY RULE:** never use "recursive directory delete" functions.
-If you delete files and directories in the opposite order as creation,
-a directory will be empty when deleted, so `os.rmdir` will work.
-This rule prevents PERMANENT DAMAGE from bugs (like deleting my `home`).
+### Tool Safety: Lock Hierarchy
 
-The "new files" don't include the workspace C++ file and the special case overwritten files.
-NEVER delete the workspace C++ file.
-Except for tmp files and private session workspace files,
-defer overwriting files as the FINAL step of tools, because we don't roll back these overwrites.
-So overwriting as late as possible minimizes the risk of crashing after the overwrite.
+The locks are:
 
-Make SIGQUIT raise `KeyboardInterrupt` and try to prevent `KeyboardInterrupt` and exceptions from stopping the `atexit` handler.
-(But don't get stuck in an infinite loop if an `OSError` happens).
+* Machine Lock (`~/.cache/dendritic_hl/machine.lock`):
+  meant to be global to the machine.
+  Acquired exclusively for profiling, concurrently for all other uses.
+
+* Session Lock (`{catalog}/private/{id}/session.lock`):
+  exclusive lock per session node on disk; protects only the private session workspace.
+  Unlike the other locks, this lock isn't necessary with correct tool usage and just exists
+  to give a prominent warning of "concurrent session use detected".
+  The agent is allowed to work in the private session workspace without this lock.
+
+* Catalog Lock (`{catalog}/private/catalog.lock`):
+  acquire exclusive access to the catalog directory,
+  other than private session workspaces.
+
+Each tool may do a subset of these four actions, done strictly in top-to-bottom order:
+
+* Acquire concurrent machine lock (blocking).
+  Mandatory for all tools, even "cheap" ones.
+  Acquire before any other Python logic to
+  prevent as much profiler CPU competition as possible.
+
+* Acquire exclusive session lock; non-blocking and exit-with-failure if not acquired.
+  Acquire this only for tools that need the private workspace or *mutate* session nodes
+  (so read-only queries of the session's *git-tracked catalog state* won't fail).
+  The failure message is:
+
+    AGENTS: stop work immediately. Concurrent usage of session detected.
+    This could be due to an agent error (e.g. same session given to 2 agents)
+    or human user action interfering with agent work.
+
+* "Upgrade" machine lock to exclusive, by releasing it then re-acquiring exclusively
+
+* Acquire exclusive catalog lock (blocking)
+
+For now, the assumption is still that tool calls are short-lived, so we just rely on the OS
+to release the locks upon process exit, which happens strictly after the `atexit` safety handlers.
+Ergo, atomicity rollbacks will occur with the catalog lock still held.
+Unlocking works even if the process is killed or segfaults, unlike the `atexit` file deleter.
+
+Possible objection, lock inversion:
+The release-and-acquire upgrade of the machine lock isn't a deadlock
+risk with the session lock, because the session lock is non-blocking.
+
+Possible objection, starvation:
+We currently don't give exclusive machine locks any priority,
+so profiling runs can stall for a long time.
+If we assume all agents will eventually kick off profiling in finite time,
+eventually all agents will be waiting for the exclusive lock and one will proceed.
+
+I want locking to work "by design" in an overarching abstraction,
+and not require most code to worry about whether the lock was held.
+Maybe,
+
+* The existing safety system is the bottom-level arbiter for keeping the rest of the code behaving well.
+  It exposes "lock" functions, and asserts no locks acquired out-of-order.
+
+* `flush` methods for session node state assert that the session lock was held?
+
+* Machine lock acquired first thing in `main()`
+  or even before that if possible (minimze imports before lock).
+
+* `Catalog` either auto-locks or checks the catalog lock state from the safety system.
+  Can assume the catalog lock is held if you already have this object or a catalog sub-object.
+
+CLAUDE: update this section with real decisions made and reference to implementation functions.
+
+
+### Tool Safety: Tree Structure Invariants
 
 Remember to check tree structure invariants whenever adding new edges.
 You are responsible for ensuring the tree structure invariants are
 not violated even if it's not explicitly spelled out as a failure mode of the tool.
 Hence it's strongly advised to use a common helper function for checking and adding edges.
 
+CLAUDE: was this common helper implemented, and if so, give its name here.
+
+
+### Tool Safety: Timestamp Conflicts
+
+CLAUDE: explain fresh timestamps and your minting scheme.
+
 
 ## Tool Internal Design
+
+CLAUDE: upgrade this section to reference the real functions/variables implemented
+
+CLAUDE: give top-down sketch of the codebase
 
 Obviousness and idiot-proofing are priorities for this prototype since
 this design may evolve quickly and isn't meant to scale to production uses.
@@ -502,8 +670,8 @@ Those empty objects become non-empty if actually explored.
 On startup,
 * Parse the current idea state, but don't raise any exceptions for parser errors.
   These get encoded into `CurrentIdeaState` and raised only if needed.
-* Initialize the node dicts by listing files in the `sch/` and `idea/` directories.
-  Each is stored as an empty-state `ScheduleNode` or `IdeaNode`.
+* Initialize the node dicts by listing files in the `sch/`, `idea/`, `session/` directories.
+  Each is stored as an empty-state `ScheduleNode`, `IdeaNode`, or `SessionNode`.
 
 Some objects' state is encoded by the presence or absence of a file
 (weird design motivated by my anti-git-merge-conflict goal).
@@ -513,77 +681,9 @@ So in this example, the `CanonicalSchedule` object has to encode a
 tri-state (a) empty (unknown state), (b) doesn't exist, (c) exists.
 
 
-### Reference Build Commands
-
-The following was tested end-to-end against the local Halide build at
-`~/Halide/build/` and produces a standalone binary that both benchmarks
-(via the profiler) and emits the `.stmt` and `conceptual.stmt`. In these examples the
-name `brighten` is used for both `-g` (generator name) and `-f` (output
-basename) since the example generator registers `brighten`. The real tool
-instead **discovers** the `-g` name (run the generator exe with no `-g` and
-scrape the `available Generators are:` list, which holds a single name under
-the single-generator assumption) and passes a **fixed** `-f` basename such as
-`dh_hl_gen`; this decoupled variant was also tested end-to-end.
-
-**Gotchas that cost time (all confirmed on David's MacBook):**
-
-* `HalideBuffer.h` and `HalideRuntime.h` are **not** in `build/include/`
-  (which only has `Halide.h`); they live in `~/Halide/src/runtime/`,
-  so `RunGenMain` must be compiled with `-I ~/Halide/src/runtime`.
-* The `conceptual_stmt` emit produces a file with extension **`.conceptual.stmt`**,
-  not `.conceptual_stmt`. (The plain `stmt` emit produces `.stmt`.)
-* Compile `RunGenMain` with `-fno-exceptions -DHALIDE_NO_PNG -DHALIDE_NO_JPEG`
-  so it doesn't drag in libpng/libjpeg; benchmarking uses random/estimated
-  inputs, so no image I/O is needed.
-* The `static_library` emit already embeds the Halide runtime, so no separate
-  `runtime.a` needs linking (unlike Halide's own root `Makefile`, which emits
-  with `no_runtime`). Only `-lpthread -ldl` are needed at link time.
-
-Phase 1 — build the generator executable (the `GenGen` main lives inside
-`libHalide_GenGen.a`):
-
-    c++ -std=c++17 -O2 -I$H/include -I$H/../tools \
-        generator.cpp -o generator_exe \
-        $H/tools/libHalide_GenGen.a -L$H/src -lHalide -Wl,-rpath,$H/src
-
-Phase 2 — run the generator; append generator params as trailing `key=value`
-tokens (formatted per the `%d`/`%r` rule above):
-
-    ./generator_exe -g brighten -o . -f brighten [key=value ...] \
-        -e static_library,c_header,registration,stmt,conceptual_stmt \
-        target=host-profile
-
-Phase 3 — compile `RunGenMain` (note the `src/runtime` include):
-
-    c++ -c -std=c++17 -O2 -fno-exceptions -DHALIDE_NO_PNG -DHALIDE_NO_JPEG \
-        -I$H/include -I$H/../src/runtime -I$H/../tools -I. \
-        $H/../tools/RunGenMain.cpp -o RunGenMain.o
-
-Phase 4 — link the standalone binary:
-
-    c++ -std=c++17 -O2 RunGenMain.o brighten.registration.cpp brighten.a \
-        -o brighten.rungen -lpthread -ldl
-
-Run / benchmark:
-
-    HL_PROFILER_JSON_OUTPUT=out.json ./brighten.rungen --benchmarks=all --estimate_all --verbose
-
-where `$H` = `~/Halide/build`. For `profile`, phase 1 runs once and phases
-2--4 + the run loop over each parameter set. Only phase 2 sees the generator
-params, so the loop must re-emit and re-link per parameter set.
-
-A worked, tested generator + ninja build is under
-`dendritic_hl/rungen_example/`. Run it with
-
-    ninja -f build_ninja.txt brighten.rungen
-
-The ninja file is named `build_ninja.txt` (not `build.ninja`) so it escapes
-this repo's `*.ninja*` gitignore rule and can be committed; hence the `-f`.
-
-
 ### History Tool — Implementation Details
 
-    dh_hl history {workspace file name} [schedule ID]
+    dh_hl history [schedule ID]
 
 Walk the branch of the tree starting from the referenced schedule node,
 going up towards a root node.
@@ -668,3 +768,6 @@ argv it builds. Consequences to keep in mind:
 
 So the two tiers are complementary: fake-build pins the orchestration fast and
 always; the Halide test verifies the real toolchain integration when present.
+
+CLAUDE: document plan for listening in on locking behavior,
+or defer as future work if it's too difficult.
