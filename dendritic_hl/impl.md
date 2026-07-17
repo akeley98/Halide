@@ -687,27 +687,44 @@ name, so a machine fast enough to emit two benchmarks in one microsecond simply
 spins until the clock ticks.
 
 **Planned minting scheme for concurrency (decided, not yet implemented):**
-resolve uniqueness at *mint time*, under the catalog lock — never at flush,
-because a schedule/session node's timestamp is baked into its full ID and
-propagates into other in-memory references before flush.
+resolve uniqueness at *mint time*, under the catalog lock, **uniformly for every
+timestamped catalog name** — schedule dirs (`sch/{ts}_{hash}`), session dirs
+(`session/{id}`), commentary (`comment/{ts}.txt`), and benchmarks
+(`bench/{host}_{ts}.json`). To mint a name: busy-wait `fresh_timestamp()` for
+process-local monotonicity, then `os.path.exists` the full candidate path; on a
+hit, re-mint and retry. Both guards are needed and neither alone suffices: the
+busy-wait separates names minted within one process run (a multi-node creator
+like `new_catalog` mints several before any flush, so they aren't on disk yet),
+and the `stat` separates them from names another process already committed (the
+catalog lock guarantees those are on disk before we mint). One `stat` per name,
+no enumeration of the timestamp population.
 
-* For **propagating IDs** (schedule and session nodes): keep the process-local
-  busy-wait AND add a single `os.path.exists` point-check on the candidate path
-  (`sch/{ts}_{hash}`, `session/{id}`); on a hit, re-mint and retry. One `stat`,
-  no enumeration of the (huge) timestamp population. Correct cross-process
-  because the catalog lock guarantees another process's node is already
-  committed to disk before we mint.
-* For **non-propagating artifacts** (`comment/{ts}.txt`, `bench/…json`): the
-  timestamp is only a filename, referenced by nothing. Benchmarks are already
-  safe (exclusive machine lock ⇒ one profiler at a time, plus the per-loop
-  busy-wait); commentary is serialized by the catalog lock. A stray same-µs
-  collision is caught by `O_EXCL`/`os.link` create-or-fail and handled by
-  re-minting at the write site.
+**We deliberately standardize on this** even for names whose timestamp does not
+propagate into an ID (`comment`, `bench`), rather than special-casing them to
+lean on the `O_EXCL` create alone. Rationale: the "does this name propagate into
+an ID?" distinction would otherwise have to be re-audited every time a new ID
+cross-reference is added to the catalog schema — far more likely, for a
+prototype, than ever wanting to relinquish the always-held catalog lock that
+makes the uniform `stat` correct. The cost is one redundant `stat` on the
+non-propagating names; negligible.
 
-Hardening needed (Phase 0 of the plan): today a full-ID collision surfaces as an
-uncaught `FileExistsError` from `safety.new_file` (via `Catalog.create_schedule`
-/ `ScheduleNode.add_commentary`), which aborts rather than re-mints. The fix is
-catch-and-re-mint at those creation sites.
+Correctness rests on a single invariant: **minting a catalog name happens only
+while the catalog lock is held**, held continuously through the create. Assert
+this in the mint helper (this is the "assert the lock is held" aspiration in
+Lock Hierarchy, made concrete). Given it, the subsequent `O_EXCL`/`os.link`
+create *cannot* collide, so a `FileExistsError` at create time is a "can't
+happen" harness bug — raise it (→ rollback), never retry. Net effect: exactly
+one mint path, and zero create-time retry branches.
+
+Idea nodes are outside this scheme: their ID is `{proposal}_{parent}` with no
+timestamp, so their uniqueness stays the proposal-name-collision check in
+`Catalog.create_idea`, unchanged.
+
+Phase 0 of the plan: today (single-writer) a same-name collision would surface
+as an uncaught `FileExistsError` from `safety.new_file` (via
+`Catalog.create_schedule` / `ScheduleNode.add_commentary`), which never happens
+without concurrency. The mint helper above is what will make the `O_EXCL`
+reliably collision-free once there are concurrent writers.
 
 
 ## Tool Internal Design
