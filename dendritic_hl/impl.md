@@ -1,3 +1,5 @@
+Todo Claude's timestamp logic
+
 # Implementation Notes for Dendritic Halide Harness (dh_hl)
 
 
@@ -361,15 +363,12 @@ to the Halide generator and RunGenMain.
 
 ## Tool Safety Requirements
 
-Tools should assume the catalog directory will not be modified while the tool is running.
-e.g. the tool may cache the list of schedule/idea node IDs once.
-
 Tools can assume sha256 collisions never happen.
 
 Tools NEVER overwrite or modify existing files, except for:
 
-* Workspace C++ files
-* `current_idea_state.txt`
+* tmp files
+* private session workspace files
 * `result.txt`
 * `canonical.txt` for `fix_canonical` tool
 * `parent.txt` for `fix_canonical` tool (see note below)
@@ -429,7 +428,8 @@ This rule prevents PERMANENT DAMAGE from bugs (like deleting my `home`).
 
 The "new files" don't include the workspace C++ file and the special case overwritten files.
 NEVER delete the workspace C++ file.
-Defer overwriting files as the FINAL step of tools, because we don't roll back these overwrites.
+Except for tmp files and private session workspace files,
+defer overwriting files as the FINAL step of tools, because we don't roll back these overwrites.
 So overwriting as late as possible minimizes the risk of crashing after the overwrite.
 
 Make SIGQUIT raise `KeyboardInterrupt` and try to prevent `KeyboardInterrupt` and exceptions from stopping the `atexit` handler.

@@ -138,8 +138,6 @@ which solves the multi-user problem and no-local-GPU problem.
 
 * A depth value. Top-level sessions have 0 depth.
 
-* Private workspace state
-
 * An optional parent schedule node.
   Only two types of edges are allowed:
   - Parent node to child node of 1 greater depth.
@@ -147,7 +145,7 @@ which solves the multi-user problem and no-local-GPU problem.
   - Parent node to child node, both of 0 depth (top-level sessions).
     Nodes reachable via only such edges are successor sessions.
 
-* ID: `{depth}_{username}@{hostname}_{timestamp}`
+* ID: `{depth}_{timestamp}_{username}@{hostname}`
   (idk, spitballing for now; I just want it to be easy to filter top-level sessions)
 
 * Current idea state, **gitignored**
@@ -178,38 +176,68 @@ Agents need a succinct way to communicate the catalog directory and current sess
 This is done by session handles: a shortened, **machine-scoped** alias for that pair.
 
 Each session handle is `tmp.` followed by a series of lowercase hex digits.
-The mappings from session handle to (catalog, session) are stored in the machine directory.
-Each file stores one mapping, with the filename being the handle:
+The mappings from session handle to (catalog, session) are stored in the
+`handles/` sub-directory of the machine directory
+(e.g. `~/.cache/dendritic_hl/handles/tmp.3f9a`), one immutable file per handle,
+with the filename being the handle. (This is the machine-local alias store; it
+is distinct from the catalog's git-tracked session-node storage.)
+
+The scheme is **lock-free** in both directions. The key property that makes it
+safe under concurrency is that a handle file only ever becomes visible under
+its final name *already containing complete content* -- never empty or
+half-written. That is achieved by writing a fully-formed temp file first and
+then atomically hard-linking it into place (create-or-fail); we never write
+content directly to the final name.
 
 (Edited) Claude-generated pseudocode:
 
-    # \n will still work if catalog_dir_abspath somehow contains a \n,
+    # \n still works if catalog_dir_abspath somehow contains a \n,
     # and preserves readability compared to \0
     encoded_pair = bytes(catalog_dir_abspath + "\n" + session_full_id + "\n", "utf-8")
-    H = sha256(encoded_pair)
-    # Find the shortest prefix of the hash that isn't assigned to something else
+    H = sha256(encoded_pair).hexdigest()
+
+    # Stage the complete content in a temp file that is a SIBLING of the final
+    # handles (same directory => same filesystem, so os.link never hits EXDEV).
+    tmp = handles/.alloc.<pid>.<rand>
+    write(tmp, encoded_pair); close(tmp)     # fully written before it is ever linked
+
+    # Find the shortest hash prefix not already assigned to a different pair.
     for k in 1,2,3,...:
         cand = "tmp." + H[:k]
         try:
-            x-create sessions/<cand> = encoded_pair
-            return cand  # done, this is our handle
-        except FileExists:
-            if existing file contents == encoded_pair: reuse it; done
-            else: continue   # collision with a different session -> lengthen
-    # Impossible to reach here unless we have a bona-fide SHA256 full-length hash collision
+            os.link(tmp, handles/<cand>)     # atomic create-or-fail; content already complete
+            result = cand; break             # done, this is our handle
+        except FileExistsError:
+            if read(handles/<cand>) == encoded_pair:   # safe: <cand> is always complete
+                result = cand; break         # someone already allocated it for us; reuse
+            else:
+                continue                     # collision with a different pair -> lengthen
+    os.unlink(tmp)                           # (harmless to leak on crash; it's re-derivable cache)
+    return result
+    # The loop cannot run out of prefixes without a full-length SHA256 collision.
 
 The `tmp.` prefix is to emphasize how fragile these handles are.
 They will not make any sense on another physical PC.
 
-**Translating from** a session handle doesn't require any locking.
-Just read the file, and error out if it doesn't exist or isn't parsable.
+**Translating from** a session handle requires no locking: read
+`handles/<handle>` and error out if it is missing or unparsable. This is safe
+precisely because of the link idiom above -- any name a reader can see points
+at complete bytes.
 
-**Allocating** a session handle or finding an existing one requires the machine lock.
+**Allocating** a session handle (or finding the existing one) also requires no
+locking. The `os.link` create-or-fail is atomic and self-arbitrating: racing
+allocators for the same pair converge on the same handle (loser reads equal
+bytes and reuses), and racing allocators for different pairs that collide on a
+prefix simply lengthen. Note the concurrent machine lock would *not* help here
+even if held -- it is shared, so it does not serialize allocators -- and the
+exclusive one is reserved for profiling; the link idiom is what provides
+correctness, not a lock.
 
-Recommendation: for encoding, be extremely tolerant of errors on disk.
-Ignore un-readable files, and don't try to parse contents.
-Instead, encode the (catalog, session) pair to `bytes` and do a bytes comparison with what's on disk.
-And if not found, you can already just write that pre-encoded `bytes` to disk.
+Recommendation: be extremely tolerant of junk on disk. Never parse handle-file
+contents; encode the `(catalog, session)` pair to `bytes` once and do a raw
+bytes comparison against what is on disk, treating any unreadable/short/garbage
+file as "not a match" (so a crashed half-written `.alloc.*` temp, or any stray
+file, is simply skipped rather than trusted).
 
 This is quite different from the scheme for short IDs;
 in particular, it will never be ambiguous on one machine,
