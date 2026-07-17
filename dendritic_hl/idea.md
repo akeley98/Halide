@@ -180,6 +180,10 @@ and the full ID of a session node within the catalog.
 The pair can be succinctly communicated using "session handles",
 described a few sections later.
 
+**Session Golden Rule:** two concurrent agents must never have the current session.
+The session lock (see "Locking") will catch many such violations,
+but will not prevent observing a partial edit to the workspace C++ file.
+
 
 ### Current Idea State
 
@@ -533,7 +537,7 @@ NOTE: [link to implementation details](impl.md) <!-- Update both docs if you cha
 
 ### Canon Tool
 
-    dh_hl -s ... canon
+    dh_hl canon -s ...
 
 Sets the canonical schedule of the current idea node to the schedule node named by `dh_hl status`.
 This is a schedule node that holds a copy of the workspace schedule.
@@ -998,6 +1002,9 @@ Exports the entire catalog as a JSON object, with key/value pairs
 
 Each value is itself an object, with keys being string full ID and values
 being JSON objects in the same format as the above JSON tools.
+
+FUTURE: holds the exclusive catalog lock despite being conceptually read-only.
+Optimize this if needed, but this shouldn't be in the agent hot loop.
 
 
 ### Fix Canonical Tool

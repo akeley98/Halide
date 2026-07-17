@@ -312,7 +312,6 @@ Otherwise, the status is "workspace inconsistent, unexpected current idea state"
 
         # Session depth = 0 and session open
         To start editing a C++ schedule, consider one of
-          dh_hl terminus_schedule_short_id
           dh_hl seed_schedule_short_id
         to get the ID of a schedule to start editing, followed by
           dh_hl restore {schedule ID}
