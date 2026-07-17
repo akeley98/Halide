@@ -2,6 +2,8 @@
 
 Design (see impl.md "Tool Internal Design"):
 
+TODO update for session changes.
+
 * A Catalog owns one CurrentIdeaState and two dicts (schedules, ideas) keyed by
   full ID.  The dicts are populated by listing sch/ and idea/ once; each entry
   starts as an empty-state node that lazily reads its files on demand.
