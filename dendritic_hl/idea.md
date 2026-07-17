@@ -2,9 +2,9 @@
 
 The process of scheduling Halide code — whether by hand or automated — is often a sort of tree search.
 Schedules evolve over time into other schedules, and some plans don't work out and get back-tracked.
-What I want is a system that stores a "catalog" of schedules, organized into a historic tree structure.
+This harness makes this process explicit as a "catalog" of schedules, organized into a historic tree structure.
 
-My goals for the Dendritic Halide Harness (`dh_hl`) are:
+The goals of the Dendritic Halide Harness (`dh_hl`) are:
 
 * **Long Term Memory Device:** Give agents a system for long-term
   coordination and progress tracking.
@@ -13,8 +13,8 @@ My goals for the Dendritic Halide Harness (`dh_hl`) are:
   agents) to oversee the scheduling process.
 
 * **Benchmarking Hygiene:** Automatically ensure each benchmark/profiling
-  result gets attached IMMEDIATELY to the C++ source code used, also
-  annotated with system information.
+  result gets attached IMMEDIATELY to the C++ source code used,
+  also annotated with system information.
   Corollary: all C++ source code ever compiled will be catalogued,
   allowing us to monitor stats on how often agents generate illegal schedules.
   Make life easier for now by assuming one C++ file containing a typical
@@ -24,8 +24,9 @@ My goals for the Dendritic Halide Harness (`dh_hl`) are:
   automatically (see the Build Tool) instead of parsing it out of the source.
 
 * **Maximize Compatibility with Source Control:**
-  "transparent"-ish on-disk state for catalog, designed to minimize merge conflicts.
-  This is also why I say "catalog" and not "repository".
+  "transparent"-ish on-disk state for the catalog,
+  designed to minimize merge conflicts.
+  This is also why it's "catalog" and not "repository".
 
 * **Support for Parallel Agent Sessions:**
   Each agent session is tracked historically as a "session node".
@@ -33,15 +34,7 @@ My goals for the Dendritic Halide Harness (`dh_hl`) are:
   and implements a machine-wide lockout that prevents benchmarking from
   competing with other harness usage for CPU time.
 
-* Implemented as a **Python 3 package** for now even though I liketh it not.
-  It is launched by the `./dh_hl` stub.
-  **Dependency scope:** Python 3 standard library ONLY (argparse, hashlib,
-  json, subprocess, atexit, signal, os, ...). No third-party pip packages,
-  so whoever inherits this prototype needs no install step. The vendored
-  `ninja_syntax.py` counts as stdlib-equivalent for our purposes.
-
-* In the end, this will only be a sketchy prototype,
-  as there is only 2 months left in my internship.
+* Implemented as a **Python 3 package** for now, launched with the `dh_hl` stub.
 
 AGENTS: if you are **implementing** this harness,
 see the companion [Implementation Notes](impl.md).
