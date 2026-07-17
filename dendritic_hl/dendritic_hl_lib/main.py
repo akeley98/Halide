@@ -1,8 +1,10 @@
 """dh_hl command-line entry point: argparse dispatch + help tool."""
 
 import argparse
+import subprocess
 import sys
 
+from . import locks
 from . import safety
 from . import tools
 from . import build as build_mod
@@ -32,6 +34,8 @@ COMMAND_HELP = {
     "json_idea_info": "Dump an idea node's full state as JSON.",
     "history": "Walk from a schedule node up to its root, printing each hop.",
     "fix_canonical": "Resolve a canonical.txt merge conflict for an idea node.",
+    "exec": "Run a command (after `--`) with the machine lock held (shared).",
+    "exec_exclusive": "Run a command (after `--`) with the machine lock held exclusively.",
 }
 
 
@@ -152,14 +156,38 @@ def cmd_help(args):
     print("{}: {}".format(args.topic, COMMAND_HELP[args.topic]))
 
 
+def _cmd_exec(kind, rest):
+    """Run a command with the machine lock held.  The machine lock is already
+    held (shared); `exec_exclusive` upgrades it.  Everything after the first
+    `--` is the command argv; any `-C`/`-s` before it is accepted but currently
+    unused (the machine lock needs neither catalog nor session)."""
+    if "--" not in rest:
+        raise DhHlError(
+            "{0} requires `--` followed by the command to run, e.g. "
+            "`dh_hl {0} -- cat file.txt`".format(kind))
+    command = rest[rest.index("--") + 1:]
+    if not command:
+        raise DhHlError("no command given after `--`")
+    if kind == "exec_exclusive":
+        locks.upgrade_machine_exclusive()
+    sys.exit(subprocess.call(command))
+
+
 def main():
     safety.arm()
-    parser = _build_parser()
-    args = parser.parse_args()
-    if args.command is None:
-        parser.print_help()
-        sys.exit(2)
+    # Machine lock first thing, before any other work, to yield the machine to
+    # any in-progress profiling (which holds it exclusively) as soon as possible.
+    locks.acquire_machine_shared()
+    argv = sys.argv[1:]
     try:
+        if argv and argv[0] in ("exec", "exec_exclusive"):
+            _cmd_exec(argv[0], argv[1:])
+            return
+        parser = _build_parser()
+        args = parser.parse_args()
+        if args.command is None:
+            parser.print_help()
+            sys.exit(2)
         if args.command == "help":
             cmd_help(args)
         else:

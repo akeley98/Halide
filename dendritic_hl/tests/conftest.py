@@ -63,10 +63,18 @@ def ns(**kwargs):
 
 
 @pytest.fixture
-def run_cli():
-    """Run ./dh_hl as a real subprocess; returns CompletedProcess."""
+def run_cli(tmp_path_factory):
+    """Run ./dh_hl as a real subprocess; returns CompletedProcess.
+
+    Isolates XDG_CACHE_HOME to a throwaway dir so the machine lock/handle store
+    never touch the real ~/.cache.  Each test gets its own cache dir; a caller
+    that needs two concurrent processes to share a machine lock should pass an
+    explicit XDG_CACHE_HOME via *env*."""
+    cache = str(tmp_path_factory.mktemp("dh_hl_xdg"))
+
     def _run(*args, env=None, input=None):
         e = dict(os.environ)
+        e["XDG_CACHE_HOME"] = cache
         if env:
             e.update(env)
         return subprocess.run(

@@ -547,10 +547,12 @@ calls every dirty object's `flush_new()` then every object's `flush_overwrite()`
 `safety.commit()`. Test hook: `new_file` calls `_maybe_inject_failure()`, which
 honors `DH_HL_TEST_FAIL_AFTER` (see Tests).
 
-NOT YET: locks are unimplemented, so `_rollback` currently runs with no lock
-held. Once the catalog lock exists, rollback must run while it is still held —
-the OS releases the lock only at process exit, strictly after `atexit` (see
-Lock Hierarchy).
+Lock ordering (Phase 1): the lock layer is `locks.py` (not `safety.py`), and its
+fds are held open until process exit, so `_rollback` (an `atexit` handler) runs
+strictly before the OS releases them. Once Phase 2 wires `locks.acquire_catalog`
+into Catalog construction, rollback will therefore run with the catalog lock
+still held, as required — no change to `safety.py` is needed for that ordering,
+only that the catalog lock is actually acquired before any mutation.
 
 *What counts as "the tool fails" (rollback) vs. a catalogued bad outcome:*
 The rollback is for **harness/logic failures** — an unexpected exception, a
@@ -632,21 +634,35 @@ not the session lock.
 The session lock is for diagnosing *incorrect-usage*.
 The catalog lock is the truly load-bearing lock for preventing partial transactions.
 
-I want locking to work "by design" in an overarching abstraction,
-and not require most code to worry about whether the lock was held.
-Maybe,
+**As implemented (Phase 1, `locks.py`).** The lock hierarchy lives in its own
+module rather than in `safety.py`, but follows the "by design" aspiration: a
+process-global `_state` tracks a monotone lock *level* and each acquire function
+asserts it is not run out of order (`_L_NONE < _L_MACHINE < _L_SESSION <
+_L_MACHINE_EXCL < _L_CATALOG`; a tool may skip levels but never go backwards).
 
-* The existing safety system is the bottom-level arbiter for keeping the rest of the code behaving well.
-  It exposes "lock" functions, and asserts no locks acquired out-of-order.
+* `locks.acquire_machine_shared()` — called first thing in `main()` (after
+  `safety.arm()`), before argparse, so every invocation yields the machine to a
+  profiler holding it exclusively.
+* `locks.acquire_session(catalog_dir, session_id)` — exclusive, non-blocking;
+  raises `DhHlError` with the concurrent-session-use message on `BlockingIOError`.
+* `locks.upgrade_machine_exclusive()` — `LOCK_UN` then `LOCK_EX` on the same fd
+  (release-then-reacquire, per the objection analysis above).
+* `locks.acquire_catalog(catalog_dir)` — exclusive, blocking; the load-bearing
+  lock, held through rollback.
+* `locks.catalog_lock_held()` — predicate for the Phase 2 mint-invariant assert.
 
-* `flush` methods for session node state assert that the session lock was held?
+Lock fds are stored in `_state` and **never closed**, so the OS releases them at
+process exit, strictly after the `atexit` rollback (rollback thus runs with the
+catalog lock still held). Lock files and the machine/`handles/` dirs are shared
+infrastructure created directly via `os.makedirs(exist_ok=True)` / `os.open`
+with `O_CREAT` (no `O_EXCL`), deliberately **not** tracked by `safety.py` — they
+must survive rollback and be shared across processes.
 
-* Machine lock acquired first thing in `main()`.
-
-* `Catalog` either auto-locks or checks the catalog lock state from the safety system.
-  Can assume the catalog lock is held if you already have this object or a catalog sub-object.
-
-CLAUDE: update this section with real decisions made and reference to implementation functions.
+Wiring status: `acquire_machine_shared` and `upgrade_machine_exclusive` are live
+(`main()` + `exec`/`exec_exclusive`). `acquire_session` / `acquire_catalog` exist
+and are unit-covered but are not yet called by the catalog/session tools — that
+wiring (Catalog construction takes the catalog lock; session resolution takes the
+session lock) is Phase 2.
 
 
 ### Tool Safety: Tree Structure Invariants
@@ -897,13 +913,19 @@ untouched (no timestamp in its ID). Covered by `tests/test_timestamp_mint.py`
 microsecond race is left uncovered with a FUTURE note there. Touched
 `catalog.py`, `build.py`.
 
-**Phase 1 — machine directory + lock layer.** New module (e.g. `locks.py`) for
-`flock`-based machine/catalog/session locks and the `handles/` store (link
-idiom); honor `XDG_CACHE_HOME`. Add `exec` / `exec_exclusive`. Acquire the
-machine lock first thing in `main()`, and integrate rollback ordering (rollback
-runs under the still-held catalog lock). Self-contained and testable in
-isolation (XDG-isolated tmp dir; a "two `exec_exclusive` don't overlap" timing
-test). Touches new module + `main.py` + `safety.py`.
+**Phase 1 — machine directory + lock layer (DONE).** `locks.py` provides the
+`flock` machine/session/catalog locks (monotone-level ordering asserts) and the
+lock-free `handles/` store (hard-link create-or-fail idiom); it honors
+`XDG_CACHE_HOME`. `main()` acquires the shared machine lock first thing and
+intercepts `exec` / `exec_exclusive` (everything after `--` is the command;
+`exec_exclusive` upgrades the machine lock). Rollback ordering holds because lock
+fds are never closed (released at exit, after `atexit`). The session/catalog lock
+functions exist but are wired into the tools only in Phase 2. Tests:
+`tests/test_locks.py` (handle round-trip/idempotence/junk-tolerance, XDG,
+exec exit-code propagation, and a tolerant "two `exec_exclusive` don't overlap"
+timing test); `conftest.run_cli` now isolates `XDG_CACHE_HOME` per test. Touched
+new `locks.py` + `main.py` + `tests/`. (No `safety.py` change was needed; see the
+rollback-ordering note above.)
 
 **Phase 2 — de-anchor from the workspace file; add session storage.** The big
 mechanical diff. Replace `Context(workspace_path)` / `catalog_dir_for` with
