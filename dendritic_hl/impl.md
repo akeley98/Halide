@@ -501,30 +501,15 @@ rare recovery tool is the documented escape hatch.)
 
 ### Tool Safety: File Rollback
 
-Make all changes to the catalog atomic as much as possible.
-For any tool run, record a list of new files and new directories created
+We want all changes to the catalog to be atomic as much as possible.
+Each tool run records a list of new files and new directories created
 (not existing directories touched).
-Use a common helper for this.
+These can be deleted upon tool failure, preventing partial transactions.
 
-If the tool fails, an `atexit` handler will run that deletes all those recorded new files and directories
-(disable the `atexit` handler as the final step before successful exit,
-so we don't delete new files when the tool succeeds!)
-Again, be very very careful about new vs. existing directories.
-Don't delete any directories you didn't create.
-
-So flushing stays a single step strictly separated from the main logic (per
-the Tool Internal Design); "did a subprocess fail" affects only the process
-**exit code**, never whether we flush.
-
-The "new files" don't include the workspace C++ file and the special case overwritten files.
-NEVER delete the workspace C++ file.
-Except for tmp files and private session workspace files,
-defer overwriting files as the FINAL step of tools, because we don't roll back these overwrites.
-So overwriting as late as possible minimizes the risk of crashing after the overwrite.
-
-Make SIGQUIT raise `KeyboardInterrupt` and try to prevent `KeyboardInterrupt` and exceptions from stopping the `atexit` handler.
-(But don't get stuck in an infinite loop if an `OSError` happens).
-Caveat: we can't stop SIGKILL or other hard crashers; atomicity fails in these cases.
+However, there is a caveat: we cannot rollback *overwritten* files,
+only new ones. We mitigate this risk by automatically delaying overwrites as
+late as possible, just prior to tool exit. This reduces the surface area
+of possible crashes in between overwriting a file and tool exit.
 
 **As implemented** (`dendritic_hl_lib/safety.py`): the "common helper" is the
 `safety` module, a process-global registry.
@@ -545,13 +530,13 @@ Caveat: we can't stop SIGKILL or other hard crashers; atomicity fails in these c
   `KeyboardInterrupt`.
 * `commit()` applies the deferred overwrites, then clears `_new_entries` so the
   still-registered `atexit` handler becomes a no-op — this is the "disable as
-  the final step" described above.
+  the final step" that prevents rolling back a successful tool's effects.
 
 The flush itself lives on the model objects, not `safety`: `Catalog.flush()`
-calls every dirty object's `flush_new()` then every object's `flush_overwrite()`
-(see Tool Internal Design), and `Context.finish()` is `catalog.flush()` then
-`safety.commit()`. Test hook: `new_file` calls `_maybe_inject_failure()`, which
-honors `DH_HL_TEST_FAIL_AFTER` (see Tests).
+calls every dirty object's `flush()` (see Tool Internal Design),
+and `Context.finish()` is `catalog.flush()` then `safety.commit()`.
+Test hook: `new_file` calls `_maybe_inject_failure()`,
+which honors `DH_HL_TEST_FAIL_AFTER` (see Tests).
 
 Lock ordering (Phase 1): the lock layer is `locks.py` (not `safety.py`), and its
 fds are held open until process exit, so `_rollback` (an `atexit` handler) runs
@@ -840,12 +825,11 @@ that's fairly 1:1 with the conceptual state.
 
 Each tool execution is short-lived and breaks into multiple phases
 
-* Lazily load the needed parts of the catalog to memory
-* Modify state in-memory (can be interleaved with lazy loads)
-* Flush changes to the catalog directory, in two sub-phases,
-  write all new files, then overwrite existing files.
-
-I don't want any file opened or parsed more than once.
+* Lazily load the needed parts of the catalog to memory.
+* Modify state in-memory (can be interleaved with lazy loads).
+* Flush changes to the catalog directory: create new files/directories,
+  and queue overwritten files (`safety.queue_overwrite`).
+* Actually overwrite files (`safety.commit`).
 
 There is a top-level `Catalog` object, owning
 * A `Dict[str, IdeaNode]`: idea nodes by full ID
@@ -857,9 +841,7 @@ Each object
 * is dirtied when modified, or upon creation if it's not loaded from disk;
   do this in each setter and non-load-from-disk `__init__` path;
   DON'T ever expect outside code to dirty an object manually!
-* has `flush_new` and `flush_overwrite` callbacks that implement
-  the "write new files" and "overwrite existing files" steps of flushing
-  state to disk
+* has `flush` callbacks that uses the `safety` module to write changes to disk.
 * may own lazily-created sub-objects corresponding to some piece of conceptual state;
   for example, a schedule node object owns commentary sub-objects.
 
