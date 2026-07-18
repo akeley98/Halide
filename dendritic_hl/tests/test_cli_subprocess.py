@@ -35,6 +35,41 @@ def test_help_exit_zero(run_cli):
     assert "dh_hl commands" in r.stdout
 
 
+def test_new_catalog_end_to_end_cli(run_cli, tmp_path):
+    """Bootstrap a catalog+session entirely through the real CLI (no in-process
+    helper), then drive it -- the highest-fidelity path now that new_catalog
+    exists."""
+    cat_dir = str(tmp_path / "proj.dh_hl")
+    (tmp_path / "in.cpp").write_text("// gen\n")
+    (tmp_path / "p.txt").write_text("explore\n")
+    r = run_cli("new_catalog", "-C", cat_dir, "seed",
+                str(tmp_path / "p.txt"), str(tmp_path / "in.cpp"))
+    assert r.returncode == 0, r.stderr
+    sid = [l[len("Session: "):] for l in r.stdout.splitlines()
+           if l.startswith("Session: ")][0].strip()
+
+    # A handle from list_termini resolves to the same session (shared XDG).
+    r = run_cli("list_termini", "-C", cat_dir)
+    assert r.returncode == 0 and sid in r.stdout
+    handle = [l.split("handle:")[1].strip() for l in r.stdout.splitlines()
+              if "handle:" in l][0]
+    r = run_cli("status", "-s", handle)
+    assert r.returncode == 0
+    assert "workspace consistent" in r.stdout
+    assert sid in r.stdout
+
+
+def test_missing_input_file_is_clean_error(run_cli, tmp_path):
+    """A missing input file is a clean dh_hl error, not a traceback."""
+    cat_dir = str(tmp_path / "proj.dh_hl")
+    (tmp_path / "in.cpp").write_text("// gen\n")
+    r = run_cli("new_catalog", "-C", cat_dir, "seed",
+                str(tmp_path / "nope.txt"), str(tmp_path / "in.cpp"))
+    assert r.returncode == 1
+    assert "Traceback" not in r.stderr
+    assert "cannot read input file" in r.stderr
+
+
 def test_status_bad_session_handle_errors(run_cli):
     r = run_cli("status", "-s", "tmp.deadbeef")
     assert r.returncode == 1

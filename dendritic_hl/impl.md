@@ -988,12 +988,40 @@ sequences (`test_build_fake`: build = machine/shared→session→catalog, profil
 lock, `new_root` takes it). Touched `build.py`, `context.py` (isdir guard),
 `tests/`; the monkeypatch seams kept `test_build_fake` intact.
 
-**Phase 4 — session lifecycle + new tools.** `new_catalog`, `new_sub_session`,
-`new_successor_session`, `close_session`, `delist_session`,
-`list_open_sessions`, `list_termini`, the copy / id-of / workspace tools,
-`view_session_*`, `json_session_info`, `json_export`. Session-tree invariants
-(depth rules; parent older than child) via the checked-edge helper from "Tree
-Structure Invariants". Touches `tools.py`, `catalog.py`, `main.py`.
+**Phase 4 — session lifecycle + new tools (DONE).** All the remaining tools are
+implemented in `tools.py` and wired into `main.py`: `new_catalog`,
+`new_sub_session`, `new_successor_session`, `close_session`, `delist_session`,
+`list_open_sessions`, `list_termini`, the copy / id-of / workspace getters,
+`view_session_idea` / `view_commentary` / `view_session_commentary`,
+`json_session_info`, `json_export`. The shared "Session Creation Common" flow is
+`tools._create_session_and_idea` (mints the session ID first so the seed idea's
+proposal text can reference it; seeds the private workspace with the parent
+schedule's C++; duplicates the parent as the new idea's canonical). Model support
+added in `catalog.py`: `mint_session_id`, `create_session(session_id=...)`,
+session-edge linking (`_ensure_session_linked` / `child_sessions`), and the
+derived predicates `session_is_closed` (self-closed, or a sub-session of a closed
+session — successor edges don't propagate) and `session_is_terminus` (depth 0,
+not delisted, no successor). The JSON builders were factored into
+`_schedule_json` / `_idea_json` / `_session_json` and reused by `json_export`.
+
+Session-tree invariants: parent-older-than-child is checked in `create_session`;
+depth rules are enforced by the creating tools (`new_sub_session` → parent
+depth+1; `new_successor_session` requires a depth-0 self-closed session and makes
+a depth-0 successor). There is still no single unified checked-edge helper (as
+noted under "Tree Structure Invariants", that consolidation stays FUTURE).
+
+Also fixed a pre-existing wart surfaced here: `read_text_or_stdin` now raises a
+clean `DhHlError` on a missing/unreadable input file instead of a traceback.
+
+Tests: `tests/test_sessions.py` (in-process lifecycle: new_catalog, sub/successor,
+close/delist, open/terminus transitions, copy/id-of/workspace/view, json_export)
+plus true-CLI subprocess coverage in `test_cli_subprocess.py` (new_catalog
+bootstrap end-to-end + the clean-error path). Touched `tools.py`, `catalog.py`,
+`context.py`, `main.py`, `tests/`.
+
+Now that `new_catalog` exists, the pytest-process bootstrap (`make_catalog_session`)
+is no longer the *only* way to create a catalog+session; subprocess tests can (and
+one now does) bootstrap purely through the CLI.
 
 **Phase 5 — backfill docs + locking tests.** Fill the remaining `CLAUDE:` TODOs
 (real lock-function references in Lock Hierarchy; username/hostname sanitization

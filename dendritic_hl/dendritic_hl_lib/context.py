@@ -103,11 +103,15 @@ class SessionWorkspace:
 
 def read_text_or_stdin(path):
     """Read a text input argument.  Universally, "-" means read from stdin;
-    otherwise *path* is a filename."""
+    otherwise *path* is a filename.  A missing/unreadable file is a clean
+    user-facing error, not a traceback."""
     if path == "-":
         return sys.stdin.read()
-    with open(path, "r", encoding="utf-8") as f:
-        return f.read()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except OSError as e:
+        raise DhHlError("cannot read input file {!r}: {}".format(path, e))
 
 
 def _validate_catalog_dir(path):

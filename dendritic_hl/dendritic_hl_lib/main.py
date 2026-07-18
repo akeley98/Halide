@@ -36,6 +36,37 @@ COMMAND_HELP = {
     "fix_canonical": "Resolve a canonical.txt merge conflict for an idea node.",
     "exec": "Run a command (after `--`) with the machine lock held (shared).",
     "exec_exclusive": "Run a command (after `--`) with the machine lock held exclusively.",
+    # Phase 4: session lifecycle + queries
+    "new_catalog": "Create a brand-new catalog + first session from an input C++ file.",
+    "new_sub_session": "Spawn a sub-agent session (depth+1) off a parent schedule.",
+    "new_successor_session": "Start a successor to a self-closed top-level session.",
+    "close_session": "Set the current session's output schedule (its final result).",
+    "delist_session": "Mark the current session as delisted.",
+    "list_open_sessions": "List all open (not-closed) sessions with handles.",
+    "list_termini": "List all termini (top-level, not-delisted, no successor).",
+    "copy_schedule": "Write a schedule node's C++ to a file ('-' for stdout).",
+    "copy_terminus_schedule": "Write the unique terminus's output schedule C++ to a file.",
+    "copy_session_seed_schedule": "Write the session seed idea's canonical C++ to a file.",
+    "copy_session_output": "Write the current session's output schedule C++ to a file.",
+    "terminus_schedule_full_id": "Print the terminus output schedule's full ID.",
+    "terminus_schedule_short_id": "Print the terminus output schedule's short ID.",
+    "seed_schedule_full_id": "Print the session seed idea's canonical schedule full ID.",
+    "seed_schedule_short_id": "Print the session seed idea's canonical schedule short ID.",
+    "session_output_full_id": "Print the current session's output schedule full ID.",
+    "session_output_short_id": "Print the current session's output schedule short ID.",
+    "workspace_schedule": "Print the path of the session's workspace C++ file.",
+    "workspace_bin": "Print the path of the session's bin directory.",
+    "schedule_full_id": "Print a schedule node's full ID.",
+    "schedule_short_id": "Print a schedule node's short ID.",
+    "idea_full_id": "Print an idea node's full ID.",
+    "idea_short_id": "Print an idea node's short ID.",
+    "session_full_id": "Print the current session's full ID.",
+    "session_handle": "Print (allocating if needed) the current session's handle.",
+    "view_session_idea": "Show the current session's seed idea.",
+    "view_commentary": "Show all commentary of a schedule node.",
+    "view_session_commentary": "Show the session output's positive-importance commentary.",
+    "json_session_info": "Dump the current session's state as JSON.",
+    "json_export": "Dump the entire catalog (ideas, schedules, sessions) as JSON.",
 }
 
 
@@ -119,6 +150,71 @@ def _build_parser():
     sp = add("fix_canonical")
     sp.add_argument("idea", help="idea ID")
 
+    # -- Phase 4: session lifecycle + queries --------------------------------
+    sp = add("new_catalog")
+    sp.add_argument("proposal_name", help="seed idea proposal name [A-Za-z0-9_]{1,72}")
+    sp.add_argument("proposal", help="seed idea proposal text file ('-' for stdin)")
+    sp.add_argument("input_cpp", help="initial C++ generator file ('-' for stdin)")
+
+    sp = add("new_sub_session")
+    sp.add_argument("proposal_name", help="proposal name [A-Za-z0-9_]{1,72}")
+    sp.add_argument("proposal", help="proposal text file ('-' for stdin)")
+    sp.add_argument("schedule", nargs="?", help="parent schedule ID (default: status)")
+
+    sp = add("new_successor_session")
+    sp.add_argument("proposal_name", help="proposal name [A-Za-z0-9_]{1,72}")
+    sp.add_argument("proposal", help="proposal text file ('-' for stdin)")
+
+    sp = add("close_session")
+    sp.add_argument("schedule", nargs="?", help="output schedule ID (default: status)")
+
+    add("delist_session")
+    add("list_open_sessions")
+    add("list_termini")
+
+    sp = add("copy_schedule")
+    sp.add_argument("output", help="output file ('-' for stdout)")
+    sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
+
+    sp = add("copy_terminus_schedule")
+    sp.add_argument("output", help="output file ('-' for stdout)")
+
+    sp = add("copy_session_seed_schedule")
+    sp.add_argument("output", help="output file ('-' for stdout)")
+
+    sp = add("copy_session_output")
+    sp.add_argument("output", help="output file ('-' for stdout)")
+
+    add("terminus_schedule_full_id")
+    add("terminus_schedule_short_id")
+    add("seed_schedule_full_id")
+    add("seed_schedule_short_id")
+    add("session_output_full_id")
+    add("session_output_short_id")
+    add("workspace_schedule")
+    add("workspace_bin")
+
+    sp = add("schedule_full_id")
+    sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
+    sp = add("schedule_short_id")
+    sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
+
+    sp = add("idea_full_id")
+    sp.add_argument("idea", help="idea ID")
+    sp = add("idea_short_id")
+    sp.add_argument("idea", help="idea ID")
+
+    add("session_full_id")
+    add("session_handle")
+    add("view_session_idea")
+
+    sp = add("view_commentary")
+    sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
+
+    add("view_session_commentary")
+    add("json_session_info")
+    add("json_export")
+
     return p
 
 
@@ -143,6 +239,37 @@ _DISPATCH = {
     "json_idea_info": tools.cmd_json_idea_info,
     "history": tools.cmd_history,
     "fix_canonical": tools.cmd_fix_canonical,
+    # Phase 4
+    "new_catalog": tools.cmd_new_catalog,
+    "new_sub_session": tools.cmd_new_sub_session,
+    "new_successor_session": tools.cmd_new_successor_session,
+    "close_session": tools.cmd_close_session,
+    "delist_session": tools.cmd_delist_session,
+    "list_open_sessions": tools.cmd_list_open_sessions,
+    "list_termini": tools.cmd_list_termini,
+    "copy_schedule": tools.cmd_copy_schedule,
+    "copy_terminus_schedule": tools.cmd_copy_terminus_schedule,
+    "copy_session_seed_schedule": tools.cmd_copy_session_seed_schedule,
+    "copy_session_output": tools.cmd_copy_session_output,
+    "terminus_schedule_full_id": tools.cmd_terminus_schedule_full_id,
+    "terminus_schedule_short_id": tools.cmd_terminus_schedule_short_id,
+    "seed_schedule_full_id": tools.cmd_seed_schedule_full_id,
+    "seed_schedule_short_id": tools.cmd_seed_schedule_short_id,
+    "session_output_full_id": tools.cmd_session_output_full_id,
+    "session_output_short_id": tools.cmd_session_output_short_id,
+    "workspace_schedule": tools.cmd_workspace_schedule,
+    "workspace_bin": tools.cmd_workspace_bin,
+    "schedule_full_id": tools.cmd_schedule_full_id,
+    "schedule_short_id": tools.cmd_schedule_short_id,
+    "idea_full_id": tools.cmd_idea_full_id,
+    "idea_short_id": tools.cmd_idea_short_id,
+    "session_full_id": tools.cmd_session_full_id,
+    "session_handle": tools.cmd_session_handle,
+    "view_session_idea": tools.cmd_view_session_idea,
+    "view_commentary": tools.cmd_view_commentary,
+    "view_session_commentary": tools.cmd_view_session_commentary,
+    "json_session_info": tools.cmd_json_session_info,
+    "json_export": tools.cmd_json_export,
 }
 
 

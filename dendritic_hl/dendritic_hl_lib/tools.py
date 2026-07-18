@@ -6,8 +6,15 @@ rollback handler is disarmed.
 """
 
 import json
+import os
+import sys
 
-from .context import Context, read_text_or_stdin
+from . import ids
+from . import locks
+from . import safety
+from .catalog import Catalog
+from .context import (Context, SessionWorkspace, resolve_target,
+                      _validate_catalog_dir, read_text_or_stdin)
 from .errors import DhHlError
 
 
@@ -347,20 +354,23 @@ def cmd_list_ideas(args):
 # view_idea
 # ---------------------------------------------------------------------------
 
-def cmd_view_idea(args):
-    ctx = Context.for_catalog(args)
-    idea = ctx.catalog.resolve_idea(args.idea)
+def _print_idea_view(catalog, idea):
     print("=" * 72)
     print("Idea: " + idea.proposal_name)
     print("=" * 72)
     print(idea.proposal_text.rstrip("\n"))
     print("-" * 72)
     print("Child schedules:")
-    children = ctx.catalog.child_schedules(idea)
+    children = catalog.child_schedules(idea)
     if not children:
         print("  (none)")
     for s in sorted(children, key=lambda n: n.timestamp):
-        print("  " + ctx.catalog.format_schedule_id(s))
+        print("  " + catalog.format_schedule_id(s))
+
+
+def cmd_view_idea(args):
+    ctx = Context.for_catalog(args)
+    _print_idea_view(ctx.catalog, ctx.catalog.resolve_idea(args.idea))
 
 
 # ---------------------------------------------------------------------------
@@ -452,15 +462,11 @@ def cmd_list_equal_schedules(args):
 # json_schedule_info / json_idea_info
 # ---------------------------------------------------------------------------
 
-def cmd_json_schedule_info(args):
-    ctx = Context.for_catalog(args)
-    catalog = ctx.catalog
-    node = ctx.resolve_schedule_arg(args.schedule)
-    children = [i.full_id for i in catalog.child_ideas(node)]
-    obj = {
+def _schedule_json(catalog, node):
+    return {
         "id": node.full_id,
         "parent": node.parent_id,
-        "children": children,
+        "children": [i.full_id for i in catalog.child_ideas(node)],
         "source": node.source,
         "timestamp": node.timestamp,
         "hash": node.hash,
@@ -472,23 +478,61 @@ def cmd_json_schedule_info(args):
             for c in sorted(node.commentary, key=lambda c: c.timestamp)
         ],
     }
-    print(json.dumps(obj, indent=1))
 
 
-def cmd_json_idea_info(args):
-    ctx = Context.for_catalog(args)
-    catalog = ctx.catalog
-    idea = catalog.resolve_idea(args.idea)
-    children = [s.full_id for s in catalog.child_schedules(idea)]
+def _idea_json(catalog, idea):
     imp = idea.importance
-    obj = {
+    return {
         "id": idea.full_id,
         "parent": idea.parent_id,
-        "children": children,
+        "children": [s.full_id for s in catalog.child_schedules(idea)],
         "proposal_name": idea.proposal_name,
         "proposal_text": idea.proposal_text,
         "canonical_schedule": idea.canonical,
         "importance": None if imp == float("-inf") else imp,
+    }
+
+
+def _session_json(catalog, session):
+    return {
+        "id": session.full_id,
+        "parent": session.parent_id,
+        "children": [c.full_id for c in catalog.child_sessions(session)],
+        "seed_idea": session.seed_idea_id,
+        "output_schedule": session.output_schedule_id,
+        "delisted": session.delisted,
+        "depth": session.depth,
+    }
+
+
+def cmd_json_schedule_info(args):
+    ctx = Context.for_catalog(args)
+    node = ctx.resolve_schedule_arg(args.schedule)
+    print(json.dumps(_schedule_json(ctx.catalog, node), indent=1))
+
+
+def cmd_json_idea_info(args):
+    ctx = Context.for_catalog(args)
+    idea = ctx.catalog.resolve_idea(args.idea)
+    print(json.dumps(_idea_json(ctx.catalog, idea), indent=1))
+
+
+def cmd_json_session_info(args):
+    # Read-only: does NOT acquire the session lock (idea.md).
+    ctx = Context.for_session(args, session_lock=False)
+    print(json.dumps(_session_json(ctx.catalog, ctx.session), indent=1))
+
+
+def cmd_json_export(args):
+    ctx = Context.for_catalog(args)
+    catalog = ctx.catalog
+    obj = {
+        "ideas": {i.full_id: _idea_json(catalog, i)
+                  for i in catalog.ideas.values()},
+        "schedules": {s.full_id: _schedule_json(catalog, s)
+                      for s in catalog.schedules.values()},
+        "sessions": {s.full_id: _session_json(catalog, s)
+                     for s in catalog.sessions.values()},
     }
     print(json.dumps(obj, indent=1))
 
@@ -537,3 +581,319 @@ def cmd_fix_canonical(args):
         catalog.format_idea_id(idea)))
     print("  older canonical: " + catalog.format_schedule_id(older_node))
     print("  newer moved under new idea: " + catalog.format_idea_id(fix_idea))
+
+
+# ===========================================================================
+# Phase 4: session lifecycle, listing, copy/id-of, workspace, views
+# ===========================================================================
+
+# ---- session creation (the "Session Creation Common" flow) ----------------
+
+def _create_session_and_idea(catalog, parent_schedule, proposal_name,
+                             proposal_text, parent_session, depth):
+    """Create the session/idea pair off *parent_schedule* (idea.md "Session
+    Creation Tools: Common Information").  Returns (session, handle).
+
+    Mints the session ID first so the seed idea's proposal text can reference
+    it; seeds a session whose private workspace holds a copy of the parent
+    schedule's C++ pointing at the new idea; and duplicates the parent schedule
+    as the new idea's canonical, giving the new session an exclusive sub-tree."""
+    session_id = catalog.mint_session_id(depth)
+    text = proposal_text if proposal_text.endswith("\n") else proposal_text + "\n"
+    text += "Created for session: {}\n".format(session_id)
+    idea = catalog.create_idea(parent_schedule, proposal_name, text)
+    session = catalog.create_session(idea, parent_session, depth,
+                                     session_id=session_id)
+    ws = SessionWorkspace(catalog.catalog_dir, session_id, catalog=catalog)
+    ws.initialize(parent_schedule.source, ("idea", idea.full_id))
+    dup = catalog.create_schedule(parent_schedule.source, parent_idea=idea)
+    idea.set_canonical(dup.full_id)
+    handle = locks.allocate_handle(catalog.catalog_dir, session_id)
+    return session, handle
+
+
+def cmd_new_catalog(args):
+    catalog_dir = _validate_catalog_dir(args.catalog)
+    if os.path.exists(catalog_dir):
+        raise DhHlError("catalog directory already exists: " + catalog_dir)
+    if not ids.is_proposal_name(args.proposal_name):
+        raise DhHlError("proposal name must be 1..72 chars of [A-Za-z0-9_]: "
+                        + repr(args.proposal_name))
+    input_source = read_text_or_stdin(args.input_cpp)
+    proposal_text = read_text_or_stdin(args.proposal)
+
+    safety.makedirs_tracked(catalog_dir)
+    locks.acquire_catalog(catalog_dir)
+    catalog = Catalog(catalog_dir)
+    catalog.ensure_created()
+    root = catalog.create_schedule(input_source, parent_idea=None)
+    session, handle = _create_session_and_idea(
+        catalog, root, args.proposal_name, proposal_text,
+        parent_session=None, depth=0)
+    catalog.flush()
+    safety.commit()
+    print("Created catalog " + catalog_dir)
+    print("Session: " + session.full_id)
+    print("Session handle: " + handle)
+
+
+def cmd_new_sub_session(args):
+    ctx = Context.for_session(args, session_lock=True)
+    parent_schedule = ctx.resolve_schedule_arg(args.schedule)
+    proposal_text = read_text_or_stdin(args.proposal)
+    session, handle = _create_session_and_idea(
+        ctx.catalog, parent_schedule, args.proposal_name, proposal_text,
+        parent_session=ctx.session, depth=ctx.session.depth + 1)
+    ctx.finish()
+    print("Created sub-session " + session.full_id)
+    print("Session handle: " + handle)
+
+
+def cmd_new_successor_session(args):
+    ctx = Context.for_session(args, session_lock=True)
+    session = ctx.session
+    if session.depth != 0:
+        raise DhHlError(
+            "new_successor_session requires a top-level (depth 0) session")
+    if not session.is_self_closed():
+        raise DhHlError(
+            "the current session must be self-closed (have an output schedule "
+            "or be delisted) before starting a successor")
+    if session.output_schedule_id is None:
+        raise DhHlError(
+            "the current session has no output schedule to succeed from "
+            "(it was only delisted)")
+    parent_schedule = ctx.catalog.get_schedule(session.output_schedule_id)
+    proposal_text = read_text_or_stdin(args.proposal)
+    new_session, handle = _create_session_and_idea(
+        ctx.catalog, parent_schedule, args.proposal_name, proposal_text,
+        parent_session=session, depth=0)
+    ctx.finish()
+    print("Created successor session " + new_session.full_id)
+    print("Session handle: " + handle)
+
+
+# ---- close / delist -------------------------------------------------------
+
+def cmd_close_session(args):
+    ctx = Context.for_session(args, session_lock=True)
+    node = ctx.resolve_schedule_arg(args.schedule)
+    session = ctx.session
+    if session.output_schedule_id is not None:
+        raise DhHlError(
+            "the current session already has an output schedule: "
+            + ctx.catalog.format_schedule_id(
+                ctx.catalog.get_schedule(session.output_schedule_id)))
+    if not any(c.importance is not None and c.importance > 0
+               for c in node.commentary):
+        raise DhHlError(
+            "the output schedule must have commentary with positive importance;\n"
+            "use `dh_hl comment_importance` to record a session summary first")
+    session.set_output_schedule(node.full_id)
+    ctx.finish()
+    print("Closed session; output schedule "
+          + ctx.catalog.format_schedule_id(node))
+
+
+def cmd_delist_session(args):
+    ctx = Context.for_session(args, session_lock=True)
+    ctx.session.set_delisted()
+    ctx.finish()
+    print("Delisted session " + ctx.session.full_id)
+
+
+# ---- listing --------------------------------------------------------------
+
+def _print_session_line(catalog, session):
+    print(session.full_id)
+    print("  handle: "
+          + locks.allocate_handle(catalog.catalog_dir, session.full_id))
+
+
+def cmd_list_open_sessions(args):
+    ctx = Context.for_catalog(args)
+    catalog = ctx.catalog
+    opens = [s for s in catalog.sessions.values()
+             if not catalog.session_is_closed(s)]
+    if not opens:
+        print("(no open sessions)")
+    for s in sorted(opens, key=lambda s: s.timestamp):
+        _print_session_line(catalog, s)
+
+
+def cmd_list_termini(args):
+    ctx = Context.for_catalog(args)
+    catalog = ctx.catalog
+    termini = [s for s in catalog.sessions.values()
+               if catalog.session_is_terminus(s)]
+    if not termini:
+        print("(no termini)")
+    for s in sorted(termini, key=lambda s: s.timestamp):
+        _print_session_line(catalog, s)
+
+
+# ---- copy / id-of schedule nouns ------------------------------------------
+
+def _the_terminus_output(catalog):
+    termini = [s for s in catalog.sessions.values()
+               if catalog.session_is_terminus(s)]
+    if len(termini) != 1:
+        raise DhHlError(
+            "expected exactly one terminus, found {}".format(len(termini)))
+    term = termini[0]
+    if term.output_schedule_id is None:
+        raise DhHlError("the terminus session has no output schedule")
+    return catalog.get_schedule(term.output_schedule_id)
+
+
+def _session_seed_schedule(ctx):
+    idea = ctx.catalog.get_idea(ctx.session.seed_idea_id)
+    if idea.canonical is None:
+        raise DhHlError("the session's seed idea has no canonical schedule")
+    return ctx.catalog.get_schedule(idea.canonical)
+
+
+def _session_output_schedule(ctx):
+    sid = ctx.session.output_schedule_id
+    if sid is None:
+        raise DhHlError("the current session has no output schedule yet")
+    return ctx.catalog.get_schedule(sid)
+
+
+def _write_output(path, text):
+    """Write a schedule's C++ to *path*; '-' means stdout."""
+    if path == "-":
+        sys.stdout.write(text)
+    else:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+
+def cmd_copy_schedule(args):
+    ctx = Context.for_catalog(args)
+    _write_output(args.output, ctx.resolve_schedule_arg(args.schedule).source)
+
+
+def cmd_copy_terminus_schedule(args):
+    ctx = Context.for_catalog(args)
+    _write_output(args.output, _the_terminus_output(ctx.catalog).source)
+
+
+def cmd_copy_session_seed_schedule(args):
+    ctx = Context.for_session(args, session_lock=False)
+    _write_output(args.output, _session_seed_schedule(ctx).source)
+
+
+def cmd_copy_session_output(args):
+    ctx = Context.for_session(args, session_lock=False)
+    _write_output(args.output, _session_output_schedule(ctx).source)
+
+
+def cmd_terminus_schedule_full_id(args):
+    ctx = Context.for_catalog(args)
+    print(_the_terminus_output(ctx.catalog).full_id)
+
+
+def cmd_terminus_schedule_short_id(args):
+    ctx = Context.for_catalog(args)
+    print(ctx.catalog.format_schedule_id(_the_terminus_output(ctx.catalog)))
+
+
+def cmd_seed_schedule_full_id(args):
+    ctx = Context.for_session(args, session_lock=False)
+    print(_session_seed_schedule(ctx).full_id)
+
+
+def cmd_seed_schedule_short_id(args):
+    ctx = Context.for_session(args, session_lock=False)
+    print(ctx.catalog.format_schedule_id(_session_seed_schedule(ctx)))
+
+
+def cmd_session_output_full_id(args):
+    ctx = Context.for_session(args, session_lock=False)
+    print(_session_output_schedule(ctx).full_id)
+
+
+def cmd_session_output_short_id(args):
+    ctx = Context.for_session(args, session_lock=False)
+    print(ctx.catalog.format_schedule_id(_session_output_schedule(ctx)))
+
+
+# ---- workspace location ---------------------------------------------------
+
+def cmd_workspace_schedule(args):
+    ctx = Context.for_session(args, session_lock=False)
+    ctx.session  # validate the session exists
+    print(ctx.workspace.workspace_path)
+
+
+def cmd_workspace_bin(args):
+    ctx = Context.for_session(args, session_lock=False)
+    ctx.session
+    print(ctx.workspace.bin_dir)
+
+
+# ---- ID translation -------------------------------------------------------
+
+def cmd_schedule_full_id(args):
+    ctx = Context.for_catalog(args)
+    print(ctx.resolve_schedule_arg(args.schedule).full_id)
+
+
+def cmd_schedule_short_id(args):
+    ctx = Context.for_catalog(args)
+    print(ctx.catalog.format_schedule_id(ctx.resolve_schedule_arg(args.schedule)))
+
+
+def cmd_idea_full_id(args):
+    ctx = Context.for_catalog(args)
+    print(ctx.catalog.resolve_idea(args.idea).full_id)
+
+
+def cmd_idea_short_id(args):
+    ctx = Context.for_catalog(args)
+    print(ctx.catalog.format_idea_id(ctx.catalog.resolve_idea(args.idea)))
+
+
+def cmd_session_full_id(args):
+    ctx = Context.for_session(args, session_lock=False)
+    print(ctx.session.full_id)
+
+
+def cmd_session_handle(args):
+    ctx = Context.for_session(args, session_lock=False)
+    # Never fall back to a full ID: a handle encodes the catalog dir too.
+    print(locks.allocate_handle(ctx.catalog.catalog_dir, ctx.session.full_id))
+
+
+# ---- views ----------------------------------------------------------------
+
+def cmd_view_session_idea(args):
+    ctx = Context.for_session(args, session_lock=False)
+    _print_idea_view(ctx.catalog, ctx.catalog.get_idea(ctx.session.seed_idea_id))
+
+
+def _print_commentary(node, positive_only=False):
+    comments = sorted(node.commentary, key=lambda c: c.timestamp)
+    if positive_only:
+        comments = [c for c in comments
+                    if c.importance is not None and c.importance > 0]
+    if not comments:
+        print("(no commentary)")
+    for c in comments:
+        print("=" * 72)
+        print("timestamp: " + c.timestamp)
+        print("importance: "
+              + ("none" if c.importance is None else str(c.importance)))
+        print("-" * 72)
+        print(c.text.rstrip("\n"))
+
+
+def cmd_view_commentary(args):
+    ctx = Context.for_catalog(args)
+    _print_commentary(ctx.resolve_schedule_arg(args.schedule))
+
+
+def cmd_view_session_commentary(args):
+    ctx = Context.for_session(args, session_lock=False)
+    _print_commentary(_session_output_schedule(ctx), positive_only=True)

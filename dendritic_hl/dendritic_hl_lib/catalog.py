@@ -694,6 +694,7 @@ class Catalog:
         self._ideas = None
         self._sessions = None
         self._linked = False
+        self._session_linked = False
         self._dirty = {}            # id(obj) -> obj
         self._last_timestamp = None  # for fresh_timestamp monotonicity
 
@@ -821,6 +822,47 @@ class Catalog:
         self._ensure_linked()
         return [self.schedules[s] for s in idea.child_schedule_ids]
 
+    # -- derived session edges ------------------------------------------
+    def _ensure_session_linked(self):
+        """Fill each session's child_session_ids (all-or-nothing), from every
+        session's parent.txt.  Both sub-session (depth+1) and successor (0<->0)
+        children land here; the edge *type* is derived from the depths."""
+        if self._session_linked:
+            return
+        for s in self.sessions.values():
+            s.child_session_ids = []
+        for s in self.sessions.values():
+            pid = s.parent_id
+            if pid is not None and pid in self.sessions:
+                self.sessions[pid].child_session_ids.append(s.full_id)
+        self._session_linked = True
+
+    def child_sessions(self, session):
+        self._ensure_session_linked()
+        return [self.sessions[c] for c in session.child_session_ids]
+
+    def session_is_closed(self, session):
+        """Self-closed (output schedule or delisted), or a sub-session of a
+        closed session.  Successor edges do NOT propagate closedness."""
+        if session.is_self_closed():
+            return True
+        pid = session.parent_id
+        if pid is not None and pid in self.sessions:
+            parent = self.sessions[pid]
+            if parent.depth == session.depth - 1:  # sub-session edge
+                # Depth strictly decreases up sub-edges, so this terminates.
+                return self.session_is_closed(parent)
+        return False
+
+    def session_is_terminus(self, session):
+        """Top-level (depth 0), not delisted, and no successor sessions."""
+        if session.depth != 0 or session.delisted:
+            return False
+        for child in self.child_sessions(session):
+            if child.depth == 0:  # a successor session
+                return False
+        return True
+
     # -- edge mutation w/ invariant checks ------------------------------
     def link_new_child_schedule(self, idea, schedule):
         """Make (new) *schedule* a child of *idea*, enforcing invariants.
@@ -898,14 +940,10 @@ class Catalog:
             parent_schedule.child_idea_ids.append(full_id)
         return node
 
-    def create_session(self, seed_idea, parent_session, depth):
-        """Create a new session node seeded with *seed_idea* at *depth* (0 for
-        top-level).  Model-level primitive; the CLI session-creation tools
-        (Phase 4) wrap this and also initialize the private workspace.  Mints the
-        session ID under the catalog lock.
-
-        Enforces the session timestamp invariant when there is a parent: the
-        parent session must be strictly older than the child."""
+    def mint_session_id(self, depth):
+        """Mint a fresh session ID at *depth*.  Separate from create_session so
+        a caller can put the ID into the seed idea's proposal text before the
+        session node exists (see the Session Creation Common flow)."""
         try:
             username = getpass.getuser()
         except Exception:
@@ -915,18 +953,34 @@ class Catalog:
             lambda t: os.path.join(
                 self.session_dir,
                 ids.make_session_id(depth, t, username, hostname)))
-        full_id = ids.make_session_id(depth, ts, username, hostname)
+        return ids.make_session_id(depth, ts, username, hostname)
+
+    def create_session(self, seed_idea, parent_session, depth, session_id=None):
+        """Create a new session node seeded with *seed_idea* at *depth* (0 for
+        top-level).  Model-level primitive; the CLI session-creation tools wrap
+        this and also initialize the private workspace.  *session_id* may be a
+        pre-minted ID (mint_session_id); otherwise one is minted here.
+
+        Enforces the session timestamp invariant when there is a parent: the
+        parent session must be strictly older than the child."""
+        if session_id is None:
+            session_id = self.mint_session_id(depth)
         parent_id = None
         if parent_session is not None:
-            if parent_session.timestamp >= ts:
+            if parent_session.timestamp >= ids.session_timestamp(session_id):
                 raise DhHlError(
                     "tree invariant violation: parent session (timestamp {}) "
                     "is not older than the new session (timestamp {})".format(
-                        parent_session.timestamp, ts))
+                        parent_session.timestamp,
+                        ids.session_timestamp(session_id)))
             parent_id = parent_session.full_id
-        node = SessionNode(self, full_id, is_new=True,
+        node = SessionNode(self, session_id, is_new=True,
                            seed_idea_id=seed_idea.full_id, parent_id=parent_id)
-        self.sessions[full_id] = node
+        self.sessions[session_id] = node
+        if self._session_linked:
+            node.child_session_ids = []
+            if parent_id is not None and parent_id in self.sessions:
+                self.sessions[parent_id].child_session_ids.append(session_id)
         return node
 
     # -- dirty / flush ---------------------------------------------------
