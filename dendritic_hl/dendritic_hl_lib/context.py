@@ -35,8 +35,8 @@ class SessionWorkspace:
         # invariant.
         self.catalog = catalog
         self.session_id = session_id
-        self.private_dir = os.path.join(os.path.abspath(catalog_dir),
-                                        "private", session_id)
+        self.catalog_dir = os.path.abspath(catalog_dir)
+        self.private_dir = os.path.join(self.catalog_dir, "private", session_id)
         self.workspace_path = os.path.join(self.private_dir, "generator.cpp")
         self.bin_dir = os.path.join(self.private_dir, "bin")
         self._workspace_bytes = None
@@ -47,6 +47,19 @@ class SessionWorkspace:
         if self._current_idea is None:
             self._current_idea = CurrentIdeaState(self.private_dir, self.catalog)
         return self._current_idea
+
+    def ensure_private_dir(self):
+        """Create private/ and private/{id} (gitignored -> absent on a fresh
+        clone).  This is the single place the private-workspace dir is created
+        implicitly; every path that WRITES the workspace (initialize, restore,
+        new_root/set_idea's idea-state, build's bin/) calls it first.  The
+        catalog-directory existence check prevents a typo'd catalog dir from
+        silently creating a chain of unwanted directories."""
+        if not os.path.isdir(self.catalog_dir):
+            raise DhHlError(
+                "no catalog directory: " + self.catalog_dir
+                + " (refusing to create a private workspace under it)")
+        safety.makedirs_tracked(self.private_dir)
 
     def has_workspace(self):
         return os.path.isfile(self.workspace_path)
@@ -77,7 +90,7 @@ class SessionWorkspace:
         overwrite, never rolled back -- honoring 'never delete the workspace
         file') and set the current idea state.  *idea_state* is ('idea', id) or
         ('no_idea', timestamp)."""
-        safety.makedirs_tracked(self.private_dir)
+        self.ensure_private_dir()
         safety.queue_overwrite(self.workspace_path, source)
         self._workspace_bytes = (source.encode("utf-8")
                                  if isinstance(source, str) else source)

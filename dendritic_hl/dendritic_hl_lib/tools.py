@@ -145,6 +145,7 @@ def cmd_restore(args):
     ctx = Context.for_session(args, session_lock=True)
     node = ctx.catalog.resolve_schedule(args.schedule)
     ws = ctx.workspace
+    ws.ensure_private_dir()
     cis = ws.current_idea_state
     if node.is_root():
         cis.set_no_idea(node.timestamp)
@@ -152,7 +153,6 @@ def cmd_restore(args):
         cis.set_idea(node.parent_id)
     # Overwrite workspace file last (deferred; never rolled back).
     from . import safety
-    safety.makedirs_tracked(ws.private_dir)
     safety.queue_overwrite(ws.workspace_path, node.source)
     ctx.finish()
     print("Restored workspace from " + ctx.catalog.format_schedule_id(node))
@@ -190,6 +190,7 @@ def cmd_new_root(args):
     catalog = ctx.catalog
     ws = ctx.workspace
     ws.require_workspace()
+    ws.ensure_private_dir()
     h = ws.workspace_hash
     same_hash = [n for n in catalog.schedules.values() if n.hash == h]
     majors = [n for n in same_hash if n.is_major()]
@@ -222,6 +223,7 @@ def cmd_new_root(args):
 def cmd_set_idea(args):
     ctx = Context.for_session(args, session_lock=True)
     idea = ctx.catalog.resolve_idea(args.idea)
+    ctx.workspace.ensure_private_dir()
     ctx.workspace.current_idea_state.set_idea(idea.full_id)
     ctx.finish()
     print("Current idea set to " + ctx.catalog.format_idea_id(idea))

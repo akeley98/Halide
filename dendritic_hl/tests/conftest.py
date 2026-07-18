@@ -3,14 +3,19 @@
 These tests are NOT shipped with the package, so they may use pytest/hypothesis
 even though the package itself is stdlib-only.
 
-Testing tiers (see impl.md):
-* Pure-model white-box tests construct Catalog directly at lock level NONE
-  (Catalog is lock-free; flush()'s assert is exempt at level NONE).
-* In-process tool tests drive cmd_* through `run_tool`, which resets and re-arms
-  the (fake) lock state per call to simulate the once-per-process, released-at-
-  exit lock model.  Real locking is faked (no flock, no lock files); real
-  cross-process mutual exclusion is covered by the subprocess tests.
-* Subprocess tests run ./dh_hl for real end-to-end (real locks, real argparse).
+Because a Catalog can only be constructed while its catalog lock is held (the
+load-bearing invariant), tests satisfy that lock invariant one of three ways --
+see impl.md "Tests" for the full explanation:
+
+* Pure-model white-box tests build a catalog via `open_catalog`, which uses
+  `locks._fake_hold_for_tests` to set the lock state with no syscall/files.
+* In-process tool tests drive cmd_* through `run_tool`, which resets + re-arms
+  the fake lock state per call (real acquire path, `flock` faked via `fake_locks`)
+  to model the once-per-process, released-at-exit lock lifecycle.
+* Subprocess tests run ./dh_hl for real end-to-end (real locks, real argparse),
+  bootstrapping the catalog+session in-process first.
+
+The `_reset_lock_state` autouse fixture returns to lock level NONE between tests.
 """
 
 import os

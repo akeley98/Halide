@@ -224,6 +224,7 @@ def _prepare_build(args):
     ctx = Context.for_session(args, session_lock=True)
     ws = ctx.workspace
     ws.require_workspace()
+    ws.ensure_private_dir()
     bin_dir = ws.bin_dir
     os.makedirs(bin_dir, exist_ok=True)  # gitignored infra; created lazily
     return ctx, ws, bin_dir

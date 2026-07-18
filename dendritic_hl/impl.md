@@ -679,13 +679,9 @@ self.catalog_dir`, and `flush()` re-asserts it; there is **no** exemption (the
 earlier "assert only in a locked run" compromise was rejected in favor of this
 hard guarantee).  The catalog lock is never released mid-process (only the
 machine lock is, during the exclusive upgrade), so the guarantee holds for the
-object's whole lifetime.  Because the assert would otherwise force lock ceremony
-into every pure-model unit test, tests satisfy it one of two ways: the real
-acquire path with `fcntl.flock`/`_open_lock_file` monkeypatched (exercises the
-real ordering logic — used by the `run_tool` cmd tests), or
-`locks._fake_hold_for_tests(dir)`, which sets the lock state with no syscall
-(used by pure-model tests via `conftest.open_catalog`).  The invariant itself is
-never skipped.
+object's whole lifetime.  Tests must hold the lock too — the invariant is never
+skipped, only satisfied more cheaply; see "Tests" → *Locking in tests* for the
+fixtures (`open_catalog`, `run_tool`, `fake_locks`) that make that ergonomic.
 
 Because a `Catalog` implies the lock, `Catalog.__init__` does **not** acquire it;
 the caller must (that is what `Context._open_catalog` and build do).  The
@@ -1069,5 +1065,50 @@ argv it builds. Consequences to keep in mind:
 So the two tiers are complementary: fake-build pins the orchestration fast and
 always; the Halide test verifies the real toolchain integration when present.
 
-CLAUDE: document plan for listening in on locking behavior,
-or defer as future work if it's too difficult.
+**Locking in tests.**
+
+*What the next person needs to know (the short version):* a `Catalog` may only be
+constructed while its catalog lock is held (see "Tool Safety: Lock Hierarchy" →
+Catalog lock invariant), so a test that constructs one at lock level NONE hits an
+`AssertionError`. Do **not** disable the assert. Instead:
+
+* Driving a **tool** (`cmd_*`, `build`/`profile`) in-process? Call it through the
+  `run_tool` fixture: `run_tool(tools.cmd_new_idea, sess.ns(...))`. It models one
+  process invocation (reset lock state → take the shared machine lock → run), so
+  the tool's own `Context.for_*` acquires the catalog/session locks normally.
+* Building a **catalog directly** (pure-model tests)? Use `conftest.open_catalog(dir)`
+  instead of `Catalog(dir)`. It marks the lock held for that dir first.
+* A **catalog+session** to work in? Use the `session` fixture (a `Sess` handle
+  with `.ns(**kw)`, `.write_workspace(text)`, `.catalog_dir`, `.session_id`); it
+  builds a consistent seeded catalog. Subprocess tests reuse it to bootstrap,
+  then drive `./dh_hl` with `-C`/`-s`.
+
+If you see a baffling "Catalog constructed without holding its catalog lock"
+failure, it means one of the above was skipped.
+
+*The infrastructure (how it works):*
+
+* `reset_safety` (from the original harness) — clears `safety`'s process-global
+  rollback/overwrite registry between tests.
+* `_reset_lock_state` (autouse) — returns `locks._state` to level NONE (and
+  clears the trace sink) before and after every test, so a stale held-lock from
+  one test cannot let the next construct a `Catalog` it shouldn't.
+* `open_catalog(dir)` — calls `locks._fake_hold_for_tests(dir)` (sets `_state` as
+  if machine+catalog(dir) locks were held, with **no** `flock`/filesystem) then
+  returns `Catalog(dir)`. For code paths that never go through the real acquire
+  path but still must honor the invariant.
+* `fake_locks` — monkeypatches `fcntl.flock` → no-op and `locks._open_lock_file`
+  → a dummy fd, leaving the real `acquire_*` bodies to run (so the monotone-level
+  **ordering asserts** and `_state`/`locked_catalog_dir()` bookkeeping are
+  genuinely exercised, minus the syscalls). `run_tool` depends on it.
+
+*Listening in on lock behavior.* `locks._trace(event)` appends to `locks._trace_sink`
+when a test sets it to a list (a no-op otherwise). Under `fake_locks`, each
+`acquire_*` records `("machine","shared")`, `("session","exclusive")`,
+`("machine","exclusive")`, `("catalog","exclusive")` in order, so a test can
+assert the exact per-command lock sequence — e.g. that `profile` upgrades the
+machine lock to exclusive before taking the catalog lock and `build` does not,
+or that a read-only tool skips the session lock. This is white-box coverage the
+subprocess tier cannot observe; real cross-process mutual exclusion is instead
+covered by the subprocess timing test (`test_locks.py`). (`run_tool` resets the
+sink per call, so `locks._trace_sink` reflects the most recent command.)

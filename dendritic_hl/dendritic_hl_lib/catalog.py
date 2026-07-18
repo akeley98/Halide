@@ -654,9 +654,10 @@ class CurrentIdeaState:
 
     def flush_new(self):
         if self._dirty:
-            # The private workspace dir is created lazily; ensure it exists
-            # before writing (mirrors Commentary/Benchmark's makedirs).
-            safety.makedirs_tracked(self.private_dir)
+            # The private dir is guaranteed to exist by the time we flush: every
+            # current-idea-state mutation goes through a tool that first calls
+            # SessionWorkspace.ensure_private_dir() (and session-lock tools also
+            # created it in locks.acquire_session).
             safety.write_allowed(self.path, self.encode() + "\n")
 
     def flush_overwrite(self):
