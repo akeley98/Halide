@@ -45,6 +45,7 @@ _state = {
     "machine_fd": None,
     "session_fd": None,
     "catalog_fd": None,
+    "catalog_dir": None,      # abspath of the catalog whose lock we hold
     "machine_exclusive": False,
 }
 
@@ -52,7 +53,18 @@ _state = {
 def _reset_for_tests():
     """Restore process-global lock state (test-only; see conftest)."""
     _state.update(level=_L_NONE, machine_fd=None, session_fd=None,
-                  catalog_fd=None, machine_exclusive=False)
+                  catalog_fd=None, catalog_dir=None, machine_exclusive=False)
+
+
+def _fake_hold_for_tests(catalog_dir):
+    """Test-only: set the lock state as if the machine + catalog(catalog_dir)
+    locks are held, with NO real flock or filesystem access.  For test code that
+    constructs a Catalog directly (outside the real acquire path) while still
+    honoring the "a Catalog means its lock is held" invariant.  Monkeypatching
+    aside, production code never calls this."""
+    _state.update(level=_L_CATALOG, machine_fd=-1, session_fd=None,
+                  catalog_fd=-1, catalog_dir=os.path.abspath(catalog_dir),
+                  machine_exclusive=False)
 
 
 # -- observability hook -----------------------------------------------------
@@ -153,14 +165,21 @@ def acquire_catalog(catalog_dir):
     fd = _open_lock_file(lock_path)
     fcntl.flock(fd, fcntl.LOCK_EX)
     _state["catalog_fd"] = fd
+    _state["catalog_dir"] = os.path.abspath(catalog_dir)
     _state["level"] = _L_CATALOG
     _trace(("catalog", "exclusive"))
 
 
 def catalog_lock_held():
-    """Whether this process holds the catalog lock (used to assert the minting
-    invariant in catalog.py once Phase 2 wires the lock in)."""
+    """Whether this process holds a catalog lock."""
     return _state["catalog_fd"] is not None
+
+
+def locked_catalog_dir():
+    """The abspath of the catalog whose lock we hold, or None.  Lets a Catalog
+    assert the lock is held *for it specifically*, not merely that some catalog
+    lock is held."""
+    return _state["catalog_dir"]
 
 
 # -- session handle store ---------------------------------------------------

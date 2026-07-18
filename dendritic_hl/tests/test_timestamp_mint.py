@@ -14,11 +14,11 @@ mechanism (skip an already-taken name), not the microsecond timing.
 
 import os
 
-from dendritic_hl_lib.catalog import Catalog
+from conftest import open_catalog
 
 
 def _catalog(tmp_path):
-    cat = Catalog(str(tmp_path / "proj.dh_hl"))
+    cat = open_catalog(tmp_path / "proj.dh_hl")
     cat.ensure_created()
     return cat
 

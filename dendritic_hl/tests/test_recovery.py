@@ -8,7 +8,7 @@ import pytest
 from dendritic_hl_lib import ids, safety, tools
 from dendritic_hl_lib.catalog import Catalog
 from dendritic_hl_lib.errors import DhHlError
-from conftest import ns
+from conftest import ns, open_catalog
 
 
 def _write(tmp_path, name, text):
@@ -54,7 +54,7 @@ def test_force_parent_idea(session, run_tool, tmp_path, capsys):
 def test_force_parent_idea_rejects_non_root(tmp_path, run_tool):
     """force_parent_idea requires a root; a child schedule must be refused."""
     cat_dir = str(tmp_path / "proj.dh_hl")
-    cat = Catalog(cat_dir)
+    cat = open_catalog(cat_dir)
     cat.ensure_created()
     R = cat.create_schedule("root", parent_idea=None)
     I = cat.create_idea(R, "vec", "v\n")
@@ -76,7 +76,7 @@ def _build_conflict(tmp_path):
     """root R -> idea I with two child schedules C1(older), C2(newer), and a
     merge-conflicted canonical.txt listing both.  Returns (cat_dir, ids...)."""
     cat_dir = str(tmp_path / "proj.dh_hl")
-    cat = Catalog(cat_dir)
+    cat = open_catalog(cat_dir)
     cat.ensure_created()
     R = cat.create_schedule("root source", parent_idea=None)
     I = cat.create_idea(R, "vec", "Vectorize.\n")
@@ -113,7 +113,7 @@ def test_fix_canonical(tmp_path, run_tool, capsys):
 def test_fix_canonical_requires_two_ids(tmp_path, run_tool):
     """If canonical.txt doesn't hold exactly two competing IDs, refuse."""
     cat_dir = str(tmp_path / "proj.dh_hl")
-    cat = Catalog(cat_dir)
+    cat = open_catalog(cat_dir)
     cat.ensure_created()
     R = cat.create_schedule("root", parent_idea=None)
     I = cat.create_idea(R, "vec", "v\n")

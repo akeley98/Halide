@@ -9,7 +9,7 @@ import pytest
 from dendritic_hl_lib import safety, tools
 from dendritic_hl_lib.catalog import Catalog
 from dendritic_hl_lib.errors import DhHlError
-from conftest import ns
+from conftest import ns, open_catalog
 
 
 def _build(tmp_path):
@@ -17,7 +17,7 @@ def _build(tmp_path):
     children; and a lone root R2 whose source equals C2's (an equal-hash pair).
     Returns cat_dir plus short/full IDs of interest."""
     cat_dir = str(tmp_path / "proj.dh_hl")
-    cat = Catalog(cat_dir)
+    cat = open_catalog(cat_dir)
     cat.ensure_created()
     R = cat.create_schedule("root src", parent_idea=None)
     I = cat.create_idea(R, "vec", "Vectorize.\n")
@@ -39,7 +39,7 @@ def _resolved_headers(cat_dir, out):
     *short* IDs, so resolve them back through a catalog)."""
     shorts = [ln.split("Schedule: ", 1)[1]
               for ln in out.splitlines() if ln.startswith("Schedule: ")]
-    cat = Catalog(cat_dir)
+    cat = open_catalog(cat_dir)
     return [cat.resolve_schedule(s).full_id for s in shorts]
 
 

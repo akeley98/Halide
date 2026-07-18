@@ -9,16 +9,16 @@ logic is unchanged from when it was catalog-level.
 import pytest
 
 from dendritic_hl_lib import ids
-from dendritic_hl_lib.catalog import Catalog, CurrentIdeaState
+from dendritic_hl_lib.catalog import CurrentIdeaState
 
 
 def make_cis(tmp_path, state_text=None):
-    cat = Catalog(str(tmp_path / "proj.dh_hl"))
+    # These tests only parse (read) the state, so no catalog is needed.
     priv = tmp_path / "proj.dh_hl" / "private" / "sess"
     priv.mkdir(parents=True, exist_ok=True)
     if state_text is not None:
         (priv / "current_idea_state.txt").write_text(state_text)
-    return CurrentIdeaState(cat, str(priv))
+    return CurrentIdeaState(str(priv))
 
 
 def a_schedule_id():

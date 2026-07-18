@@ -27,10 +27,16 @@ class SessionWorkspace:
     current_idea_state.txt, bin/.  All paths are lock-free; mutating callers are
     responsible for holding the session lock (not enforced here, per idea.md)."""
 
-    def __init__(self, catalog, session_id):
+    def __init__(self, catalog_dir, session_id, catalog=None):
+        # catalog_dir is enough for every read + the compile paths (lock-free).
+        # A catalog is required only to *mutate* the current idea state, which
+        # happens under the catalog lock -- so build's pre-lock compile can use a
+        # catalog-free workspace, honoring the "a Catalog means the lock is held"
+        # invariant.
         self.catalog = catalog
         self.session_id = session_id
-        self.private_dir = catalog.session_private_dir(session_id)
+        self.private_dir = os.path.join(os.path.abspath(catalog_dir),
+                                        "private", session_id)
         self.workspace_path = os.path.join(self.private_dir, "generator.cpp")
         self.bin_dir = os.path.join(self.private_dir, "bin")
         self._workspace_bytes = None
@@ -39,7 +45,7 @@ class SessionWorkspace:
     @property
     def current_idea_state(self):
         if self._current_idea is None:
-            self._current_idea = CurrentIdeaState(self.catalog, self.private_dir)
+            self._current_idea = CurrentIdeaState(self.private_dir, self.catalog)
         return self._current_idea
 
     def has_workspace(self):
@@ -133,26 +139,30 @@ class Context:
     lock the catalog late).  Use the for_catalog / for_session factories for the
     normal acquire-then-work flow."""
 
-    def __init__(self, catalog_dir, session_id):
-        self.catalog = Catalog(catalog_dir)
+    def __init__(self, catalog, session_id):
+        # Takes an already-constructed (hence already-locked) Catalog; the
+        # factories below acquire the lock before constructing it.
+        self.catalog = catalog
         self.session_id = session_id
         self._session = None
         self._workspace = None
 
-    # -- lock acquisition ------------------------------------------------
-    def acquire_catalog_lock(self):
-        if not self.catalog.exists():
-            raise DhHlError("no catalog directory: " + self.catalog.catalog_dir)
-        locks.acquire_catalog(self.catalog.catalog_dir)
+    # -- lock acquisition + construction --------------------------------
+    @staticmethod
+    def _open_catalog(catalog_dir):
+        """Acquire the catalog lock, then construct the Catalog (whose __init__
+        asserts the lock is held for it)."""
+        if not os.path.isdir(catalog_dir):
+            raise DhHlError("no catalog directory: " + catalog_dir)
+        locks.acquire_catalog(catalog_dir)
+        return Catalog(catalog_dir)
 
     @classmethod
     def for_catalog(cls, args):
         """A -C tool: requires the catalog; accepts -s only to default the
         [schedule ID] argument.  Takes the catalog lock, not the session lock."""
         catalog_dir, session_id = resolve_target(args)
-        ctx = cls(catalog_dir, session_id)
-        ctx.acquire_catalog_lock()
-        return ctx
+        return cls(cls._open_catalog(catalog_dir), session_id)
 
     @classmethod
     def for_session(cls, args, *, session_lock):
@@ -161,11 +171,9 @@ class Context:
         catalog_dir, session_id = resolve_target(args)
         if session_id is None:
             raise DhHlError("this command requires a session (-s)")
-        ctx = cls(catalog_dir, session_id)
         if session_lock:
             locks.acquire_session(catalog_dir, session_id)
-        ctx.acquire_catalog_lock()
-        return ctx
+        return cls(cls._open_catalog(catalog_dir), session_id)
 
     # -- session + workspace --------------------------------------------
     @property
@@ -181,7 +189,8 @@ class Context:
         if self._workspace is None:
             if self.session_id is None:
                 raise DhHlError("no current session workspace (need -s)")
-            self._workspace = SessionWorkspace(self.catalog, self.session_id)
+            self._workspace = SessionWorkspace(
+                self.catalog.catalog_dir, self.session_id, catalog=self.catalog)
         return self._workspace
 
     # -- unambiguous schedule node --------------------------------------

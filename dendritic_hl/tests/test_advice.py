@@ -9,7 +9,7 @@ from dendritic_hl_lib import ids, safety, tools
 from dendritic_hl_lib.catalog import Catalog
 from dendritic_hl_lib.context import SessionWorkspace
 from dendritic_hl_lib.errors import DhHlError
-from conftest import Sess
+from conftest import Sess, open_catalog
 
 
 def _write(tmp_path, name, text):
@@ -22,7 +22,7 @@ def _build(tmp_path):
     """Catalog with root R -> idea I{canonical=C1, child C2}, idea I2{child C3,
     no canon}, plus a top-level session seeded with I.  Returns (Sess, ids)."""
     cat_dir = str(tmp_path / "proj.dh_hl")
-    cat = Catalog(cat_dir)
+    cat = open_catalog(cat_dir)
     cat.ensure_created()
     R = cat.create_schedule("root", parent_idea=None)
     I = cat.create_idea(R, "vec", "Vectorize.\n")
@@ -34,7 +34,7 @@ def _build(tmp_path):
         c.set_result("success")
     I.set_canonical(C1.full_id)
     sess = cat.create_session(I, None, 0)
-    ws = SessionWorkspace(cat, sess.full_id)
+    ws = SessionWorkspace(cat.catalog_dir, sess.full_id, catalog=cat)
     ws.initialize("root", ("idea", I.full_id))
     cat.flush()
     safety.commit()

@@ -573,9 +573,13 @@ class CurrentIdeaState:
     kind is one of: 'missing', 'no_idea', 'idea', 'conflict'.
     """
 
-    def __init__(self, catalog, private_dir):
-        self.catalog = catalog
+    def __init__(self, private_dir, catalog=None):
+        # catalog is needed ONLY to mutate (dirty registration + flush), which
+        # happens under the catalog lock.  Reading the state (parsing the file)
+        # needs no catalog, so the workspace can be read lock-free -- e.g. by
+        # build during its pre-catalog-lock compile phase.
         self.private_dir = private_dir
+        self.catalog = catalog
         self.kind = None
         self.timestamp = None       # for 'no_idea'
         self.idea_id = None         # for 'idea'
@@ -624,12 +628,19 @@ class CurrentIdeaState:
         else:
             self.kind = "conflict"
 
+    def _require_catalog(self):
+        if self.catalog is None:
+            raise DhHlError(
+                "cannot mutate current idea state without a locked catalog")
+
     def set_no_idea(self, timestamp):
+        self._require_catalog()
         self.kind, self.timestamp, self.idea_id = "no_idea", timestamp, None
         self._dirty = True
         self.catalog._mark_dirty(self)
 
     def set_idea(self, idea_id):
+        self._require_catalog()
         self.kind, self.idea_id, self.timestamp = "idea", idea_id, None
         self._dirty = True
         self.catalog._mark_dirty(self)
@@ -687,13 +698,19 @@ class Catalog:
         # nothing downstream can hit a relative-vs-absolute mismatch across a
         # subprocess cwd change (e.g. the profiler JSON path handed to a child
         # running in a session bin dir).  Everything derived below is absolute.
-        #
-        # Lock-free by design: constructing a Catalog does NOT acquire the
-        # catalog lock.  The Context/build layer acquires it (see context.py and
-        # impl.md "Tool Safety: Lock Hierarchy"); flush() then asserts it is
-        # held whenever we are inside a locked run.  This keeps pure-model unit
-        # tests free of lock ceremony and lets build/profile lock late.
         self.catalog_dir = os.path.abspath(catalog_dir)
+        # LOAD-BEARING INVARIANT: possessing a Catalog (or any of its
+        # sub-objects) guarantees the catalog lock is held *for this catalog* --
+        # the caller (context.py / build.py) must acquire it first.  The catalog
+        # lock is never released mid-process (only at exit), so the guarantee
+        # holds for the object's whole lifetime.  See impl.md "Tool Safety: Lock
+        # Hierarchy".  (Tests fake the lock state via locks._fake_hold_for_tests
+        # or the real acquire path with flock monkeypatched; the invariant is
+        # never simply skipped.)
+        assert locks.catalog_lock_held() \
+            and locks.locked_catalog_dir() == self.catalog_dir, \
+            "Catalog constructed without holding its catalog lock: " \
+            + self.catalog_dir
         self.sch_dir = os.path.join(self.catalog_dir, "sch")
         self.idea_dir = os.path.join(self.catalog_dir, "idea")
         self.session_dir = os.path.join(self.catalog_dir, "session")
@@ -955,10 +972,10 @@ class Catalog:
     def flush(self):
         # Correctness of the mint scheme rests on the catalog lock being held
         # continuously through flush (see impl.md "Tool Safety: Timestamp
-        # Conflicts").  Assert it whenever we are inside a locked run; pure-model
-        # unit tests run at lock level NONE and are exempt.
-        assert locks._state["level"] == locks._L_NONE or locks.catalog_lock_held(), \
-            "Catalog.flush() without the catalog lock held"
+        # Conflicts").  Same load-bearing invariant as __init__, re-checked here.
+        assert locks.catalog_lock_held() \
+            and locks.locked_catalog_dir() == self.catalog_dir, \
+            "Catalog.flush() without holding the catalog lock: " + self.catalog_dir
         objs = list(self._dirty.values())
         for o in objs:
             o.flush_new()

@@ -654,8 +654,9 @@ _L_MACHINE_EXCL < _L_CATALOG`; a tool may skip levels but never go backwards).
 * `locks.upgrade_machine_exclusive()` — `LOCK_UN` then `LOCK_EX` on the same fd
   (release-then-reacquire, per the objection analysis above).
 * `locks.acquire_catalog(catalog_dir)` — exclusive, blocking; the load-bearing
-  lock, held through rollback.
-* `locks.catalog_lock_held()` — predicate for the Phase 2 mint-invariant assert.
+  lock, held through rollback.  Records the abspath in `_state["catalog_dir"]`.
+* `locks.catalog_lock_held()` / `locks.locked_catalog_dir()` — the pair backing
+  the **Catalog lock invariant** (below).
 
 Lock fds are stored in `_state` and **never closed**, so the OS releases them at
 process exit, strictly after the `atexit` rollback (rollback thus runs with the
@@ -664,11 +665,37 @@ infrastructure created directly via `os.makedirs(exist_ok=True)` / `os.open`
 with `O_CREAT` (no `O_EXCL`), deliberately **not** tracked by `safety.py` — they
 must survive rollback and be shared across processes.
 
-Wiring status: `acquire_machine_shared` and `upgrade_machine_exclusive` are live
-(`main()` + `exec`/`exec_exclusive`). `acquire_session` / `acquire_catalog` exist
-and are unit-covered but are not yet called by the catalog/session tools — that
-wiring (Catalog construction takes the catalog lock; session resolution takes the
-session lock) is Phase 2.
+Wiring status (Phase 2 done): `main()` takes the shared machine lock;
+`Context.for_catalog` / `for_session` acquire the catalog lock (and, for
+`for_session(session_lock=True)`, the session lock) via `Context._open_catalog`,
+which acquires **then** constructs the `Catalog`.  `exec`/`exec_exclusive` use the
+machine lock (+ upgrade).
+
+**Catalog lock invariant (load-bearing).** Possessing a `Catalog` object — or any
+sub-object reachable from it (`ScheduleNode`, `IdeaNode`, `SessionNode`,
+`Commentary`, …) — *guarantees* the catalog lock is held **for that catalog**.
+`Catalog.__init__` asserts `catalog_lock_held() and locked_catalog_dir() ==
+self.catalog_dir`, and `flush()` re-asserts it; there is **no** exemption (the
+earlier "assert only in a locked run" compromise was rejected in favor of this
+hard guarantee).  The catalog lock is never released mid-process (only the
+machine lock is, during the exclusive upgrade), so the guarantee holds for the
+object's whole lifetime.  Because the assert would otherwise force lock ceremony
+into every pure-model unit test, tests satisfy it one of two ways: the real
+acquire path with `fcntl.flock`/`_open_lock_file` monkeypatched (exercises the
+real ordering logic — used by the `run_tool` cmd tests), or
+`locks._fake_hold_for_tests(dir)`, which sets the lock state with no syscall
+(used by pure-model tests via `conftest.open_catalog`).  The invariant itself is
+never skipped.
+
+Because a `Catalog` implies the lock, `Catalog.__init__` does **not** acquire it;
+the caller must (that is what `Context._open_catalog` and build do).  The
+per-session `SessionWorkspace` is deliberately **not** a catalog sub-object: it
+is constructed from a `catalog_dir` (+ optional `catalog`) and its reads
+(`generator.cpp`, `current_idea_state.txt`, `bin/`) need no lock — this is what
+lets `build`/`profile` read + compile the workspace before taking the catalog
+lock (Phase 3).  A `catalog` is required only to *mutate* the current idea state
+(`CurrentIdeaState.set_*` raises without one), which always happens under the
+lock.
 
 
 ### Tool Safety: Tree Structure Invariants
@@ -798,10 +825,12 @@ guarantee, at which point a `FileExistsError` at create time becomes a
 is no longer anchored on a workspace *file* path — it resolves `-C`/`-s` via
 `context.resolve_target` (handle → `(catalog, session)`), and its factories
 `for_catalog` / `for_session(session_lock=...)` acquire the catalog lock (and
-optionally the session lock). `Catalog.__init__` no longer takes a
-`workspace_path` and is lock-free (the flush-time assert enforces the lock in
-locked runs). `CurrentIdeaState` moved off `Catalog` into the per-session
-`SessionWorkspace` (`context.py`), which owns `generator.cpp`,
+optionally the session lock) and *then* construct the `Catalog`. `Catalog.__init__`
+no longer takes a `workspace_path` and enforces the Catalog lock invariant (see
+Lock Hierarchy): it asserts the lock is held for its catalog, and so does
+`flush()` — no exemption. `CurrentIdeaState` moved off `Catalog` into the
+per-session `SessionWorkspace` (`context.py`), which is not a catalog sub-object
+(constructed from a `catalog_dir`, catalog-free reads) and owns `generator.cpp`,
 `current_idea_state.txt`, and `bin/` under `private/{session_id}/`. `Catalog`
 gained a `sessions` dict, a `SessionNode`, and `create_session` (the model-level
 primitive the CLI session tools will wrap in Phase 4). `build`/`profile` were
@@ -943,19 +972,21 @@ rollback-ordering note above.)
 **Phase 2 — de-anchor from the workspace file; add session storage (DONE).**
 `Context(workspace_path)` / `catalog_dir_for` replaced by `resolve_target` +
 `Context.for_catalog` / `for_session`; `Catalog.__init__` lost `workspace_path`
-and is lock-free (the catalog lock is acquired by the Context/build layer, with
-a gated `flush()` assert — this is the deliberate deviation from "constructor
-acquires the lock", chosen so pure-model tests need no lock ceremony and build
-can lock late). `CurrentIdeaState` moved into the new `SessionWorkspace`
-(`context.py`); added `SessionNode` + `sessions` dict + `create_session` +
+and enforces the **Catalog lock invariant** (asserts the catalog lock is held for
+it, on both `__init__` and `flush()`, with no exemption — the caller acquires the
+lock first). `CurrentIdeaState` moved into the new `SessionWorkspace`
+(`context.py`), which is not a catalog sub-object so build can read the workspace
+before locking the catalog; added `SessionNode` + `sessions` dict + `create_session` +
 `ids` session-ID helpers; `session/{id}` is git-tracked, `private/{id}` (holding
 `generator.cpp`, `current_idea_state.txt`, `bin/`, `session.lock`) is gitignored
 (catalog `.gitignore` now ignores `private`). `main.py` switched every subcommand
-to `-C`/`-s`. Tests ported: pure-model tests stay white-box/lock-free; cmd_*
-tests run in-process via a `run_tool` fixture that resets + re-arms the fake lock
-state per call (modeling the once-per-process lock lifecycle) with a `lock_trace`
-hook available; subprocess tests bootstrap a catalog+session in-process then
-drive `./dh_hl` with `-C`/`-s`. Full suite green incl. the real-Halide tier.
+to `-C`/`-s`. Tests ported: pure-model tests build catalogs via
+`conftest.open_catalog` (which uses `locks._fake_hold_for_tests` to satisfy the
+lock invariant with no syscall); cmd_* tests run in-process via a `run_tool`
+fixture that resets + re-arms the fake lock state per call (modeling the
+once-per-process lock lifecycle) with a `lock_trace` hook available; subprocess
+tests bootstrap a catalog+session in-process then drive `./dh_hl` with `-C`/`-s`.
+Full suite green incl. the real-Halide tier.
 Touched `ids.py`, `catalog.py`, `context.py`, `main.py`, `tools.py`, `build.py`,
 `tests/`.
 

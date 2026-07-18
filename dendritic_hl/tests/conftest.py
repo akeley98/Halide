@@ -65,6 +65,30 @@ def ns(**kwargs):
     return types.SimpleNamespace(**kwargs)
 
 
+@pytest.fixture(autouse=True)
+def _reset_lock_state():
+    """Every test starts and ends at lock level NONE.  The catalog-lock
+    invariant (a Catalog means its lock is held) means stale held-state could
+    otherwise let a later test construct a Catalog it shouldn't."""
+    from dendritic_hl_lib import locks
+    locks._reset_for_tests()
+    locks._trace_sink = None
+    yield
+    locks._reset_for_tests()
+    locks._trace_sink = None
+
+
+def open_catalog(cat_dir):
+    """Construct a Catalog with the (test-faked) catalog lock held for it, so
+    the "a Catalog means its lock is held" invariant is satisfied without real
+    flock or on-disk lock files.  For pure-model tests that build a catalog
+    directly rather than through the CLI/Context acquire path."""
+    from dendritic_hl_lib import locks
+    from dendritic_hl_lib.catalog import Catalog
+    locks._fake_hold_for_tests(cat_dir)
+    return Catalog(str(cat_dir))
+
+
 # ---------------------------------------------------------------------------
 # Model-level catalog + session construction (mimics Phase 4 new_catalog).
 # ---------------------------------------------------------------------------
@@ -75,21 +99,25 @@ def make_catalog_session(cat_dir, source=DUMMY_SOURCE, idea_name="seed"):
     that is the idea's canonical, and a session seeded with that idea whose
     private workspace holds *source* with current idea = the seed idea (so the
     workspace is initially 'consistent')."""
+    from dendritic_hl_lib import locks, safety
     from dendritic_hl_lib.catalog import Catalog
     from dendritic_hl_lib.context import SessionWorkspace
-    from dendritic_hl_lib import safety
-    cat = Catalog(cat_dir)
-    cat.ensure_created()
-    root = cat.create_schedule(source, parent_idea=None)
-    idea = cat.create_idea(root, idea_name, "seed proposal\n")
-    dup = cat.create_schedule(source, parent_idea=idea)
-    idea.set_canonical(dup.full_id)
-    sess = cat.create_session(idea, None, 0)
-    ws = SessionWorkspace(cat, sess.full_id)
-    ws.initialize(source, ("idea", idea.full_id))
-    cat.flush()
-    safety.commit()
-    return cat.catalog_dir, sess.full_id
+    locks._fake_hold_for_tests(cat_dir)
+    try:
+        cat = Catalog(cat_dir)
+        cat.ensure_created()
+        root = cat.create_schedule(source, parent_idea=None)
+        idea = cat.create_idea(root, idea_name, "seed proposal\n")
+        dup = cat.create_schedule(source, parent_idea=idea)
+        idea.set_canonical(dup.full_id)
+        sess = cat.create_session(idea, None, 0)
+        ws = SessionWorkspace(cat.catalog_dir, sess.full_id, catalog=cat)
+        ws.initialize(source, ("idea", idea.full_id))
+        cat.flush()
+        safety.commit()
+        return cat.catalog_dir, sess.full_id
+    finally:
+        locks._reset_for_tests()
 
 
 class Sess:
