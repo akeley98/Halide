@@ -1,40 +1,55 @@
-"""Per-tool execution context: workspace file + its catalog."""
+"""Per-tool execution context: -C/-s resolution, catalog lock, session workspace.
+
+Replaces the old workspace-file-anchored Context.  A tool now identifies its
+target with -C (catalog directory) and/or -s (session handle or full ID); the
+workspace C++ file, current idea state, and bin/ live inside the session's
+gitignored private workspace (private/{session_id}/), not as an external file.
+
+Lock policy (see impl.md "Tool Safety: Lock Hierarchy"): the machine lock is
+already held (main()).  Context.for_session optionally takes the session lock,
+then Context acquires the catalog lock.  build/profile use the raw constructor
+so they can compile before locking the catalog (and, for profile, upgrade the
+machine lock to exclusive first).
+"""
 
 import os
 import sys
 
 from . import ids
+from . import locks
 from . import safety
-from .catalog import Catalog
+from .catalog import Catalog, CurrentIdeaState
 from .errors import DhHlError
 
 
-def catalog_dir_for(workspace_path):
-    return workspace_path + ".dh_hl"
+class SessionWorkspace:
+    """The gitignored private workspace of one session: generator.cpp,
+    current_idea_state.txt, bin/.  All paths are lock-free; mutating callers are
+    responsible for holding the session lock (not enforced here, per idea.md)."""
 
-
-def read_text_or_stdin(path):
-    """Read a text input argument.  Universally, "-" means read from stdin;
-    otherwise *path* is a filename.  (Workspace filenames are exempt -- they
-    are real read/write paths, not content streams.)"""
-    if path == "-":
-        return sys.stdin.read()
-    with open(path, "r", encoding="utf-8") as f:
-        return f.read()
-
-
-class Context:
-    def __init__(self, workspace_path):
-        self.catalog = Catalog(catalog_dir_for(workspace_path), workspace_path)
-        # Reuse the catalog's absolutized path so the two never diverge.
-        self.workspace_path = self.catalog.workspace_path
+    def __init__(self, catalog, session_id):
+        self.catalog = catalog
+        self.session_id = session_id
+        self.private_dir = catalog.session_private_dir(session_id)
+        self.workspace_path = os.path.join(self.private_dir, "generator.cpp")
+        self.bin_dir = os.path.join(self.private_dir, "bin")
         self._workspace_bytes = None
+        self._current_idea = None
 
-    # -- workspace file --------------------------------------------------
+    @property
+    def current_idea_state(self):
+        if self._current_idea is None:
+            self._current_idea = CurrentIdeaState(self.catalog, self.private_dir)
+        return self._current_idea
+
+    def has_workspace(self):
+        return os.path.isfile(self.workspace_path)
+
     def require_workspace(self):
-        if not os.path.isfile(self.workspace_path):
-            raise DhHlError("workspace file does not exist: "
-                            + self.workspace_path)
+        if not self.has_workspace():
+            raise DhHlError(
+                "no workspace C++ file for the current session at "
+                + self.workspace_path)
 
     @property
     def workspace_bytes(self):
@@ -51,29 +66,135 @@ class Context:
     def workspace_hash(self):
         return ids.sha256_hex(self.workspace_bytes)
 
-    # -- catalog directory policy ---------------------------------------
-    def require_catalog_ro(self):
-        """Read-only tools: error if the catalog directory is absent."""
-        if not self.catalog.exists():
-            raise DhHlError(
-                "no catalog directory for {}; run `dh_hl new_root {}` first"
-                .format(self.workspace_path, self.workspace_path))
+    def initialize(self, source, idea_state):
+        """Initialize a fresh private workspace: write generator.cpp (deferred
+        overwrite, never rolled back -- honoring 'never delete the workspace
+        file') and set the current idea state.  *idea_state* is ('idea', id) or
+        ('no_idea', timestamp)."""
+        safety.makedirs_tracked(self.private_dir)
+        safety.queue_overwrite(self.workspace_path, source)
+        self._workspace_bytes = (source.encode("utf-8")
+                                 if isinstance(source, str) else source)
+        kind, val = idea_state
+        if kind == "idea":
+            self.current_idea_state.set_idea(val)
+        else:
+            self.current_idea_state.set_no_idea(val)
 
-    def ensure_catalog_rw(self):
-        """Mutating tools: implicitly create the catalog directory."""
-        self.catalog.ensure_created()
+
+def read_text_or_stdin(path):
+    """Read a text input argument.  Universally, "-" means read from stdin;
+    otherwise *path* is a filename."""
+    if path == "-":
+        return sys.stdin.read()
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def _validate_catalog_dir(path):
+    if not path.endswith(".dh_hl"):
+        raise DhHlError("catalog directory must end with .dh_hl: " + path)
+    return os.path.abspath(path)
+
+
+def resolve_target(args):
+    """Resolve -C/-s into (catalog_dir_abspath, session_id | None).  Lock-free.
+
+    -s may be a session handle (``tmp....``) or a session full ID.  A handle
+    substitutes for a mandatory -C; if both are given they must agree."""
+    C = getattr(args, "catalog", None)
+    s = getattr(args, "session", None)
+    if s is not None and s.startswith("tmp."):
+        cat_from_handle, session_id = locks.resolve_handle(s)
+        if C is not None:
+            C_abs = _validate_catalog_dir(C)
+            if C_abs != os.path.abspath(cat_from_handle):
+                raise DhHlError(
+                    "-C {} does not match the catalog of session handle {} ({})"
+                    .format(C_abs, s, cat_from_handle))
+            return C_abs, session_id
+        return os.path.abspath(cat_from_handle), session_id
+    if s is not None:
+        if not ids.is_session_id(s):
+            raise DhHlError("not a session handle or valid session ID: " + s)
+        if C is None:
+            raise DhHlError(
+                "-C is required when -s is a session full ID (not a handle)")
+        return _validate_catalog_dir(C), s
+    if C is None:
+        raise DhHlError("a catalog (-C) or session (-s) is required")
+    return _validate_catalog_dir(C), None
+
+
+class Context:
+    """Binds a Catalog to an optional current session + its private workspace.
+
+    The raw constructor does NOT acquire any lock (build/profile rely on this to
+    lock the catalog late).  Use the for_catalog / for_session factories for the
+    normal acquire-then-work flow."""
+
+    def __init__(self, catalog_dir, session_id):
+        self.catalog = Catalog(catalog_dir)
+        self.session_id = session_id
+        self._session = None
+        self._workspace = None
+
+    # -- lock acquisition ------------------------------------------------
+    def acquire_catalog_lock(self):
+        if not self.catalog.exists():
+            raise DhHlError("no catalog directory: " + self.catalog.catalog_dir)
+        locks.acquire_catalog(self.catalog.catalog_dir)
+
+    @classmethod
+    def for_catalog(cls, args):
+        """A -C tool: requires the catalog; accepts -s only to default the
+        [schedule ID] argument.  Takes the catalog lock, not the session lock."""
+        catalog_dir, session_id = resolve_target(args)
+        ctx = cls(catalog_dir, session_id)
+        ctx.acquire_catalog_lock()
+        return ctx
+
+    @classmethod
+    def for_session(cls, args, *, session_lock):
+        """A -s tool: requires a session.  Optionally takes the (exclusive,
+        non-blocking) session lock, then the catalog lock."""
+        catalog_dir, session_id = resolve_target(args)
+        if session_id is None:
+            raise DhHlError("this command requires a session (-s)")
+        ctx = cls(catalog_dir, session_id)
+        if session_lock:
+            locks.acquire_session(catalog_dir, session_id)
+        ctx.acquire_catalog_lock()
+        return ctx
+
+    # -- session + workspace --------------------------------------------
+    @property
+    def session(self):
+        if self._session is None:
+            if self.session_id is None:
+                raise DhHlError("no current session (need -s)")
+            self._session = self.catalog.get_session(self.session_id)
+        return self._session
+
+    @property
+    def workspace(self):
+        if self._workspace is None:
+            if self.session_id is None:
+                raise DhHlError("no current session workspace (need -s)")
+            self._workspace = SessionWorkspace(self.catalog, self.session_id)
+        return self._workspace
 
     # -- unambiguous schedule node --------------------------------------
     def unambiguous_schedule(self):
-        """The schedule node `status` would report as unambiguous, or None.
-
-        See idea.md Status Tool: depends on the workspace hash and the current
-        idea state."""
-        h = self.workspace_hash
+        """The schedule node `status` would report as unambiguous, or None."""
+        ws = self.workspace
+        if not ws.has_workspace():
+            return None
+        h = ws.workspace_hash
         matching = [n for n in self.catalog.schedules.values() if n.hash == h]
         if not matching:
             return None
-        cis = self.catalog.current_idea_state
+        cis = ws.current_idea_state
         if cis.kind == "no_idea":
             for n in matching:
                 if n.is_root() and n.timestamp == cis.timestamp:
@@ -94,10 +215,21 @@ class Context:
 
     def resolve_schedule_arg(self, arg):
         """Resolve an optional [schedule ID]: explicit if given, else the
-        unambiguous schedule node."""
+        unambiguous schedule node (which requires a current session)."""
         if arg is not None:
             return self.catalog.resolve_schedule(arg)
         return self.require_unambiguous_schedule()
+
+    # -- current idea node ----------------------------------------------
+    def current_idea_node(self):
+        """The IdeaNode referenced by 'some current idea', or None for 'no
+        idea'.  Raises on parse errors/conflict."""
+        cis = self.workspace.current_idea_state
+        if cis.kind == "no_idea":
+            return None
+        if cis.kind == "idea":
+            return self.catalog.get_idea(cis.idea_id)
+        raise DhHlError(cis.problem_message())
 
     # -- finish (mutating tools) ----------------------------------------
     def finish(self):

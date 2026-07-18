@@ -31,8 +31,7 @@ def _print_idea_listing(ctx, idea, marker=""):
     print("  " + _first_line_72(idea.proposal_text))
 
 
-def _current_idea_description(catalog):
-    cis = catalog.current_idea_state
+def _current_idea_description(cis):
     if cis.kind == "missing":
         return "missing"
     if cis.kind == "no_idea":
@@ -46,10 +45,9 @@ def _current_idea_description(catalog):
     return "PARSE ERROR: no valid state could be parsed"
 
 
-def _print_current_idea_details(catalog):
+def _print_current_idea_details(catalog, cis):
     """If the current idea state names an idea, report on it: whether the idea
     node actually exists, and (if so) the status of its canonical schedule."""
-    cis = catalog.current_idea_state
     if cis.kind != "idea":
         return
     idea = catalog.ideas.get(cis.idea_id)
@@ -75,23 +73,54 @@ this means the file was edited without correct harness tracking.
 DO NOT PROCEED, unless you have been advised otherwise.
 Likely causes include user action, and git checkouts / merges."""
 
+_SUBAGENT_NO_WORKSPACE = """\
+AGENTS: the current session is a sub-agent session,
+but was not initialized with a schedule for you to edit.
+DO NOT PROCEED and report back to the main agent,
+unless you have been advised to do otherwise."""
+
+
+def _print_no_workspace_advice(session):
+    if session.depth != 0:
+        print(_SUBAGENT_NO_WORKSPACE)
+    elif session.is_self_closed():
+        print("The current session is closed. Start a new one with")
+        print("  dh_hl new_successor_session")
+    else:
+        print("To start editing a C++ schedule, consider one of")
+        print("  dh_hl seed_schedule_short_id")
+        print("to get the ID of a schedule to start editing, followed by")
+        print("  dh_hl restore {schedule ID}")
+        print("to initialize the workspace")
+
 
 # ---------------------------------------------------------------------------
 # status
 # ---------------------------------------------------------------------------
 
 def cmd_status(args):
-    ctx = Context(args.workspace)
-    ctx.require_workspace()
-    if not ctx.catalog.exists():
-        print("No catalog directory yet.")
-        print("Advice: run `dh_hl new_root {}`".format(args.workspace))
-        return
+    # Read-only: does NOT acquire the session lock (idea.md).
+    ctx = Context.for_session(args, session_lock=False)
     catalog = ctx.catalog
-    print("Current idea state: " + _current_idea_description(catalog))
-    _print_current_idea_details(catalog)
+    session = ctx.session
+    ws = ctx.workspace
 
-    h = ctx.workspace_hash
+    print("Session: " + session.full_id)
+    print("Parent session: " + (session.parent_id or "(none)"))
+    print("Delisted: " + ("yes" if session.delisted else "no"))
+    print("Seed idea: " + session.seed_idea_id)
+    print("Output schedule: " + (session.output_schedule_id or "(none)"))
+
+    cis = ws.current_idea_state
+    print("Current idea state: " + _current_idea_description(cis))
+    _print_current_idea_details(catalog, cis)
+
+    if not ws.has_workspace():
+        print("Status: no workspace C++ file")
+        _print_no_workspace_advice(session)
+        return
+
+    h = ws.workspace_hash
     matching = [n for n in catalog.schedules.values() if n.hash == h]
     if not matching:
         print("Status: workspace inconsistent, unknown schedule")
@@ -113,18 +142,18 @@ def cmd_status(args):
 # ---------------------------------------------------------------------------
 
 def cmd_restore(args):
-    ctx = Context(args.workspace)
-    # restore is the one tool that may run without an existing workspace file.
-    ctx.require_catalog_ro()
+    ctx = Context.for_session(args, session_lock=True)
     node = ctx.catalog.resolve_schedule(args.schedule)
-    cis = ctx.catalog.current_idea_state
+    ws = ctx.workspace
+    cis = ws.current_idea_state
     if node.is_root():
         cis.set_no_idea(node.timestamp)
     else:
         cis.set_idea(node.parent_id)
-    # Overwrite workspace file last (deferred via write_allowed-style overwrite).
+    # Overwrite workspace file last (deferred; never rolled back).
     from . import safety
-    safety.queue_overwrite(ctx.workspace_path, node.source)
+    safety.makedirs_tracked(ws.private_dir)
+    safety.queue_overwrite(ws.workspace_path, node.source)
     ctx.finish()
     print("Restored workspace from " + ctx.catalog.format_schedule_id(node))
 
@@ -134,9 +163,7 @@ def cmd_restore(args):
 # ---------------------------------------------------------------------------
 
 def cmd_comment(args):
-    ctx = Context(args.workspace)
-    ctx.require_workspace()
-    ctx.ensure_catalog_rw()
+    ctx = Context.for_catalog(args)
     node = ctx.resolve_schedule_arg(args.schedule)
     text = _read_file_or_stdin(args.commentary)
     node.add_commentary(text, importance=None)
@@ -145,9 +172,7 @@ def cmd_comment(args):
 
 
 def cmd_comment_importance(args):
-    ctx = Context(args.workspace)
-    ctx.require_workspace()
-    ctx.ensure_catalog_rw()
+    ctx = Context.for_catalog(args)
     node = ctx.resolve_schedule_arg(args.schedule)
     text = _read_file_or_stdin(args.commentary)
     node.add_commentary(text, importance=args.importance)
@@ -161,11 +186,11 @@ def cmd_comment_importance(args):
 # ---------------------------------------------------------------------------
 
 def cmd_new_root(args):
-    ctx = Context(args.workspace)
-    ctx.require_workspace()
-    ctx.ensure_catalog_rw()
+    ctx = Context.for_session(args, session_lock=True)
     catalog = ctx.catalog
-    h = ctx.workspace_hash
+    ws = ctx.workspace
+    ws.require_workspace()
+    h = ws.workspace_hash
     same_hash = [n for n in catalog.schedules.values() if n.hash == h]
     majors = [n for n in same_hash if n.is_major()]
     if majors:
@@ -174,10 +199,10 @@ def cmd_new_root(args):
             "root:\n  " + "\n  ".join(catalog.format_schedule_id(n)
                                       for n in majors))
     # Capture competing current-idea-state lines before overwriting.
-    cis = catalog.current_idea_state
+    cis = ws.current_idea_state
     conflict_lines = list(cis.parsed_lines) if cis.kind == "conflict" else []
 
-    node = catalog.create_schedule(ctx.workspace_source, parent_idea=None)
+    node = catalog.create_schedule(ws.workspace_source, parent_idea=None)
     cis.set_no_idea(node.timestamp)
 
     if conflict_lines:
@@ -195,11 +220,9 @@ def cmd_new_root(args):
 # ---------------------------------------------------------------------------
 
 def cmd_set_idea(args):
-    ctx = Context(args.workspace)
-    ctx.require_workspace()
-    ctx.ensure_catalog_rw()
+    ctx = Context.for_session(args, session_lock=True)
     idea = ctx.catalog.resolve_idea(args.idea)
-    ctx.catalog.current_idea_state.set_idea(idea.full_id)
+    ctx.workspace.current_idea_state.set_idea(idea.full_id)
     ctx.finish()
     print("Current idea set to " + ctx.catalog.format_idea_id(idea))
 
@@ -209,9 +232,7 @@ def cmd_set_idea(args):
 # ---------------------------------------------------------------------------
 
 def cmd_new_idea(args):
-    ctx = Context(args.workspace)
-    ctx.require_workspace()
-    ctx.ensure_catalog_rw()
+    ctx = Context.for_session(args, session_lock=True)
     node = ctx.resolve_schedule_arg(args.schedule)
     if not node.is_major():
         raise DhHlError(_minor_schedule_advice(ctx.catalog, node))
@@ -247,11 +268,9 @@ def _minor_schedule_advice(catalog, node):
 # ---------------------------------------------------------------------------
 
 def cmd_canon(args):
-    ctx = Context(args.workspace)
-    ctx.require_workspace()
-    ctx.ensure_catalog_rw()
+    ctx = Context.for_session(args, session_lock=True)
     catalog = ctx.catalog
-    idea = catalog.current_idea_node()
+    idea = ctx.current_idea_node()
     if idea is None:
         raise DhHlError("no current idea node; nothing to make canonical for")
     node = ctx.require_unambiguous_schedule()
@@ -284,9 +303,7 @@ def cmd_canon(args):
 # ---------------------------------------------------------------------------
 
 def cmd_force_parent_idea(args):
-    ctx = Context(args.workspace)
-    ctx.require_workspace()
-    ctx.ensure_catalog_rw()
+    ctx = Context.for_catalog(args)
     catalog = ctx.catalog
     idea = catalog.resolve_idea(args.idea)
     node = ctx.resolve_schedule_arg(args.schedule)
@@ -313,9 +330,7 @@ def cmd_force_parent_idea(args):
 # ---------------------------------------------------------------------------
 
 def cmd_list_ideas(args):
-    ctx = Context(args.workspace)
-    ctx.require_workspace()
-    ctx.require_catalog_ro()
+    ctx = Context.for_catalog(args)
     node = ctx.resolve_schedule_arg(args.schedule)
     if not node.is_major():
         raise DhHlError("schedule node is not a major schedule")
@@ -331,9 +346,7 @@ def cmd_list_ideas(args):
 # ---------------------------------------------------------------------------
 
 def cmd_view_idea(args):
-    ctx = Context(args.workspace)
-    ctx.require_workspace()
-    ctx.require_catalog_ro()
+    ctx = Context.for_catalog(args)
     idea = ctx.catalog.resolve_idea(args.idea)
     print("=" * 72)
     print("Idea: " + idea.proposal_name)
@@ -377,9 +390,7 @@ def _print_schedule_node(ctx, node, marked_idea_id=None):
 
 
 def cmd_history(args):
-    ctx = Context(args.workspace)
-    ctx.require_workspace()
-    ctx.require_catalog_ro()
+    ctx = Context.for_catalog(args)
     node = ctx.resolve_schedule_arg(args.schedule)
     prev_idea_id = None  # the idea whose parent is the previously printed sched
     while node is not None:
@@ -413,9 +424,7 @@ def _print_schedule_list(ctx, nodes):
 
 
 def cmd_list_sibling_schedules(args):
-    ctx = Context(args.workspace)
-    ctx.require_workspace()
-    ctx.require_catalog_ro()
+    ctx = Context.for_catalog(args)
     node = ctx.resolve_schedule_arg(args.schedule)
     if node.is_root():
         raise DhHlError(
@@ -425,17 +434,13 @@ def cmd_list_sibling_schedules(args):
 
 
 def cmd_list_child_schedules(args):
-    ctx = Context(args.workspace)
-    ctx.require_workspace()
-    ctx.require_catalog_ro()
+    ctx = Context.for_catalog(args)
     idea = ctx.catalog.resolve_idea(args.idea)
     _print_schedule_list(ctx, ctx.catalog.child_schedules(idea))
 
 
 def cmd_list_equal_schedules(args):
-    ctx = Context(args.workspace)
-    ctx.require_workspace()
-    ctx.require_catalog_ro()
+    ctx = Context.for_catalog(args)
     node = ctx.resolve_schedule_arg(args.schedule)
     equal = [n for n in ctx.catalog.schedules.values() if n.hash == node.hash]
     _print_schedule_list(ctx, equal)
@@ -446,9 +451,7 @@ def cmd_list_equal_schedules(args):
 # ---------------------------------------------------------------------------
 
 def cmd_json_schedule_info(args):
-    ctx = Context(args.workspace)
-    ctx.require_workspace()
-    ctx.require_catalog_ro()
+    ctx = Context.for_catalog(args)
     catalog = ctx.catalog
     node = ctx.resolve_schedule_arg(args.schedule)
     children = [i.full_id for i in catalog.child_ideas(node)]
@@ -471,9 +474,7 @@ def cmd_json_schedule_info(args):
 
 
 def cmd_json_idea_info(args):
-    ctx = Context(args.workspace)
-    ctx.require_workspace()
-    ctx.require_catalog_ro()
+    ctx = Context.for_catalog(args)
     catalog = ctx.catalog
     idea = catalog.resolve_idea(args.idea)
     children = [s.full_id for s in catalog.child_schedules(idea)]
@@ -495,9 +496,7 @@ def cmd_json_idea_info(args):
 # ---------------------------------------------------------------------------
 
 def cmd_fix_canonical(args):
-    ctx = Context(args.workspace)
-    ctx.require_workspace()
-    ctx.ensure_catalog_rw()
+    ctx = Context.for_catalog(args)
     catalog = ctx.catalog
     idea = catalog.resolve_idea(args.idea)
     lines = idea.canonical_lines()

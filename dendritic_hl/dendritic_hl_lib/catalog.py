@@ -16,10 +16,13 @@ TODO update for session changes.
   files ever touch an existing file.
 """
 
+import getpass
 import json
 import os
+import socket
 
 from . import ids
+from . import locks
 from . import safety
 from .errors import DhHlError, HarnessError
 
@@ -429,6 +432,137 @@ class IdeaNode:
 
 
 # ---------------------------------------------------------------------------
+# Session node
+# ---------------------------------------------------------------------------
+
+class SessionNode:
+    """One agent session.  On disk: session/{id}/ with seed_idea.txt (required),
+    parent.txt (optional), output_schedule.txt (optional), delisted.txt
+    (presence flag).  Depth/timestamp are derived from the ID.  The gitignored
+    private workspace (generator.cpp, current_idea_state.txt, bin/) lives
+    separately under private/{id}/ and is NOT owned by this node."""
+
+    def __init__(self, catalog, full_id, is_new=False,
+                 seed_idea_id=None, parent_id=None):
+        self.catalog = catalog
+        self.full_id = full_id
+        self.is_new = is_new
+        self._seed_idea_id = seed_idea_id if seed_idea_id is not None else _UNLOADED
+        # parent tri-state: _UNLOADED / None (=no parent) / id str.  For a new
+        # node we know it directly (parent_id or None).
+        self._parent_id = parent_id if is_new else _UNLOADED
+        self._output_schedule_id = _UNLOADED   # _UNLOADED / None / id str
+        self._output_dirty = False
+        self._delisted = _UNLOADED             # _UNLOADED / bool
+        self._delisted_dirty = False
+        # Derived child sessions (filled by Catalog session linking; Phase 4).
+        self.child_session_ids = None
+        if is_new:
+            self.catalog._mark_dirty(self)
+
+    # -- identity --------------------------------------------------------
+    @property
+    def depth(self):
+        return ids.session_depth(self.full_id)
+
+    @property
+    def timestamp(self):
+        return ids.session_timestamp(self.full_id)
+
+    @property
+    def dir(self):
+        return os.path.join(self.catalog.session_dir, self.full_id)
+
+    @property
+    def private_dir(self):
+        return self.catalog.session_private_dir(self.full_id)
+
+    # -- seed idea (required) -------------------------------------------
+    @property
+    def seed_idea_id(self):
+        if self._seed_idea_id is _UNLOADED:
+            with open(os.path.join(self.dir, "seed_idea.txt"), "r",
+                      encoding="utf-8") as f:
+                self._seed_idea_id = f.read().strip()
+        return self._seed_idea_id
+
+    # -- parent session (optional) --------------------------------------
+    @property
+    def parent_id(self):
+        if self._parent_id is _UNLOADED:
+            p = os.path.join(self.dir, "parent.txt")
+            if os.path.exists(p):
+                with open(p, "r", encoding="utf-8") as f:
+                    self._parent_id = f.read().strip()
+            else:
+                self._parent_id = None
+        return self._parent_id
+
+    # -- output schedule (optional) -------------------------------------
+    @property
+    def output_schedule_id(self):
+        if self._output_schedule_id is _UNLOADED:
+            p = os.path.join(self.dir, "output_schedule.txt")
+            if os.path.exists(p):
+                with open(p, "r", encoding="utf-8") as f:
+                    self._output_schedule_id = f.read().strip()
+            else:
+                self._output_schedule_id = None
+        return self._output_schedule_id
+
+    def set_output_schedule(self, schedule_id):
+        if self.output_schedule_id is not None:
+            raise DhHlError("session already has an output schedule")
+        self._output_schedule_id = schedule_id
+        self._output_dirty = True
+        self.catalog._mark_dirty(self)
+
+    # -- delisted flag (presence) ---------------------------------------
+    @property
+    def delisted(self):
+        if self._delisted is _UNLOADED:
+            self._delisted = os.path.exists(
+                os.path.join(self.dir, "delisted.txt"))
+        return self._delisted
+
+    def set_delisted(self):
+        self._delisted = True
+        self._delisted_dirty = True
+        self.catalog._mark_dirty(self)
+
+    # -- derived: self-closed -------------------------------------------
+    def is_self_closed(self):
+        return self.output_schedule_id is not None or self.delisted
+
+    # -- flush -----------------------------------------------------------
+    def flush_new(self):
+        if not self.is_new:
+            return
+        safety.makedirs_tracked(self.dir)
+        safety.new_file(os.path.join(self.dir, "seed_idea.txt"),
+                        self.seed_idea_id + "\n")
+        if self._parent_id is not None:
+            safety.new_file(os.path.join(self.dir, "parent.txt"),
+                            self._parent_id + "\n")
+        if self._output_dirty and self._output_schedule_id is not None:
+            safety.new_file(os.path.join(self.dir, "output_schedule.txt"),
+                            self._output_schedule_id + "\n")
+        if self._delisted_dirty and self._delisted:
+            safety.new_file(os.path.join(self.dir, "delisted.txt"), "")
+
+    def flush_overwrite(self):
+        if self.is_new:
+            return
+        # New presence/pointer files added to an existing session dir (never
+        # modified once written): output_schedule.txt, delisted.txt.
+        if self._output_dirty and self._output_schedule_id is not None:
+            safety.new_file(os.path.join(self.dir, "output_schedule.txt"),
+                            self._output_schedule_id + "\n")
+        if self._delisted_dirty and self._delisted:
+            safety.new_file(os.path.join(self.dir, "delisted.txt"), "")
+
+
+# ---------------------------------------------------------------------------
 # Current idea state
 # ---------------------------------------------------------------------------
 
@@ -439,8 +573,9 @@ class CurrentIdeaState:
     kind is one of: 'missing', 'no_idea', 'idea', 'conflict'.
     """
 
-    def __init__(self, catalog):
+    def __init__(self, catalog, private_dir):
         self.catalog = catalog
+        self.private_dir = private_dir
         self.kind = None
         self.timestamp = None       # for 'no_idea'
         self.idea_id = None         # for 'idea'
@@ -451,7 +586,20 @@ class CurrentIdeaState:
 
     @property
     def path(self):
-        return os.path.join(self.catalog.catalog_dir, "current_idea_state.txt")
+        return os.path.join(self.private_dir, "current_idea_state.txt")
+
+    def problem_message(self):
+        """Human-readable explanation when kind is 'missing' or 'conflict'."""
+        if self.kind == "missing":
+            return "current_idea_state.txt is missing"
+        msg = ["current_idea_state.txt does not encode a single state."]
+        if self.parsed_lines:
+            msg.append("Competing states found:")
+            msg.extend("  " + ln for ln in self.parsed_lines)
+        else:
+            msg.append("No valid state could be parsed.")
+        msg.append("Suggestion: use `dh_hl new_root` to recover.")
+        return "\n".join(msg)
 
     def _load(self):
         if not os.path.exists(self.path):
@@ -495,6 +643,9 @@ class CurrentIdeaState:
 
     def flush_new(self):
         if self._dirty:
+            # The private workspace dir is created lazily; ensure it exists
+            # before writing (mirrors Commentary/Benchmark's makedirs).
+            safety.makedirs_tracked(self.private_dir)
             safety.write_allowed(self.path, self.encode() + "\n")
 
     def flush_overwrite(self):
@@ -531,25 +682,36 @@ def _encode_state(v):
 # ---------------------------------------------------------------------------
 
 class Catalog:
-    def __init__(self, catalog_dir, workspace_path):
+    def __init__(self, catalog_dir):
         # Absolutize once, here at the boundary where paths enter the model, so
         # nothing downstream can hit a relative-vs-absolute mismatch across a
         # subprocess cwd change (e.g. the profiler JSON path handed to a child
-        # running in bin_dir).  Everything derived below is therefore absolute.
+        # running in a session bin dir).  Everything derived below is absolute.
+        #
+        # Lock-free by design: constructing a Catalog does NOT acquire the
+        # catalog lock.  The Context/build layer acquires it (see context.py and
+        # impl.md "Tool Safety: Lock Hierarchy"); flush() then asserts it is
+        # held whenever we are inside a locked run.  This keeps pure-model unit
+        # tests free of lock ceremony and lets build/profile lock late.
         self.catalog_dir = os.path.abspath(catalog_dir)
-        self.workspace_path = os.path.abspath(workspace_path)
         self.sch_dir = os.path.join(self.catalog_dir, "sch")
         self.idea_dir = os.path.join(self.catalog_dir, "idea")
-        self.bin_dir = os.path.join(self.catalog_dir, "bin")
+        self.session_dir = os.path.join(self.catalog_dir, "session")
+        self.private_dir = os.path.join(self.catalog_dir, "private")
         self._schedules = None
         self._ideas = None
-        self._current_idea = None
+        self._sessions = None
         self._linked = False
         self._dirty = {}            # id(obj) -> obj
         self._last_timestamp = None  # for fresh_timestamp monotonicity
 
     def exists(self):
         return os.path.isdir(self.catalog_dir)
+
+    def session_private_dir(self, session_id):
+        """The gitignored private-workspace dir for *session_id* (lock-free;
+        may not yet exist -- callers initialize it lazily)."""
+        return os.path.join(self.private_dir, session_id)
 
     # -- timestamps ------------------------------------------------------
     def fresh_timestamp(self):
@@ -609,10 +771,14 @@ class Catalog:
         return self._ideas
 
     @property
-    def current_idea_state(self):
-        if self._current_idea is None:
-            self._current_idea = CurrentIdeaState(self)
-        return self._current_idea
+    def sessions(self):
+        if self._sessions is None:
+            self._sessions = {}
+            if os.path.isdir(self.session_dir):
+                for name in os.listdir(self.session_dir):
+                    if ids.is_session_id(name):
+                        self._sessions[name] = SessionNode(self, name)
+        return self._sessions
 
     def get_schedule(self, full_id):
         node = self.schedules.get(full_id)
@@ -626,29 +792,11 @@ class Catalog:
             raise DhHlError("no such idea node: " + full_id)
         return node
 
-    def current_idea_node(self):
-        """The IdeaNode referenced by 'some current idea', or None for 'no
-        idea'.  Raises on parse errors/conflict."""
-        cis = self.current_idea_state
-        if cis.kind == "no_idea":
-            return None
-        if cis.kind == "idea":
-            return self.get_idea(cis.idea_id)
-        raise DhHlError(self._current_idea_problem_message())
-
-    def _current_idea_problem_message(self):
-        cis = self.current_idea_state
-        if cis.kind == "missing":
-            return "current_idea_state.txt is missing"
-        # conflict
-        msg = ["current_idea_state.txt does not encode a single state."]
-        if cis.parsed_lines:
-            msg.append("Competing states found:")
-            msg.extend("  " + ln for ln in cis.parsed_lines)
-        else:
-            msg.append("No valid state could be parsed.")
-        msg.append("Suggestion: use `dh_hl new_root` to recover.")
-        return "\n".join(msg)
+    def get_session(self, full_id):
+        node = self.sessions.get(full_id)
+        if node is None:
+            raise DhHlError("no such session node: " + full_id)
+        return node
 
     # -- derived edges ---------------------------------------------------
     def _ensure_linked(self):
@@ -758,6 +906,37 @@ class Catalog:
             parent_schedule.child_idea_ids.append(full_id)
         return node
 
+    def create_session(self, seed_idea, parent_session, depth):
+        """Create a new session node seeded with *seed_idea* at *depth* (0 for
+        top-level).  Model-level primitive; the CLI session-creation tools
+        (Phase 4) wrap this and also initialize the private workspace.  Mints the
+        session ID under the catalog lock.
+
+        Enforces the session timestamp invariant when there is a parent: the
+        parent session must be strictly older than the child."""
+        try:
+            username = getpass.getuser()
+        except Exception:
+            username = "user"
+        hostname = socket.gethostname()
+        ts = self.mint_timestamped_name(
+            lambda t: os.path.join(
+                self.session_dir,
+                ids.make_session_id(depth, t, username, hostname)))
+        full_id = ids.make_session_id(depth, ts, username, hostname)
+        parent_id = None
+        if parent_session is not None:
+            if parent_session.timestamp >= ts:
+                raise DhHlError(
+                    "tree invariant violation: parent session (timestamp {}) "
+                    "is not older than the new session (timestamp {})".format(
+                        parent_session.timestamp, ts))
+            parent_id = parent_session.full_id
+        node = SessionNode(self, full_id, is_new=True,
+                           seed_idea_id=seed_idea.full_id, parent_id=parent_id)
+        self.sessions[full_id] = node
+        return node
+
     # -- dirty / flush ---------------------------------------------------
     def _mark_dirty(self, obj):
         self._dirty[id(obj)] = obj
@@ -766,12 +945,20 @@ class Catalog:
         """Create the catalog directory skeleton if absent."""
         safety.makedirs_tracked(self.sch_dir)
         safety.makedirs_tracked(self.idea_dir)
-        safety.makedirs_tracked(self.bin_dir)
+        safety.makedirs_tracked(self.session_dir)
         gi = os.path.join(self.catalog_dir, ".gitignore")
         if not os.path.exists(gi):
-            safety.new_file(gi, "bin\n")
+            # The whole per-session private workspace tree is gitignored; only
+            # the catalog graph is meant to be checked in.
+            safety.new_file(gi, "private\n")
 
     def flush(self):
+        # Correctness of the mint scheme rests on the catalog lock being held
+        # continuously through flush (see impl.md "Tool Safety: Timestamp
+        # Conflicts").  Assert it whenever we are inside a locked run; pure-model
+        # unit tests run at lock level NONE and are exempt.
+        assert locks._state["level"] == locks._L_NONE or locks.catalog_lock_held(), \
+            "Catalog.flush() without the catalog lock held"
         objs = list(self._dirty.values())
         for o in objs:
             o.flush_new()

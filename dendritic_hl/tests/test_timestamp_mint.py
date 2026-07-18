@@ -17,14 +17,14 @@ import os
 from dendritic_hl_lib.catalog import Catalog
 
 
-def _catalog(workspace):
-    cat = Catalog(str(workspace) + ".dh_hl", str(workspace))
+def _catalog(tmp_path):
+    cat = Catalog(str(tmp_path / "proj.dh_hl"))
     cat.ensure_created()
     return cat
 
 
-def test_mint_returns_first_when_path_free(workspace, monkeypatch):
-    cat = _catalog(workspace)
+def test_mint_returns_first_when_path_free(tmp_path, monkeypatch):
+    cat = _catalog(tmp_path)
     seq = iter(["T1", "T2"])
     monkeypatch.setattr(cat, "fresh_timestamp", lambda: next(seq))
     ts = cat.mint_timestamped_name(
@@ -32,8 +32,8 @@ def test_mint_returns_first_when_path_free(workspace, monkeypatch):
     assert ts == "T1"  # first candidate free => no re-mint
 
 
-def test_mint_remints_past_existing_path(workspace, monkeypatch):
-    cat = _catalog(workspace)
+def test_mint_remints_past_existing_path(tmp_path, monkeypatch):
+    cat = _catalog(tmp_path)
     seq = iter(["T1", "T2", "T3"])
     monkeypatch.setattr(cat, "fresh_timestamp", lambda: next(seq))
 
@@ -51,10 +51,10 @@ def test_mint_remints_past_existing_path(workspace, monkeypatch):
     assert seen[:2] == ["T1", "T2"]  # T1 stat'd + rejected, T2 accepted
 
 
-def test_create_schedule_remints_on_dir_collision(workspace, monkeypatch):
+def test_create_schedule_remints_on_dir_collision(tmp_path, monkeypatch):
     """End-to-end: if the sch/{id} dir a schedule would take already exists,
     create_schedule mints a later timestamp instead of colliding."""
-    cat = _catalog(workspace)
+    cat = _catalog(tmp_path)
     from dendritic_hl_lib import ids
 
     seq = iter(["2026-01-01T000000_000001Z", "2026-01-01T000000_000002Z"])

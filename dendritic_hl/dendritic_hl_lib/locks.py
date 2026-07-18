@@ -55,6 +55,18 @@ def _reset_for_tests():
                   catalog_fd=None, machine_exclusive=False)
 
 
+# -- observability hook -----------------------------------------------------
+# Normally None (a no-op).  A test may set locks._trace_sink to a list to record
+# the sequence of lock acquisitions in order -- see the `lock_trace` fixture.
+# This is the one observability concession in otherwise test-agnostic code.
+_trace_sink = None
+
+
+def _trace(event):
+    if _trace_sink is not None:
+        _trace_sink.append(event)
+
+
 # -- machine directory ------------------------------------------------------
 def machine_dir():
     base = os.environ.get("XDG_CACHE_HOME")
@@ -89,6 +101,7 @@ def acquire_machine_shared():
     fcntl.flock(fd, fcntl.LOCK_SH)
     _state["machine_fd"] = fd
     _state["level"] = _L_MACHINE
+    _trace(("machine", "shared"))
 
 
 _SESSION_BUSY_MSG = (
@@ -111,6 +124,7 @@ def acquire_session(catalog_dir, session_id):
         raise DhHlError(_SESSION_BUSY_MSG)
     _state["session_fd"] = fd
     _state["level"] = _L_SESSION
+    _trace(("session", "exclusive"))
 
 
 def upgrade_machine_exclusive():
@@ -126,6 +140,7 @@ def upgrade_machine_exclusive():
     fcntl.flock(fd, fcntl.LOCK_EX)
     _state["machine_exclusive"] = True
     _state["level"] = _L_MACHINE_EXCL
+    _trace(("machine", "exclusive"))
 
 
 def acquire_catalog(catalog_dir):
@@ -139,6 +154,7 @@ def acquire_catalog(catalog_dir):
     fcntl.flock(fd, fcntl.LOCK_EX)
     _state["catalog_fd"] = fd
     _state["level"] = _L_CATALOG
+    _trace(("catalog", "exclusive"))
 
 
 def catalog_lock_held():

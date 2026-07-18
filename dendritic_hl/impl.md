@@ -97,8 +97,14 @@ The gitignored session private workspace is stored separately to ensure git chec
 can cleanly create and destroy this directory.
 The state is:
 
-CLAUDE: implement whatever username/hostname sanitization you think is reasonable
-and document briefly here.
+**Username/hostname sanitization (implemented, `ids.sanitize_component`):** each
+of `username` (from `getpass.getuser()`, falling back to `"user"`) and `hostname`
+(from `socket.gethostname()`) has every character outside `[A-Za-z0-9_-]` mapped
+to `_`, is truncated to 64 chars, and is never empty (an all-stripped value
+becomes `"_"`). De-anonymizing is intentional, so there is no hashing. The `@`
+between them is therefore the unique separator, and since the timestamp is fixed
+width, `is_session_id`/`session_depth`/`session_timestamp` parse the ID
+unambiguously (`_SESSION_ID_RE` in `ids.py`).
 
 * **ID:** directory name.
 
@@ -788,12 +794,19 @@ guarantee, at which point a `FileExistsError` at create time becomes a
   monkeypatch seams `_write_ninja`, `_ninja_build`, `_discover_generator_name`,
   `_emit`, `_link`, `_run_benchmark` (see Tests).
 
-**What the session/concurrency rework changes here** (forward-looking, partial):
-`Context` is currently anchored on a workspace *file* path — that anchor goes
-away in favor of `-C`/`-s`; `Catalog.__init__` stops taking a `workspace_path`;
-`CurrentIdeaState` moves from being owned by `Catalog` to per-session
-(private-workspace) state; `Catalog` gains a `sessions` dict and a `SessionNode`;
-and the lock layer (see Lock Hierarchy) wraps all of it. None of that exists yet.
+**What the session/concurrency rework changed here (Phase 2, done):** `Context`
+is no longer anchored on a workspace *file* path — it resolves `-C`/`-s` via
+`context.resolve_target` (handle → `(catalog, session)`), and its factories
+`for_catalog` / `for_session(session_lock=...)` acquire the catalog lock (and
+optionally the session lock). `Catalog.__init__` no longer takes a
+`workspace_path` and is lock-free (the flush-time assert enforces the lock in
+locked runs). `CurrentIdeaState` moved off `Catalog` into the per-session
+`SessionWorkspace` (`context.py`), which owns `generator.cpp`,
+`current_idea_state.txt`, and `bin/` under `private/{session_id}/`. `Catalog`
+gained a `sessions` dict, a `SessionNode`, and `create_session` (the model-level
+primitive the CLI session tools will wrap in Phase 4). `build`/`profile` were
+ported to the session workspace but still take both locks up front — the
+compile-before-catalog-lock and machine-exclusive-upgrade rephasing is Phase 3.
 
 Obviousness and idiot-proofing are priorities for this prototype since
 this design may evolve quickly and isn't meant to scale to production uses.
@@ -927,15 +940,24 @@ timing test); `conftest.run_cli` now isolates `XDG_CACHE_HOME` per test. Touched
 new `locks.py` + `main.py` + `tests/`. (No `safety.py` change was needed; see the
 rollback-ordering note above.)
 
-**Phase 2 — de-anchor from the workspace file; add session storage.** The big
-mechanical diff. Replace `Context(workspace_path)` / `catalog_dir_for` with
-`-C`/`-s` resolution (handle lookup → `(catalog, session)`); drop the
-`workspace_path` arg from `Catalog.__init__`; move `CurrentIdeaState` into a
-per-session private-workspace object; add `SessionNode` + a `sessions` dict +
-the `session/{id}` and sibling `private/{id}` trees. Make `Catalog` construction
-acquire the catalog lock; add a lock-free session-workspace-path accessor. Port
-the existing ~75 tests to the new CLI shape. Touches `context.py`, `catalog.py`,
-`main.py`, most of `tools.py`, `tests/`.
+**Phase 2 — de-anchor from the workspace file; add session storage (DONE).**
+`Context(workspace_path)` / `catalog_dir_for` replaced by `resolve_target` +
+`Context.for_catalog` / `for_session`; `Catalog.__init__` lost `workspace_path`
+and is lock-free (the catalog lock is acquired by the Context/build layer, with
+a gated `flush()` assert — this is the deliberate deviation from "constructor
+acquires the lock", chosen so pure-model tests need no lock ceremony and build
+can lock late). `CurrentIdeaState` moved into the new `SessionWorkspace`
+(`context.py`); added `SessionNode` + `sessions` dict + `create_session` +
+`ids` session-ID helpers; `session/{id}` is git-tracked, `private/{id}` (holding
+`generator.cpp`, `current_idea_state.txt`, `bin/`, `session.lock`) is gitignored
+(catalog `.gitignore` now ignores `private`). `main.py` switched every subcommand
+to `-C`/`-s`. Tests ported: pure-model tests stay white-box/lock-free; cmd_*
+tests run in-process via a `run_tool` fixture that resets + re-arms the fake lock
+state per call (modeling the once-per-process lock lifecycle) with a `lock_trace`
+hook available; subprocess tests bootstrap a catalog+session in-process then
+drive `./dh_hl` with `-C`/`-s`. Full suite green incl. the real-Halide tier.
+Touched `ids.py`, `catalog.py`, `context.py`, `main.py`, `tools.py`, `build.py`,
+`tests/`.
 
 **Phase 3 — rephase `build`/`profile`.** Split into snapshot → compute (C++
 build; session + concurrent-machine locks only) → record (catalog lock; profile

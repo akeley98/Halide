@@ -44,7 +44,7 @@ def test_shared_prefix_ambiguous_at_6_disambiguated_at_7(tmp_path):
     s1 = _make_root(cat_dir, ids.now_timestamp(), h1)
     s2 = _make_root(cat_dir, ids.now_timestamp(), h2)
 
-    cat = Catalog(cat_dir, str(tmp_path / "gen.cpp"))
+    cat = Catalog(cat_dir)
 
     # The 6-char prefix is ambiguous in both short-ID grammars.
     with pytest.raises(DhHlError, match="ambiguous|matches"):
@@ -72,7 +72,7 @@ def test_ambiguity_error_lists_both_oldest_to_newest(tmp_path):
     cat_dir = _skeleton(tmp_path)
     older = _make_root(cat_dir, "2026-01-01T000000_000000Z", "aaaaaa" + "1" * 58)
     newer = _make_root(cat_dir, "2026-12-31T000000_000000Z", "aaaaaa" + "2" * 58)
-    cat = Catalog(cat_dir, str(tmp_path / "gen.cpp"))
+    cat = Catalog(cat_dir)
     with pytest.raises(DhHlError) as e:
         cat.resolve_schedule("root.aaaaaa")
     msg = str(e.value)
@@ -87,7 +87,7 @@ def test_identical_hash_falls_back_to_full_id(tmp_path):
     h = "d" * 64
     s1 = _make_root(cat_dir, "2026-01-01T000000_000000Z", h)
     s2 = _make_root(cat_dir, "2026-06-01T000000_000000Z", h)
-    cat = Catalog(cat_dir, str(tmp_path / "gen.cpp"))
+    cat = Catalog(cat_dir)
     short1 = cat.format_schedule_id(cat.schedules[s1])
     assert short1 == s1                     # gave up on a short form
     assert ids.is_schedule_id(short1)

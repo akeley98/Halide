@@ -98,3 +98,46 @@ def idea_proposal_name(full_id):
 
 def idea_parent_id(full_id):
     return full_id[-SCHEDULE_ID_LEN:]
+
+
+# ---- Session node full IDs -------------------------------------------------
+#
+# Session full ID = "{depth}_{timestamp}_{username}@{hostname}" (see idea.md).
+# depth is formatted %d (no leading zeros).  username/hostname are sanitized to
+# [A-Za-z0-9_-] so they never contain '_' ambiguity with the separators... they
+# *can* contain '_', but the timestamp is fixed width and the '@' is unique, so
+# parsing stays unambiguous: split off depth at the first '_', take the next
+# fixed-width timestamp, then the remainder is "user@host".
+
+_SESSION_ID_RE = re.compile(
+    r"(?:0|[1-9]\d*)_"
+    r"\d{4}-\d\d-\d\dT\d{6}_\d{6}Z_"
+    r"[A-Za-z0-9_-]+@[A-Za-z0-9_-]+\Z")
+
+
+def sanitize_component(s, maxlen=64):
+    """Sanitize a username/hostname for use in a session ID: map anything
+    outside [A-Za-z0-9_-] to '_', cap the length, never return empty."""
+    s = re.sub(r"[^A-Za-z0-9_-]", "_", s)[:maxlen]
+    return s or "_"
+
+
+def make_session_id(depth, timestamp, username, hostname):
+    return "{:d}_{}_{}@{}".format(int(depth), timestamp,
+                                  sanitize_component(username),
+                                  sanitize_component(hostname))
+
+
+def is_session_id(full_id):
+    return bool(_SESSION_ID_RE.match(full_id))
+
+
+def session_depth(full_id):
+    # All digits before the first '_' (formatted %d, so no leading zeros).
+    return int(full_id.split("_", 1)[0])
+
+
+def session_timestamp(full_id):
+    # The fixed-width timestamp immediately following "{depth}_".
+    rest = full_id.split("_", 1)[1]
+    return rest[:TIMESTAMP_LEN]

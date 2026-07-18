@@ -43,10 +43,12 @@ def _build_parser():
     p = argparse.ArgumentParser(prog="dh_hl", description="Dendritic Halide Harness")
     sub = p.add_subparsers(dest="command", metavar="command")
 
-    def add(name, *, workspace=True):
+    def add(name):
         sp = sub.add_parser(name, help=COMMAND_HELP[name])
-        if workspace:
-            sp.add_argument("workspace", help="workspace C++ file name")
+        # Every tool accepts both -C and -s (idea.md); required-ness is enforced
+        # per-tool via Context.for_catalog / for_session.
+        sp.add_argument("-C", "--catalog", help="catalog directory (ends .dh_hl)")
+        sp.add_argument("-s", "--session", help="session handle or full ID")
         return sp
 
     hp = sub.add_parser("help", help=COMMAND_HELP["help"])

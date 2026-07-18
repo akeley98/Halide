@@ -1,4 +1,9 @@
-"""build/profile logic with all subprocess steps stubbed (no Halide)."""
+"""build/profile logic with all subprocess steps stubbed (no Halide).
+
+Runs in-process (monkeypatch seams can't cross a subprocess boundary), driving
+cmd_build / cmd_profile through `run_tool` so the per-command lock lifecycle is
+modeled.  The `session` fixture's workspace is already consistent with its seed
+idea's canonical schedule, so build/profile edit that node directly."""
 
 import json
 import os
@@ -7,7 +12,6 @@ import pytest
 
 from dendritic_hl_lib import build, tools
 from dendritic_hl_lib.errors import HarnessError
-from conftest import ns
 
 
 @pytest.fixture
@@ -32,8 +36,7 @@ def fake_build(monkeypatch):
         return knobs["gen_name"]
     monkeypatch.setattr(build, "_discover_generator_name", fake_discover)
 
-    monkeypatch.setattr(build, "_emit",
-                        lambda *a, **k: knobs["emit_rc"])
+    monkeypatch.setattr(build, "_emit", lambda *a, **k: knobs["emit_rc"])
     monkeypatch.setattr(build, "_link", lambda bin_dir: knobs["link_rc"])
 
     def fake_bench(bin_dir, json_out):
@@ -44,76 +47,64 @@ def fake_build(monkeypatch):
     return knobs
 
 
-def _result(workspace, capsys):
+def _result(session, run_tool, capsys):
     capsys.readouterr()  # discard any buffered output from prior commands
-    tools.cmd_json_schedule_info(ns(workspace=str(workspace)))
+    run_tool(tools.cmd_json_schedule_info, session.ns())
     return json.loads(capsys.readouterr().out)
 
 
-def test_build_success(workspace, fake_build, capsys):
-    tools.cmd_new_root(ns(workspace=str(workspace)))
-    capsys.readouterr()
+def test_build_success(session, run_tool, fake_build, capsys):
     with pytest.raises(SystemExit) as e:
-        build.cmd_build(ns(workspace=str(workspace)))
+        run_tool(build.cmd_build, session.ns())
     assert e.value.code == 0
-    assert _result(workspace, capsys)["result"] == "success"
+    assert _result(session, run_tool, capsys)["result"] == "success"
 
 
-def test_build_cpp_error_persists_node_exit_1(workspace, fake_build, capsys):
-    tools.cmd_new_root(ns(workspace=str(workspace)))
-    capsys.readouterr()
+def test_build_cpp_error_persists_node_exit_1(session, run_tool, fake_build,
+                                              capsys):
     fake_build["gen_rc"] = 1  # phase 1 (C++ compile) fails
     with pytest.raises(SystemExit) as e:
-        build.cmd_build(ns(workspace=str(workspace)))
+        run_tool(build.cmd_build, session.ns())
     assert e.value.code == 1
-    assert _result(workspace, capsys)["result"] == "c++ error"  # node persists
+    assert _result(session, run_tool, capsys)["result"] == "c++ error"
 
 
-def test_build_halide_error(workspace, fake_build, capsys):
-    tools.cmd_new_root(ns(workspace=str(workspace)))
-    capsys.readouterr()
+def test_build_halide_error(session, run_tool, fake_build, capsys):
     fake_build["emit_rc"] = 1  # generator (phase 2) fails
     with pytest.raises(SystemExit) as e:
-        build.cmd_build(ns(workspace=str(workspace)))
+        run_tool(build.cmd_build, session.ns())
     assert e.value.code == 1
-    assert _result(workspace, capsys)["result"] == "halide error"
+    assert _result(session, run_tool, capsys)["result"] == "halide error"
 
 
-def test_generator_count_harness_error_no_result_update(workspace, fake_build,
-                                                        capsys):
-    tools.cmd_new_root(ns(workspace=str(workspace)))
-    capsys.readouterr()
+def test_generator_count_harness_error_no_result_update(session, run_tool,
+                                                        fake_build, capsys):
     fake_build["gen_name"] = None  # discovery raises HarnessError
     with pytest.raises(SystemExit) as e:
-        build.cmd_build(ns(workspace=str(workspace)))
+        run_tool(build.cmd_build, session.ns())
     assert e.value.code == 1
     # Node persists (C++ compiled), but result stays at the default (no update).
-    assert _result(workspace, capsys)["result"] == "c++ error"
+    assert _result(session, run_tool, capsys)["result"] == "c++ error"
 
 
-def test_profile_records_two_benchmarks(workspace, fake_build, tmp_path, capsys):
-    tools.cmd_new_root(ns(workspace=str(workspace)))
-    capsys.readouterr()
+def test_profile_records_two_benchmarks(session, run_tool, fake_build, tmp_path,
+                                        capsys):
     params = tmp_path / "params.json"
     params.write_text('[{"offset": 5}, {"offset": 20}]')
     with pytest.raises(SystemExit) as e:
-        build.cmd_profile(ns(workspace=str(workspace), parameters=str(params)))
+        run_tool(build.cmd_profile, session.ns(parameters=str(params)))
     assert e.value.code == 0
-    obj = _result(workspace, capsys)
+    obj = _result(session, run_tool, capsys)
     assert obj["result"] == "success"
     assert len(obj["benchmark"]) == 2
     assert [b["parameters"] for b in obj["benchmark"]] == [{"offset": 5},
                                                            {"offset": 20}]
 
 
-def test_profile_json_path_is_absolute_with_relative_workspace(
-        workspace, fake_build, tmp_path, monkeypatch, capsys):
-    """Regression: with a RELATIVE workspace arg (the normal CLI case), the
-    profiler output path must be absolute, because it is handed to a child that
-    runs with cwd=bin_dir -- a bin_dir-relative path gets resolved twice and
-    the JSON is written nowhere we can read it."""
-    monkeypatch.chdir(tmp_path)  # so "gen.cpp" is a relative workspace path
-
+def test_profile_json_path_is_absolute_with_relative_catalog(
+        session, run_tool, fake_build, tmp_path, monkeypatch, capsys):
+    """Regression: even with a RELATIVE -C, the profiler output path must be
+    absolute, because it is handed to a child running with cwd=bin_dir."""
     seen = {}
 
     def spy_bench(bin_dir, json_out):
@@ -121,27 +112,28 @@ def test_profile_json_path_is_absolute_with_relative_workspace(
         with open(json_out, "w") as f:
             json.dump({"pipelines": [{"name": "x"}]}, f)
         return 0
-    monkeypatch.setattr(build, "_run_benchmark", spy_bench)  # overrides fake
+    monkeypatch.setattr(build, "_run_benchmark", spy_bench)
 
-    tools.cmd_new_root(ns(workspace="gen.cpp"))
-    capsys.readouterr()
+    # Refer to the catalog by a relative path from its parent directory.
+    monkeypatch.chdir(os.path.dirname(session.catalog_dir))
+    rel_catalog = os.path.basename(session.catalog_dir)
     with pytest.raises(SystemExit) as e:
-        build.cmd_profile(ns(workspace="gen.cpp", parameters=None))
+        run_tool(build.cmd_profile,
+                 session.ns(catalog=rel_catalog, parameters=None))
     assert e.value.code == 0
     assert os.path.isabs(seen["json_out"]), \
         "profiler JSON path must be absolute, got " + repr(seen["json_out"])
 
 
-def test_profile_params_from_stdin(workspace, fake_build, monkeypatch, capsys):
+def test_profile_params_from_stdin(session, run_tool, fake_build, monkeypatch,
+                                   capsys):
     """`-` reads the parameters JSON from stdin, like every other file input."""
     import io
-    tools.cmd_new_root(ns(workspace=str(workspace)))
-    capsys.readouterr()
     monkeypatch.setattr("sys.stdin", io.StringIO('[{"offset": 1}, {"offset": 2}]'))
     with pytest.raises(SystemExit) as e:
-        build.cmd_profile(ns(workspace=str(workspace), parameters="-"))
+        run_tool(build.cmd_profile, session.ns(parameters="-"))
     assert e.value.code == 0
-    obj = _result(workspace, capsys)
+    obj = _result(session, run_tool, capsys)
     assert [b["parameters"] for b in obj["benchmark"]] == [{"offset": 1},
                                                            {"offset": 2}]
 
@@ -165,11 +157,9 @@ def test_emit_requests_both_stmt_forms(monkeypatch):
     assert "stmt" not in emits and "conceptual_stmt" not in emits
 
 
-def test_build_prints_both_stmt_paths(workspace, fake_build, capsys):
-    tools.cmd_new_root(ns(workspace=str(workspace)))
-    capsys.readouterr()
+def test_build_prints_both_stmt_paths(session, run_tool, fake_build, capsys):
     with pytest.raises(SystemExit) as e:
-        build.cmd_build(ns(workspace=str(workspace)))
+        run_tool(build.cmd_build, session.ns())
     assert e.value.code == 0
     lines = capsys.readouterr().out.splitlines()
     assert any(ln.endswith(".stmt") and not ln.endswith(".conceptual.stmt")

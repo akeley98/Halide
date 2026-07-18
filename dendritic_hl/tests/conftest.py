@@ -2,6 +2,15 @@
 
 These tests are NOT shipped with the package, so they may use pytest/hypothesis
 even though the package itself is stdlib-only.
+
+Testing tiers (see impl.md):
+* Pure-model white-box tests construct Catalog directly at lock level NONE
+  (Catalog is lock-free; flush()'s assert is exempt at level NONE).
+* In-process tool tests drive cmd_* through `run_tool`, which resets and re-arms
+  the (fake) lock state per call to simulate the once-per-process, released-at-
+  exit lock model.  Real locking is faked (no flock, no lock files); real
+  cross-process mutual exclusion is covered by the subprocess tests.
+* Subprocess tests run ./dh_hl for real end-to-end (real locks, real argparse).
 """
 
 import os
@@ -47,19 +56,110 @@ def reset_safety():
     safety._new_file_count = 0
 
 
-@pytest.fixture
-def workspace(tmp_path, reset_safety):
-    """A workspace .cpp file on disk (no catalog yet)."""
-    ws = tmp_path / "gen.cpp"
-    ws.write_text(DUMMY_SOURCE)
-    return ws
-
-
 def ns(**kwargs):
     """Build an argparse-style namespace for calling cmd_* functions directly."""
+    kwargs.setdefault("catalog", None)
+    kwargs.setdefault("session", None)
     kwargs.setdefault("schedule", None)
     kwargs.setdefault("parameters", None)
     return types.SimpleNamespace(**kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Model-level catalog + session construction (mimics Phase 4 new_catalog).
+# ---------------------------------------------------------------------------
+
+def make_catalog_session(cat_dir, source=DUMMY_SOURCE, idea_name="seed"):
+    """Create a catalog with one top-level session, mirroring the eventual
+    `new_catalog`: a root schedule, a seed idea under it, a duplicate schedule
+    that is the idea's canonical, and a session seeded with that idea whose
+    private workspace holds *source* with current idea = the seed idea (so the
+    workspace is initially 'consistent')."""
+    from dendritic_hl_lib.catalog import Catalog
+    from dendritic_hl_lib.context import SessionWorkspace
+    from dendritic_hl_lib import safety
+    cat = Catalog(cat_dir)
+    cat.ensure_created()
+    root = cat.create_schedule(source, parent_idea=None)
+    idea = cat.create_idea(root, idea_name, "seed proposal\n")
+    dup = cat.create_schedule(source, parent_idea=idea)
+    idea.set_canonical(dup.full_id)
+    sess = cat.create_session(idea, None, 0)
+    ws = SessionWorkspace(cat, sess.full_id)
+    ws.initialize(source, ("idea", idea.full_id))
+    cat.flush()
+    safety.commit()
+    return cat.catalog_dir, sess.full_id
+
+
+class Sess:
+    """Handle to a test catalog+session for driving cmd_* in-process."""
+
+    def __init__(self, catalog_dir, session_id):
+        self.catalog_dir = catalog_dir
+        self.session_id = session_id
+        self.private_dir = os.path.join(catalog_dir, "private", session_id)
+        self.workspace_path = os.path.join(self.private_dir, "generator.cpp")
+
+    def ns(self, **kw):
+        kw.setdefault("session", self.session_id)
+        kw.setdefault("catalog", self.catalog_dir)
+        return ns(**kw)
+
+    def write_workspace(self, text):
+        os.makedirs(self.private_dir, exist_ok=True)
+        with open(self.workspace_path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def set_no_idea(self, timestamp):
+        """Force the current idea state to 'no_idea' (for root-oriented flows)."""
+        p = os.path.join(self.private_dir, "current_idea_state.txt")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("dendritic_hl_root({})\n".format(timestamp))
+
+
+@pytest.fixture
+def session(tmp_path, reset_safety):
+    """A catalog with one consistent top-level session (level NONE creation)."""
+    cat_dir = str(tmp_path / "proj.dh_hl")
+    catalog_dir, session_id = make_catalog_session(cat_dir)
+    return Sess(catalog_dir, session_id)
+
+
+# ---------------------------------------------------------------------------
+# Fake locking for in-process tool tests.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def fake_locks(monkeypatch):
+    """Patch flock/lock-file open so acquire_* run their real state + ordering
+    logic without touching the filesystem or blocking.  Real cross-process
+    mutual exclusion is covered by the subprocess tests."""
+    import fcntl
+    from dendritic_hl_lib import locks
+    monkeypatch.setattr(fcntl, "flock", lambda *a, **k: None)
+    monkeypatch.setattr(locks, "_open_lock_file", lambda path: -1)
+    locks._reset_for_tests()
+    locks._trace_sink = None
+    yield locks
+    locks._reset_for_tests()
+    locks._trace_sink = None
+
+
+@pytest.fixture
+def run_tool(fake_locks):
+    """Invoke a cmd_* function as if in a fresh process: reset + re-arm the
+    (fake) machine lock, resetting the trace log, then call fn(args).  Returns
+    the fake locks module so tests can inspect locks._trace_sink."""
+    from dendritic_hl_lib import locks
+
+    def _run(fn, args):
+        locks._reset_for_tests()
+        locks._trace_sink = []
+        locks.acquire_machine_shared()
+        return fn(args)
+    _run.locks = fake_locks
+    return _run
 
 
 @pytest.fixture

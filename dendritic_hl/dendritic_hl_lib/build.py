@@ -216,15 +216,29 @@ def _upgrade_result(node, new_result):
 # node selection (step 1, shared by build & profile)
 # ---------------------------------------------------------------------------
 
+def _prepare_build(args):
+    """Resolve the session, take the session + catalog locks, and ready the
+    private-workspace bin dir.  (Phase 3 will split this so the C++ compile runs
+    before the catalog lock, and profile upgrades the machine lock to exclusive;
+    for now both locks are held for the whole command.)"""
+    ctx = Context.for_session(args, session_lock=True)
+    ws = ctx.workspace
+    ws.require_workspace()
+    bin_dir = ws.bin_dir
+    os.makedirs(bin_dir, exist_ok=True)  # gitignored infra; created lazily
+    return ctx, ws, bin_dir
+
+
 def _select_node(ctx):
     unamb = ctx.unambiguous_schedule()
     if unamb is not None:
         return unamb
     catalog = ctx.catalog
-    cis = catalog.current_idea_state
+    cis = ctx.workspace.current_idea_state
     if cis.kind == "idea":
         idea = catalog.get_idea(cis.idea_id)
-        return catalog.create_schedule(ctx.workspace_source, parent_idea=idea)
+        return catalog.create_schedule(ctx.workspace.workspace_source,
+                                       parent_idea=idea)
     raise DhHlError(
         "no unambiguous schedule node and no current idea node; use "
         "`dh_hl set_idea <idea>` to pick an idea, or `dh_hl new_root` to "
@@ -236,10 +250,7 @@ def _select_node(ctx):
 # ---------------------------------------------------------------------------
 
 def cmd_build(args):
-    ctx = Context(args.workspace)
-    ctx.require_workspace()
-    ctx.ensure_catalog_rw()
-    bin_dir = ctx.catalog.bin_dir
+    ctx, ws, bin_dir = _prepare_build(args)
     params = _load_params_object(args.parameters)
 
     node = _select_node(ctx)  # pre-flight; may raise (rollback safe: nothing built)
@@ -247,7 +258,7 @@ def cmd_build(args):
     # Past this point the node exists and must persist even on harness error;
     # so harness errors flush-then-exit rather than propagating to rollback.
     try:
-        ninja_path = _write_ninja(bin_dir, ctx.workspace_path)
+        ninja_path = _write_ninja(bin_dir, ws.workspace_path)
 
         # Phase 1: C++ -> generator exe.  Failure => c++ error outcome.
         if _ninja_build(bin_dir, ninja_path, [_GEN_EXE]) != 0:
@@ -284,16 +295,15 @@ def cmd_build(args):
 # ---------------------------------------------------------------------------
 
 def cmd_profile(args):
-    ctx = Context(args.workspace)
-    ctx.require_workspace()
-    ctx.ensure_catalog_rw()
-    bin_dir = ctx.catalog.bin_dir
+    # Phase 2: functional port only.  Phase 3 will upgrade the machine lock to
+    # exclusive around the profiling loop (before the catalog lock) per impl.md.
+    ctx, ws, bin_dir = _prepare_build(args)
     param_list = _load_params_list(args.parameters)
 
     node = _select_node(ctx)
 
     try:
-        ninja_path = _write_ninja(bin_dir, ctx.workspace_path)
+        ninja_path = _write_ninja(bin_dir, ws.workspace_path)
 
         if _ninja_build(bin_dir, ninja_path, [_GEN_EXE]) != 0:
             _upgrade_result(node, "c++ error")

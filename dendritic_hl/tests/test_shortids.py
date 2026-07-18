@@ -11,7 +11,7 @@ def build_tree(tmp_path):
     """root R --idea I(vec)--> child C(canonical).  Flush, then reopen."""
     cat_dir = str(tmp_path / "gen.cpp.dh_hl")
     ws = str(tmp_path / "gen.cpp")
-    cat = Catalog(cat_dir, ws)
+    cat = Catalog(cat_dir)
     cat.ensure_created()
     R = cat.create_schedule("root source", parent_idea=None)
     I = cat.create_idea(R, "vec", "Vectorize.\n")
@@ -20,7 +20,7 @@ def build_tree(tmp_path):
     cat.flush()
     safety.commit()
     # Reopen fresh so resolution reads purely from disk-derived dicts.
-    return Catalog(cat_dir, ws), R.full_id, I.full_id, C.full_id
+    return Catalog(cat_dir), R.full_id, I.full_id, C.full_id
 
 
 def test_roundtrip_all_nodes(reset_safety, tmp_path):
