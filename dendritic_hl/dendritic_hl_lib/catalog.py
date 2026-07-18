@@ -10,10 +10,13 @@ TODO update for session changes.
 * Each on-disk file is owned by exactly one in-memory object.  Objects are
   dirtied by their own setters (or on non-disk creation) and register with the
   Catalog's dirty set; nothing dirties anything recursively.
-* flush() writes all new files (flush_new) then all overwrites (flush_overwrite).
-  Overwrites go through safety.write_allowed / queue_overwrite so, globally,
-  new files land before overwrites and only overwrites of the allowed-to-change
-  files ever touch an existing file.
+* Catalog.flush() calls each dirty object's single flush().  The physical
+  ordering "all new files created before any existing file is overwritten" is
+  NOT provided by flush() -- it is guaranteed by the safety module: new_file
+  writes immediately, while write_allowed/queue_overwrite defer the overwrite to
+  safety.commit(), which Context.finish() runs strictly after the whole flush
+  loop.  So flush() may create + queue in any object order safely (each on-disk
+  file is owned by exactly one object, so there is never a cross-object race).
 """
 
 import getpass
@@ -73,12 +76,9 @@ class Commentary:
                 self._text = f.read()
         return self._text
 
-    def flush_new(self):
+    def flush(self):
         safety.makedirs_tracked(self.schedule.comment_dir)
         safety.new_file(self.path, self.text)
-
-    def flush_overwrite(self):
-        pass
 
 
 class Benchmark:
@@ -103,12 +103,9 @@ class Benchmark:
                 self._data = json.load(f)
         return self._data
 
-    def flush_new(self):
+    def flush(self):
         safety.makedirs_tracked(self.schedule.bench_dir)
         safety.new_file(self.path, json.dumps(self.data, indent=1) + "\n")
-
-    def flush_overwrite(self):
-        pass
 
 
 # ---------------------------------------------------------------------------
@@ -275,32 +272,27 @@ class ScheduleNode:
         return b
 
     # -- flush -----------------------------------------------------------
-    def flush_new(self):
-        if not self.is_new:
-            return
-        safety.makedirs_tracked(self.dir)
-        safety.new_file(os.path.join(self.dir, "generator.cpp"), self.source)
-        if self.parent_id is not None:
-            safety.new_file(os.path.join(self.dir, "parent.txt"),
-                            self.parent_id + "\n")
-        if self._result_dirty:
-            safety.write_allowed(os.path.join(self.dir, "result.txt"),
-                                 self._result + "\n")
-
-    def flush_overwrite(self):
+    def flush(self):
         if self.is_new:
-            return
+            safety.makedirs_tracked(self.dir)
+            safety.new_file(os.path.join(self.dir, "generator.cpp"), self.source)
+            if self.parent_id is not None:
+                safety.new_file(os.path.join(self.dir, "parent.txt"),
+                                self.parent_id + "\n")
+        else:
+            # An existing root schedule that gained a parent (force_parent_idea):
+            if self._parent_id_added:
+                safety.new_file(os.path.join(self.dir, "parent.txt"),
+                                self._parent_id + "\n")
+            # fix_canonical re-parented an existing node (overwrite):
+            if self._parent_id_overwritten:
+                safety.queue_overwrite(os.path.join(self.dir, "parent.txt"),
+                                       self._parent_id + "\n")
+        # result.txt: write_allowed picks new-file (new node) or deferred
+        # overwrite (existing node) automatically.
         if self._result_dirty:
             safety.write_allowed(os.path.join(self.dir, "result.txt"),
                                  self._result + "\n")
-        # An existing root schedule that gained a parent (force_parent_idea):
-        if self._parent_id_added:
-            safety.new_file(os.path.join(self.dir, "parent.txt"),
-                            self._parent_id + "\n")
-        # fix_canonical re-parented an existing node (overwrite):
-        if self._parent_id_overwritten:
-            safety.queue_overwrite(os.path.join(self.dir, "parent.txt"),
-                                   self._parent_id + "\n")
 
     # force_parent_idea sets this on an existing root node.
     _parent_id_added = False
@@ -413,19 +405,13 @@ class IdeaNode:
             return 0
         return max(imps)
 
-    def flush_new(self):
-        if not self.is_new:
-            return
-        safety.makedirs_tracked(self.dir)
-        safety.new_file(os.path.join(self.dir, "proposal.txt"),
-                        self.proposal_text)
-        if self._canonical_dirty and self._canonical is not None:
-            safety.write_allowed(os.path.join(self.dir, "canonical.txt"),
-                                 self._canonical + "\n")
-
-    def flush_overwrite(self):
+    def flush(self):
         if self.is_new:
-            return
+            safety.makedirs_tracked(self.dir)
+            safety.new_file(os.path.join(self.dir, "proposal.txt"),
+                            self.proposal_text)
+        # canonical.txt: same in both cases; write_allowed picks new-file vs
+        # deferred overwrite automatically.
         if self._canonical_dirty and self._canonical is not None:
             safety.write_allowed(os.path.join(self.dir, "canonical.txt"),
                                  self._canonical + "\n")
@@ -535,26 +521,17 @@ class SessionNode:
         return self.output_schedule_id is not None or self.delisted
 
     # -- flush -----------------------------------------------------------
-    def flush_new(self):
-        if not self.is_new:
-            return
-        safety.makedirs_tracked(self.dir)
-        safety.new_file(os.path.join(self.dir, "seed_idea.txt"),
-                        self.seed_idea_id + "\n")
-        if self._parent_id is not None:
-            safety.new_file(os.path.join(self.dir, "parent.txt"),
-                            self._parent_id + "\n")
-        if self._output_dirty and self._output_schedule_id is not None:
-            safety.new_file(os.path.join(self.dir, "output_schedule.txt"),
-                            self._output_schedule_id + "\n")
-        if self._delisted_dirty and self._delisted:
-            safety.new_file(os.path.join(self.dir, "delisted.txt"), "")
-
-    def flush_overwrite(self):
+    def flush(self):
         if self.is_new:
-            return
-        # New presence/pointer files added to an existing session dir (never
-        # modified once written): output_schedule.txt, delisted.txt.
+            safety.makedirs_tracked(self.dir)
+            safety.new_file(os.path.join(self.dir, "seed_idea.txt"),
+                            self.seed_idea_id + "\n")
+            if self._parent_id is not None:
+                safety.new_file(os.path.join(self.dir, "parent.txt"),
+                                self._parent_id + "\n")
+        # output_schedule.txt / delisted.txt are presence/pointer files added
+        # once and never modified -- created new whether the session node is new
+        # or pre-existing (close_session / delist on an existing session).
         if self._output_dirty and self._output_schedule_id is not None:
             safety.new_file(os.path.join(self.dir, "output_schedule.txt"),
                             self._output_schedule_id + "\n")
@@ -652,17 +629,14 @@ class CurrentIdeaState:
             return _encode_state(("idea", self.idea_id))
         raise DhHlError("cannot encode current idea state of kind " + str(self.kind))
 
-    def flush_new(self):
+    def flush(self):
         if self._dirty:
             # The private dir is guaranteed to exist by the time we flush: every
             # current-idea-state mutation goes through a tool that first calls
             # SessionWorkspace.ensure_private_dir() (and session-lock tools also
-            # created it in locks.acquire_session).
+            # created it in locks.acquire_session).  write_allowed picks a
+            # new-file create or a deferred overwrite automatically.
             safety.write_allowed(self.path, self.encode() + "\n")
-
-    def flush_overwrite(self):
-        # write_allowed already defers to overwrite when the file exists.
-        pass
 
 
 def _parse_state_line(line):
@@ -860,7 +834,7 @@ class Catalog:
                 "tree invariant violation: idea's parent schedule "
                 "(timestamp {}) is not older than child schedule (timestamp {})"
                 .format(idea.timestamp, schedule.timestamp))
-        schedule._parent_id = idea.full_id  # new node; written in flush_new
+        schedule._parent_id = idea.full_id  # new node; written in flush
         # keep derived edges consistent if already linked
         if self._linked:
             schedule.child_idea_ids = schedule.child_idea_ids or []
@@ -977,11 +951,11 @@ class Catalog:
         assert locks.catalog_lock_held() \
             and locks.locked_catalog_dir() == self.catalog_dir, \
             "Catalog.flush() without holding the catalog lock: " + self.catalog_dir
-        objs = list(self._dirty.values())
-        for o in objs:
-            o.flush_new()
-        for o in objs:
-            o.flush_overwrite()
+        # Single pass: each object creates its new files (immediate) and/or
+        # queues its overwrites (deferred to safety.commit()).  The new-before-
+        # overwrite physical ordering is guaranteed by safety, not by this loop.
+        for o in list(self._dirty.values()):
+            o.flush()
 
     # -- ID formatting (short IDs) --------------------------------------
     def format_schedule_id(self, node):
