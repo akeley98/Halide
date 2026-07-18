@@ -60,6 +60,27 @@ def test_build_success(session, run_tool, fake_build, capsys):
     assert _result(session, run_tool, capsys)["result"] == "success"
 
 
+def test_build_lock_order(session, run_tool, fake_build):
+    """build takes the catalog lock only after compiling, and never upgrades the
+    machine lock to exclusive (only profiling monopolizes the machine)."""
+    from dendritic_hl_lib import locks
+    with pytest.raises(SystemExit):
+        run_tool(build.cmd_build, session.ns())
+    assert locks._trace_sink == [
+        ("machine", "shared"), ("session", "exclusive"), ("catalog", "exclusive")]
+
+
+def test_profile_lock_order_upgrades_before_catalog(session, run_tool, fake_build):
+    """profile upgrades the machine lock to exclusive BEFORE taking the catalog
+    lock (per the lock hierarchy)."""
+    from dendritic_hl_lib import locks
+    with pytest.raises(SystemExit):
+        run_tool(build.cmd_profile, session.ns())
+    assert locks._trace_sink == [
+        ("machine", "shared"), ("session", "exclusive"),
+        ("machine", "exclusive"), ("catalog", "exclusive")]
+
+
 def test_build_cpp_error_persists_node_exit_1(session, run_tool, fake_build,
                                               capsys):
     fake_build["gen_rc"] = 1  # phase 1 (C++ compile) fails

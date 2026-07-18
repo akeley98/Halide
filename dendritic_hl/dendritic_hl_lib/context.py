@@ -184,6 +184,11 @@ class Context:
         catalog_dir, session_id = resolve_target(args)
         if session_id is None:
             raise DhHlError("this command requires a session (-s)")
+        # Guard before acquire_session, which would otherwise create private/{id}
+        # (and the whole chain) under a typo'd catalog dir.  _open_catalog
+        # re-checks, but only after the session lock is taken.
+        if not os.path.isdir(catalog_dir):
+            raise DhHlError("no catalog directory: " + catalog_dir)
         if session_lock:
             locks.acquire_session(catalog_dir, session_id)
         return cls(cls._open_catalog(catalog_dir), session_id)

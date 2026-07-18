@@ -27,8 +27,10 @@ import subprocess
 import sys
 
 from . import ids
+from . import locks
 from . import safety
-from .context import Context, read_text_or_stdin
+from .catalog import Catalog
+from .context import Context, SessionWorkspace, resolve_target, read_text_or_stdin
 from .errors import DhHlError, HarnessError
 from . import ninja_syntax
 
@@ -216,18 +218,33 @@ def _upgrade_result(node, new_result):
 # node selection (step 1, shared by build & profile)
 # ---------------------------------------------------------------------------
 
-def _prepare_build(args):
-    """Resolve the session, take the session + catalog locks, and ready the
-    private-workspace bin dir.  (Phase 3 will split this so the C++ compile runs
-    before the catalog lock, and profile upgrades the machine lock to exclusive;
-    for now both locks are held for the whole command.)"""
-    ctx = Context.for_session(args, session_lock=True)
-    ws = ctx.workspace
-    ws.require_workspace()
+def _snapshot_session(args):
+    """Phase 1 setup: resolve the session, take the session lock, and ready the
+    catalog-free private workspace.  Holds only the session + concurrent machine
+    locks -- NOT the catalog lock -- so the expensive C++ compile that follows
+    does not block other agents' catalog access (impl.md "Build/Profile Tools --
+    Implementation Details").  Returns (catalog_dir, session_id, ws, bin_dir)."""
+    catalog_dir, session_id = resolve_target(args)
+    if session_id is None:
+        raise DhHlError("this command requires a session (-s)")
+    # Guard against a typo'd catalog dir before acquire_session would otherwise
+    # create private/{id} (and the whole chain) under it.
+    if not os.path.isdir(catalog_dir):
+        raise DhHlError("no catalog directory: " + catalog_dir)
+    locks.acquire_session(catalog_dir, session_id)
+    ws = SessionWorkspace(catalog_dir, session_id)  # catalog-free (no lock yet)
     ws.ensure_private_dir()
+    ws.require_workspace()
     bin_dir = ws.bin_dir
     os.makedirs(bin_dir, exist_ok=True)  # gitignored infra; created lazily
-    return ctx, ws, bin_dir
+    return catalog_dir, session_id, ws, bin_dir
+
+
+def _open_locked_context(catalog_dir, session_id):
+    """Phase 2: acquire the catalog lock, then build the Context around the
+    now-lockable Catalog (whose __init__ asserts the lock is held for it)."""
+    locks.acquire_catalog(catalog_dir)
+    return Context(Catalog(catalog_dir), session_id)
 
 
 def _select_node(ctx):
@@ -250,45 +267,55 @@ def _select_node(ctx):
 # build
 # ---------------------------------------------------------------------------
 
-def cmd_build(args):
-    ctx, ws, bin_dir = _prepare_build(args)
-    params = _load_params_object(args.parameters)
+def _compile_for_build(bin_dir, workspace_path, params):
+    """Phase 1 of build: every subprocess compile step, under the session +
+    concurrent machine locks only (no catalog lock).  Returns
+    (outcome, stmt_paths, ok, harness_msg):
 
-    node = _select_node(ctx)  # pre-flight; may raise (rollback safe: nothing built)
-
-    # Past this point the node exists and must persist even on harness error;
-    # so harness errors flush-then-exit rather than propagating to rollback.
+    * outcome: "c++ error" / "halide error" / "success", or None to leave the
+      node's result untouched -- a harness/environment failure (generator-count,
+      RunGenMain.o, link) is not a build outcome to catalogue.
+    * stmt_paths: emitted .stmt paths to print (only on full success).
+    * ok: whether the process should exit 0.
+    * harness_msg: a message to print to stderr, or None.
+    """
+    ninja_path = _write_ninja(bin_dir, workspace_path)
+    if _ninja_build(bin_dir, ninja_path, [_GEN_EXE]) != 0:
+        return ("c++ error", [], False, None)
     try:
-        ninja_path = _write_ninja(bin_dir, ws.workspace_path)
-
-        # Phase 1: C++ -> generator exe.  Failure => c++ error outcome.
-        if _ninja_build(bin_dir, ninja_path, [_GEN_EXE]) != 0:
-            _upgrade_result(node, "c++ error")
-            _finish_and_exit(ctx, node, ok=False)
-
-        # Generator-count harness check (after C++ compiled): no result update.
+        # Generator-count check (after the C++ compiled): a workspace-authoring
+        # problem, not a build outcome -> leave the result untouched.
         gen_name = _discover_generator_name(bin_dir)
-
-        # RunGenMain.o is harness infra; its failure is a harness error.
-        if _ninja_build(bin_dir, ninja_path, ["RunGenMain.o"]) != 0:
-            raise HarnessError("failed to compile RunGenMain.o")
-
-        # Phase 2: emit (with conceptual_stmt for build).
-        if _emit(bin_dir, gen_name, params, with_stmt=True) != 0:
-            _upgrade_result(node, "halide error")
-            _finish_and_exit(ctx, node, ok=False)
-        _upgrade_result(node, "success")
-
-        # Phase 4: link a standalone benchmarkable binary.
-        if _link(bin_dir) != 0:
-            raise HarnessError("failed to link the standalone RunGen binary")
-
-        stmt_paths = [os.path.join(bin_dir, _OUT_BASENAME + ".stmt"),
-                      os.path.join(bin_dir, _OUT_BASENAME + ".conceptual.stmt")]
-        _finish_and_exit(ctx, node, ok=True, stmt_paths=stmt_paths)
     except HarnessError as e:
-        print("dh_hl: " + str(e), file=sys.stderr)
-        _finish_and_exit(ctx, node, ok=False)
+        return (None, [], False, str(e))
+    if _ninja_build(bin_dir, ninja_path, ["RunGenMain.o"]) != 0:
+        return (None, [], False, "failed to compile RunGenMain.o")
+    if _emit(bin_dir, gen_name, params, with_stmt=True) != 0:
+        return ("halide error", [], False, None)
+    # The generator ran: the schedule is a success even if the harness then
+    # fails to link the standalone binary.
+    if _link(bin_dir) != 0:
+        return ("success", [], False, "failed to link the standalone RunGen binary")
+    stmt_paths = [os.path.join(bin_dir, _OUT_BASENAME + ".stmt"),
+                  os.path.join(bin_dir, _OUT_BASENAME + ".conceptual.stmt")]
+    return ("success", stmt_paths, True, None)
+
+
+def cmd_build(args):
+    # Phase 1: compile with only the session + concurrent machine locks held.
+    catalog_dir, session_id, ws, bin_dir = _snapshot_session(args)
+    params = _load_params_object(args.parameters)
+    outcome, stmt_paths, ok, harness_msg = _compile_for_build(
+        bin_dir, ws.workspace_path, params)
+
+    # Phase 2: now take the catalog lock, find/create the node, record + finish.
+    ctx = _open_locked_context(catalog_dir, session_id)
+    node = _select_node(ctx)
+    if outcome is not None:
+        _upgrade_result(node, outcome)
+    if harness_msg is not None:
+        print("dh_hl: " + harness_msg, file=sys.stderr)
+    _finish_and_exit(ctx, node, ok=ok, stmt_paths=stmt_paths)
 
 
 # ---------------------------------------------------------------------------
@@ -296,63 +323,73 @@ def cmd_build(args):
 # ---------------------------------------------------------------------------
 
 def cmd_profile(args):
-    # Phase 2: functional port only.  Phase 3 will upgrade the machine lock to
-    # exclusive around the profiling loop (before the catalog lock) per impl.md.
-    ctx, ws, bin_dir = _prepare_build(args)
+    # Phase 1: param-independent compile (generator exe + RunGenMain.o) under
+    # only the session + concurrent machine locks.
+    catalog_dir, session_id, ws, bin_dir = _snapshot_session(args)
     param_list = _load_params_list(args.parameters)
 
+    ninja_path = _write_ninja(bin_dir, ws.workspace_path)
+    gen_rc = _ninja_build(bin_dir, ninja_path, [_GEN_EXE])
+    gen_name = None
+    harness_msg = None
+    if gen_rc == 0:
+        try:
+            gen_name = _discover_generator_name(bin_dir)
+        except HarnessError as e:
+            harness_msg = str(e)
+        else:
+            if _ninja_build(bin_dir, ninja_path, ["RunGenMain.o"]) != 0:
+                gen_name = None
+                harness_msg = "failed to compile RunGenMain.o"
+
+    # Phase 2: monopolize the machine (upgrade to exclusive, BEFORE the catalog
+    # lock per the lock hierarchy), then take the catalog lock + find/create node.
+    locks.upgrade_machine_exclusive()
+    ctx = _open_locked_context(catalog_dir, session_id)
     node = _select_node(ctx)
 
-    try:
-        ninja_path = _write_ninja(bin_dir, ws.workspace_path)
-
-        if _ninja_build(bin_dir, ninja_path, [_GEN_EXE]) != 0:
-            _upgrade_result(node, "c++ error")
-            _finish_and_exit(ctx, node, ok=False)
-
-        gen_name = _discover_generator_name(bin_dir)
-
-        if _ninja_build(bin_dir, ninja_path, ["RunGenMain.o"]) != 0:
-            raise HarnessError("failed to compile RunGenMain.o")
-
-        hostname = socket.gethostname()
-        all_ok = True
-        for params in param_list:
-            # Phase 2: emit (no stmt needed for profiling).
-            if _emit(bin_dir, gen_name, params, with_stmt=False) != 0:
-                _upgrade_result(node, "halide error")
-                all_ok = False
-                continue  # skip this parameter set, keep going
-            _upgrade_result(node, "success")
-
-            if _link(bin_dir) != 0:
-                all_ok = False
-                continue
-
-            # Benchmark run monopolizes the machine (serial; no parallelism).
-            # MUST be absolute: it is handed to the benchmark child via
-            # HL_PROFILER_JSON_OUTPUT, and the child runs with cwd=bin_dir, so a
-            # bin_dir-relative path would be resolved against bin_dir twice.
-            json_out = os.path.abspath(os.path.join(bin_dir, "profile_out.json"))
-            if os.path.exists(json_out):
-                os.remove(json_out)
-            if _run_benchmark(bin_dir, json_out) != 0:
-                all_ok = False
-                continue
-
-            try:
-                bench_obj = _build_benchmark_obj(json_out, hostname, params)
-            except HarnessError as e:
-                print("dh_hl: skipping parameter set: " + str(e),
-                      file=sys.stderr)
-                all_ok = False
-                continue
-            node.add_benchmark(hostname, bench_obj)
-
-        _finish_and_exit(ctx, node, ok=all_ok)
-    except HarnessError as e:
-        print("dh_hl: " + str(e), file=sys.stderr)
+    if gen_rc != 0:
+        _upgrade_result(node, "c++ error")
         _finish_and_exit(ctx, node, ok=False)
+    if gen_name is None:
+        # Harness error (generator-count / RunGenMain.o): leave result untouched.
+        print("dh_hl: " + harness_msg, file=sys.stderr)
+        _finish_and_exit(ctx, node, ok=False)
+
+    # Phase 3: per-parameter emit -> link -> benchmark loop, machine held
+    # exclusively and catalog lock held.
+    hostname = socket.gethostname()
+    all_ok = True
+    for params in param_list:
+        if _emit(bin_dir, gen_name, params, with_stmt=False) != 0:
+            _upgrade_result(node, "halide error")
+            all_ok = False
+            continue  # skip this parameter set, keep going
+        _upgrade_result(node, "success")
+
+        if _link(bin_dir) != 0:
+            all_ok = False
+            continue
+
+        # MUST be absolute: it is handed to the benchmark child via
+        # HL_PROFILER_JSON_OUTPUT, and the child runs with cwd=bin_dir, so a
+        # bin_dir-relative path would be resolved against bin_dir twice.
+        json_out = os.path.abspath(os.path.join(bin_dir, "profile_out.json"))
+        if os.path.exists(json_out):
+            os.remove(json_out)
+        if _run_benchmark(bin_dir, json_out) != 0:
+            all_ok = False
+            continue
+
+        try:
+            bench_obj = _build_benchmark_obj(json_out, hostname, params)
+        except HarnessError as e:
+            print("dh_hl: skipping parameter set: " + str(e), file=sys.stderr)
+            all_ok = False
+            continue
+        node.add_benchmark(hostname, bench_obj)
+
+    _finish_and_exit(ctx, node, ok=all_ok)
 
 
 def _build_benchmark_obj(json_out, hostname, params):

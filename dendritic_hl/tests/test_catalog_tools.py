@@ -39,6 +39,22 @@ def test_seeded_session_status_consistent(session, run_tool, capsys):
     assert "Session: " in out
 
 
+def test_status_skips_session_lock(session, run_tool, capsys):
+    """status is read-only: it takes the catalog lock but NOT the session lock."""
+    from dendritic_hl_lib import locks
+    run_tool(tools.cmd_status, session.ns())
+    assert locks._trace_sink == [("machine", "shared"), ("catalog", "exclusive")]
+
+
+def test_new_root_takes_session_lock(session, run_tool, capsys):
+    """A mutating -s tool takes the session lock before the catalog lock."""
+    from dendritic_hl_lib import locks
+    session.write_workspace("fresh source\n")
+    run_tool(tools.cmd_new_root, session.ns())
+    assert locks._trace_sink == [
+        ("machine", "shared"), ("session", "exclusive"), ("catalog", "exclusive")]
+
+
 def test_new_root_then_status_consistent(session, run_tool, capsys):
     session.write_workspace("brand new root source\n")
     run_tool(tools.cmd_new_root, session.ns())

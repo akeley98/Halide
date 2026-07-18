@@ -815,8 +815,8 @@ per-session `SessionWorkspace` (`context.py`), which is not a catalog sub-object
 `current_idea_state.txt`, and `bin/` under `private/{session_id}/`. `Catalog`
 gained a `sessions` dict, a `SessionNode`, and `create_session` (the model-level
 primitive the CLI session tools will wrap in Phase 4). `build`/`profile` were
-ported to the session workspace but still take both locks up front — the
-compile-before-catalog-lock and machine-exclusive-upgrade rephasing is Phase 3.
+ported to the session workspace here and then rephased in Phase 3 to compile
+before taking the catalog lock (see the Phase 3 plan entry).
 
 Obviousness and idiot-proofing are priorities for this prototype since
 this design may evolve quickly and isn't meant to scale to production uses.
@@ -968,13 +968,25 @@ Full suite green incl. the real-Halide tier.
 Touched `ids.py`, `catalog.py`, `context.py`, `main.py`, `tools.py`, `build.py`,
 `tests/`.
 
-**Phase 3 — rephase `build`/`profile`.** Split into snapshot → compute (C++
-build; session + concurrent-machine locks only) → record (catalog lock; profile
-upgrades the machine lock to exclusive), per "Build/Profile Tools —
-Implementation Details". Move `bin/` into the session private workspace.
-Preserve the persist-failed-compiles behavior under the new lock placement.
-Touches `build.py`, `catalog.py`; the monkeypatch seams keep
-`tests/test_build_fake.py` mostly intact.
+**Phase 3 — rephase `build`/`profile` (DONE).** Both now split into
+`_snapshot_session` (resolve + session lock + catalog-free `SessionWorkspace`;
+compile runs here with only the session + concurrent machine locks) →
+`_open_locked_context` (acquire the catalog lock, build the `Context`) → record.
+`build`'s compile is fully in phase 1 (`_compile_for_build` returns
+`(outcome, stmt_paths, ok, harness_msg)`); the node is found/created and its
+result recorded only in phase 2. `profile` compiles the generator exe +
+`RunGenMain.o` in phase 1, then **upgrades the machine lock to exclusive before**
+the catalog lock, then runs the per-param emit→link→benchmark loop under both.
+`bin/` already lived in the session private workspace (Phase 2). Persist-failed-
+compiles behavior is preserved (a `c++ error`/`halide error` node is still
+created and flushed; generator-count / RunGenMain.o / link are harness errors
+that leave the result untouched). The `_snapshot_session` isdir check also closes
+a latent hole where `acquire_session` would create `private/{id}` under a typo'd
+catalog dir. New white-box lock-order tests via the `_trace` hook pin the
+sequences (`test_build_fake`: build = machine/shared→session→catalog, profile =
+…→machine/exclusive→catalog; `test_catalog_tools`: status skips the session
+lock, `new_root` takes it). Touched `build.py`, `context.py` (isdir guard),
+`tests/`; the monkeypatch seams kept `test_build_fake` intact.
 
 **Phase 4 — session lifecycle + new tools.** `new_catalog`, `new_sub_session`,
 `new_successor_session`, `close_session`, `delist_session`,
