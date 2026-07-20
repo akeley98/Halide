@@ -1018,7 +1018,8 @@ Exports the entire catalog as a JSON object, with key/value pairs
 * `sessions`: session nodes
 
 Each value is itself an object, with keys being string full ID and values
-being JSON objects in the same format as the above JSON tools.
+being JSON objects in the same format as `json_schedule_info`,
+`json_idea_info`, and `json_session_info`.
 
 FUTURE: holds the exclusive catalog lock despite being conceptually read-only.
 Optimize this if needed, but this shouldn't be in the agent hot loop.
