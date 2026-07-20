@@ -11,6 +11,57 @@
 -->
 # Dendritic Halide Harness: Agents Prompt
 
+<!--
+
+dh_hl prompt:
+
+Task + harness intro
+
+* idea.md (harness usage)
+
+* loopdoc
+
+* Andrew's schedule guide; chunk it up.
+
+Part 1
+1. The mental model
+2. The default schedule is INLINE
+3. Directive reference
+
+Part 2
+4. The 95% schedule: one outer parallel loop + vectorize stride-1
+5. Inline cheap Funcs; schedule only the ones that earn it
+6. Exceptions: when to break the 95% shape
+
+Part 3
+7. The dev loop
+8. The profiler is your primary tool
+9. Reading `.stmt` for vectorization shape
+
+Part 4
+10. Sliding window for stencils
+11. Tiling and storage layout
+12. Pyramids
+13. Long stencil chains: periodic `compute_root` checkpoints
+14. Histograms / scatters
+15. compute_with for sibling Funcs (advanced)
+
+Part 5
+16. True axis-level recurrences
+17. The parallel loop must be OUTERMOST
+18. compute_at recompute multipliers
+19. Expensive producers inside RDoms: hoist them OUT
+20. Common mistakes catalog
+
+Part 6: Reference
+21. Pre-flight checklist
+22. Worked example
+23. When in doubt
+
+TODO write new loopdoc, but keep existing detail sections.
+
+-->
+
 This is an instruction for all agents.
 
 <!-- main -->
