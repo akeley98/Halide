@@ -83,8 +83,9 @@ this should be done by adding a legitimate child idea node.
 
 * The parent of a given session node must be older than the given session node.
 
-Unless otherwise specified, tools only avoid creating new violations,
-and do not diagnose existing violations.
+Generally, tools only check that new edges they create satisfy the invariants,
+and they don't diagnose pre-existing violations.
+**Exception:** tools check invariants as-needed to guard against infinite loops.
 
 *History note:* idea nodes used to have timestamps as well,
 and this made the timestamp invariant easier, but made
