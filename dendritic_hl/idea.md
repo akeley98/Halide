@@ -348,7 +348,7 @@ NOTE: [link to implementation details](impl.md) <!-- Update both docs if you cha
     synopsis with one "dh_hl <command> ..." line per command it documents;
     `dh_hl help <command>` locates the section by that command and prints it.
     One section may document several commands (they render together).
-  * "NOTE: [link ...]" lines and "<!-- ... -->" comments are stripped from the
+  * "NOTE: [link ...]" lines and HTML comment lines are stripped from the
     rendered help output.
 -->
 ## Tools
