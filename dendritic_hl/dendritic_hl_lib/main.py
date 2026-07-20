@@ -1,6 +1,8 @@
 """dh_hl command-line entry point: argparse dispatch + help tool."""
 
 import argparse
+import os
+import re
 import subprocess
 import sys
 
@@ -9,6 +11,70 @@ from . import safety
 from . import tools
 from . import build as build_mod
 from .errors import DhHlError
+
+# idea.md is the human-facing spec; `dh_hl help <command>` renders the relevant
+# tool section from it so the detailed per-command docs have a single source.
+# It sits one level above the package dir (dendritic_hl/idea.md); it is outside
+# the package, so a copy run detached from the repo won't find it -- callers
+# fall back to the COMMAND_HELP one-liner in that case.
+_IDEA_MD = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "idea.md")
+
+# A synopsis line inside a tool section, e.g. "    dh_hl status -s ..." (possibly
+# after a leading "# comment").  The command name is what we key sections by.
+_SYNOPSIS_RE = re.compile(r"^    (?:# .*)?dh_hl ([a-z_]+)\b")
+
+
+def _parse_idea_help(path=_IDEA_MD):
+    """Map each command name -> the text of the idea.md `### ... Tool` section
+    that documents it.  A section is keyed by the commands appearing in its
+    *leading* indented synopsis block (before the first prose line), so the
+    multi-command sections (e.g. the copy / id-of family) map all their commands
+    to the same shared section.  Returns {} if idea.md can't be read."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.read().split("\n")
+    except OSError:
+        return {}
+
+    # Split into "### ..." sections (stop each at the next ### or ## heading).
+    sections = []  # list of (heading, body_lines)
+    cur = None
+    for line in lines:
+        if line.startswith("### "):
+            cur = (line, [])
+            sections.append(cur)
+        elif line.startswith("## "):
+            cur = None  # a non-tool top-level section; ignore until next ###
+        elif cur is not None:
+            cur[1].append(line)
+
+    mapping = {}
+    for heading, body in sections:
+        # Commands in the leading synopsis block: scan indented lines until the
+        # first non-blank, non-indented (prose) line -- later code blocks are
+        # examples / cross-references, not this section's own synopsis.
+        cmds = []
+        for line in body:
+            if line.strip() == "":
+                continue
+            if not line.startswith("    "):
+                break  # reached prose; synopsis is over
+            m = _SYNOPSIS_RE.match(line)
+            if m:
+                cmds.append(m.group(1))
+        if not cmds:
+            continue
+        # Render the section: heading + body, dropping maintainer-only lines.
+        rendered = [heading]
+        for line in body:
+            if line.strip().startswith("NOTE: [link") or "<!--" in line:
+                continue
+            rendered.append(line)
+        text = "\n".join(rendered).strip("\n")
+        for c in cmds:
+            mapping.setdefault(c, text)
+    return mapping
 
 
 # name -> one-line description (also drives `dh_hl help`)
@@ -282,7 +348,12 @@ def cmd_help(args):
         return
     if args.topic not in COMMAND_HELP:
         raise DhHlError("no such command: " + args.topic)
-    print("{}: {}".format(args.topic, COMMAND_HELP[args.topic]))
+    # Detailed help: the idea.md tool section, if available; else the one-liner.
+    section = _parse_idea_help().get(args.topic)
+    if section is not None:
+        print(section)
+    else:
+        print("{}: {}".format(args.topic, COMMAND_HELP[args.topic]))
 
 
 def _cmd_exec(kind, rest):

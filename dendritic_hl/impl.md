@@ -337,6 +337,24 @@ Otherwise, the status is "workspace inconsistent, unexpected current idea state"
         Likely causes include user action, and git checkouts / merges.
 
 
+## Help Tool — Implementation Details
+
+`dh_hl help` (no arg) lists the `COMMAND_HELP` one-liners.  `dh_hl help
+<command>` renders the detailed `### ... Tool` section from **this repo's
+`idea.md`** — the single source for per-command detail — via
+`main._parse_idea_help()`.  That helper keys sections by the commands appearing
+in each section's leading indented `dh_hl <cmd>` synopsis block (not by heading
+name), so a multi-command section like "Copy Schedule, ID-of Schedule Tools"
+maps all its commands to the same shared text; maintainer-only lines (`NOTE:
+[link…]`, `<!-- … -->`) are stripped.  `idea.md` lives one level above the
+package dir, so a copy run detached from the repo won't find it — `help
+<command>` then falls back to the `COMMAND_HELP` one-liner.
+
+Doc/code stay bound by a test (`tests/test_help.py`) asserting the CLI command
+set equals the set of commands `_parse_idea_help()` finds — add a command
+without an idea.md tool section (or vice versa) and it fails.
+
+
 ## Build/Profile Tools — Implementation Details
 
     dh_hl build -s ... [parameters file]
