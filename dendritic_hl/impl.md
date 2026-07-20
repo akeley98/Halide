@@ -361,6 +361,31 @@ set equals the set of commands `_parse_idea_help()` finds — add a command
 without an idea.md tool section (or vice versa) and it fails.
 
 
+## Prompt Tool — Implementation Details
+
+`dh_hl prompt --main` / `--sub` assembles the standing agent prompt from the
+single source `prompt_common.md` (the same "one source, code emits the view"
+scheme as `help`), via `prompts.py`.  Content is COMMON unless wrapped in an
+audience *fence* — an HTML comment whose only word is `main`/`sub`, closed by
+`end main`/`end sub`.  `parse_prompt(text, audience)` emits common lines plus
+matching-audience lines, dropping the other audience's fenced regions, fence
+lines, and all HTML comments (the format-contract comment included); it then
+collapses the blank runs so the output reads cleanly.
+
+The audience is **explicit only** — never inferred from the session — so the
+prompt can double-check the agent's role (e.g. catch a sub-agent that was handed
+a main session).  argparse makes `--main`/`--sub` a required mutually-exclusive
+pair.
+
+`parse_prompt` is the format guard: it raises `DhHlError` on nesting, an
+unmatched/dangling fence, or a fence-shaped comment naming a non-`main`/`sub`
+audience (single-word comments are reserved for fences, so a typo fails loudly
+rather than silently leaking a region into both prompts).  The rules are spelled
+out in a FORMAT CONTRACT comment atop `prompt_common.md`.  Like idea.md, the file
+sits above the package dir; if missing, `prompt` errors cleanly (no fallback —
+the prompt has no default content).  Covered by `tests/test_prompt.py`.
+
+
 ## Build/Profile Tools — Implementation Details
 
     dh_hl build -s ... [parameters file]

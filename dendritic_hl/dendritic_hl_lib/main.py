@@ -155,6 +155,7 @@ COMMAND_HELP = {
     "view_session_commentary": "Show the session output's positive-importance commentary.",
     "json_session_info": "Dump the current session's state as JSON.",
     "json_export": "Dump the entire catalog (ideas, schedules, sessions) as JSON.",
+    "prompt": "Print the assembled main-agent or sub-agent prompt.",
 }
 
 
@@ -303,6 +304,13 @@ def _build_parser():
     add("json_session_info")
     add("json_export")
 
+    sp = add("prompt")
+    grp = sp.add_mutually_exclusive_group(required=True)
+    grp.add_argument("--main", action="store_true",
+                     help="emit the main-agent prompt")
+    grp.add_argument("--sub", action="store_true",
+                     help="emit the sub-agent prompt")
+
     return p
 
 
@@ -358,6 +366,7 @@ _DISPATCH = {
     "view_session_commentary": tools.cmd_view_session_commentary,
     "json_session_info": tools.cmd_json_session_info,
     "json_export": tools.cmd_json_export,
+    "prompt": tools.cmd_prompt,
 }
 
 

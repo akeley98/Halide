@@ -11,6 +11,7 @@ import sys
 
 from . import ids
 from . import locks
+from . import prompts
 from . import safety
 from .catalog import Catalog
 from .context import (Context, SessionWorkspace, resolve_target,
@@ -897,3 +898,14 @@ def cmd_view_commentary(args):
 def cmd_view_session_commentary(args):
     ctx = Context.for_session(args, session_lock=False)
     _print_commentary(_session_output_schedule(ctx), positive_only=True)
+
+
+# ---- prompt ---------------------------------------------------------------
+
+def cmd_prompt(args):
+    """Emit the assembled agent prompt.  The audience is given explicitly and is
+    NEVER inferred from the session, so the prompt can serve as an independent
+    double-check of the agent's role (main vs sub).  Needs no catalog/session."""
+    if bool(args.main) == bool(args.sub):
+        raise DhHlError("prompt requires exactly one of --main / --sub")
+    sys.stdout.write(prompts.load_prompt("main" if args.main else "sub"))

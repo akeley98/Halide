@@ -395,6 +395,20 @@ due to errors in the existing `current_idea_state.txt`.
 With no `[command]`, lists all commands briefly; with a `[command]`, describes that one.
 
 
+### Prompt Tool
+
+    dh_hl prompt --main
+    dh_hl prompt --sub
+
+Prints the standing agent prompt assembled from `prompt_common.md`, for either
+the main-agent (`--main`) or sub-agent (`--sub`) audience.
+Exactly one of `--main`/`--sub` is required.
+The audience is deliberately **not** inferred from the current session,
+so the prompt can double-check that the agent is running with the role it thinks
+it is (e.g. that a spawned sub-agent wasn't handed a main-agent's session).
+See `prompt_common.md` for the common/main/sub fence format.
+
+
 ### Status Tool
 
     # Does not acquire session lock
