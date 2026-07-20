@@ -16,12 +16,55 @@
 dh_hl prompt:
 
 Task + harness intro
+    * Are scheduling Halide
+    * Main/sub-agent distinction; orchestrate or flesh out an idea.
+    * Use
+
+* Golden Rules
+
+    * No background tasks
+    * Use your session handle always (read-only exception for main agent only)
+    * Don't run commands outside the Harness unless really needed
+
+Main agent:
+    * Case A: no catalog yet, assign yourself a session
+    * Case B: closed terminus
+    * Case C: unclear, ask, then run status
+
+Sub-agent
+    * Check current session, then run status.
+    * Ensure status
+
+Workflow:
+
+Always pass `-s`
+
+dh_hl workspace [problem if there isn't one -- main agent can recover]
+This is the file you will edit
+
+dh_hl status needs to be updated 
+
+dh_hl restore
+
+Agent launching rules
+
+Sub-agent: use commentary to give back information.
+
+================================================================================
 
 * idea.md (harness usage)
 
+================================================================================
+
 * loopdoc
 
+Rewrite to be better one day.
+Keep the existing detail sections though, probably.
+
+================================================================================
+
 * Andrew's schedule guide; chunk it up.
+  Also revise some language.
 
 Part 1
 1. The mental model
@@ -57,8 +100,6 @@ Part 6: Reference
 21. Pre-flight checklist
 22. Worked example
 23. When in doubt
-
-TODO write new loopdoc, but keep existing detail sections.
 
 -->
 

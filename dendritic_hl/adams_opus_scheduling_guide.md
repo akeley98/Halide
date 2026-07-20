@@ -1,3 +1,17 @@
+<!-- CLAUDE: read the doc paying attention to the following points:
+
+* The guide was written in a rather heavy-handed way.
+  Please flag places where the guide is more-or-less dictating the reader to do something,
+  without much room for nuance. Some of this tone may even be appropriate, (e.g. profiling
+  hygiene), but I'd like to review them all.
+
+* Look for content that may be obsolete due to dh_hl harness capabilities.
+
+* Look for tasks assigned to the reader that may be useful to incorporate to dh_hl.
+  A particularly important case: tasks involving ingesting profiler output.
+
+-->
+
 # A Concise Guide to CPU Scheduling in Halide (for LLMs)
 
 This is a compact, practical guide to writing a fast CPU **schedule** for a
@@ -1116,3 +1130,24 @@ stayed at 1.00. Stop here, or tune strip height once more.
 - If a change is more than a few lines of scheduling code, test after
   each line.
 - Trust the profiler and the `.stmt` file. Don't guess.
+
+<!-- CLAUDE:
+
+* The guide was written in a rather heavy-handed way.
+  Please flag places where the guide is more-or-less dictating the reader to do something,
+  without much room for nuance. Some of this tone may even be appropriate, (e.g. profiling
+  hygiene), but I'd like to review them all.
+
+* Please flag places in the guide where the harness capabilities makes obsolete the steps
+  being explained (e.g. profiling hygiene again). In fact, the advice to `kill`
+  will need to be removed since innocent lock-stalled `dh_hl` processes will be killed.
+
+* The profiler output isn't surfaced in a particularly structured way by `dh_hl`.
+  Based on the contents of this document, try to come up with some ideas for tools
+  that ingest the JSON benchmark info and give useful information.
+  (I didn't read this doc fully, so it's possible there's not much to go off of).
+  Also any other tasks that reasonably should be bundled into the harness.
+
+  You can see an example json output with `./dh_hl json_schedule_info -s tmp.aab`
+
+-->
