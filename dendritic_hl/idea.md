@@ -408,8 +408,6 @@ With no `[command]`, lists all commands briefly; with a `[command]`, describes t
 
 ### Status Tool
 
-IMPL TASK: needs to show session state.
-
     # Does not acquire session lock
     dh_hl status -s ...
 
@@ -492,8 +490,6 @@ depending on the number of parent idea nodes of the referenced schedule node.
 
 ### Build Tool
 
-IMPL TASK: re-phase and locking, as described in [impl.md](impl.md)
-
     dh_hl build -s ... [parameters file]
 
 This tool compiles the workspace file and adds/updates a schedule node for it. It:
@@ -536,8 +532,6 @@ NOTE: [link to implementation details](impl.md) <!-- Update both docs if you cha
 
 
 ### Profile Tool
-
-IMPL TASK: re-phase and locking, as described in [impl.md](impl.md)
 
     dh_hl profile -s ... [parameters file]
 
@@ -678,8 +672,6 @@ For each child idea node of the referenced schedule node, prints three lines:
 
 ### View Idea Tools
 
-IMPL TASK: `view_session_idea`
-
     # All commands do not acquire session lock
     dh_hl view_idea -C ... {idea ID}
     dh_hl view_session_idea -s ...
@@ -734,8 +726,6 @@ There is no predefined order of the schedules.
 
 ### View Commentary Tool
 
-IMPL TASK: implement new tool
-
     dh_hl view_commentary -C ... [schedule ID]
 
 Print all commentary of the referenced schedule node.
@@ -748,8 +738,6 @@ Prints each commentary file separated by dividers, with its
 
 
 ### View Session Commentary Tool
-
-IMPL TASK: implement new tool
 
     # Does not acquire session lock
     dh_hl view_session_commentary -s ...
@@ -808,8 +796,6 @@ for a parent schedule that's exclusively its own.
 
 ### New Catalog Tool
 
-IMPL TASK: implement new tool
-
     dh_hl new_catalog -C ... {proposal name} {proposal file} {input C++ file}
 
 Creates a new catalog directory with the bare minimum state to get started:
@@ -831,8 +817,6 @@ The new session node has no parent session.
 
 ### New Sub Session Tool
 
-IMPL TASK: implement new tool
-
     dh_hl new_sub_session -s ... {proposal name} {proposal file} [schedule ID]
 
 Create a new session/idea pair, with the given parent schedule.
@@ -840,8 +824,6 @@ The new session is a child of the current session with 1 greater depth.
 
 
 ### New Successor Session Tool
-
-IMPL TASK: implement new tool
 
     dh_hl new_successor_session -s ... {proposal name} {proposal file}
 
@@ -851,8 +833,6 @@ Create a new session/idea pair, with the output schedule of the current session 
 
 ### List Sessions Tools
 
-IMPL TASK: implement new tool
-
     dh_hl list_open_sessions -C ...
     dh_hl list_termini -C ...
 
@@ -861,8 +841,6 @@ Give both full session IDs and session handles.
 
 
 ### Close Session Tool
-
-IMPL TASK: implement new tool
 
     dh_hl close_session -s ... [schedule ID]
 
@@ -874,8 +852,6 @@ In the latter case, remind the caller of the `comment_importance` tool.
 
 ### Delist Session Tool
 
-IMPL TASK: implement new tool
-
     dh_hl delist_session -s ...
 
 Set the is-delisted flag of the current session to true.
@@ -883,8 +859,6 @@ Useful to get rid of old abandoned sessions in the open sessions or termini list
 
 
 ### Copy Schedule, ID-of Schedule Tools
-
-IMPL TASK: implement new tool
 
     # All commands do not acquire the session lock
     dh_hl copy_schedule -C ... {output file} [schedule ID]
@@ -928,8 +902,6 @@ NB see also `schedule_full_id`, `schedule_short_id`, `restore` tools.
 
 ### Workspace Location Tools
 
-IMPL TASK: implement new tool
-
     dh_hl workspace_schedule -s ...
     dh_hl workspace_bin -s ...
 
@@ -937,8 +909,6 @@ Get the filename of the workspace C++ file or bin directory, respectively.
 
 
 ### Locked Execution Tools
-
-IMPL TASK: implement new tool
 
     dh_hl exec --
     dh_hl exec_exclusive --
@@ -957,8 +927,6 @@ The `-s` session argument is not needed, but is accepted here for consistency.
 
 
 ### ID Translation Tools
-
-IMPL TASK: implement new tool
 
     # All commands do not acquire session lock
     dh_hl schedule_full_id -C ... [schedule ID]  # Print the full ID of the given schedule node
@@ -1028,8 +996,6 @@ Prints the state of the referenced idea node as a JSON object, with key/value pa
 
 ### JSON Session Info Tool
 
-IMPL TASK: implement new tool
-
     # Does not acquire session lock
     dh_hl json_session_info -s ...
 
@@ -1051,8 +1017,6 @@ Prints the state of the current session as a JSON object, with key/value pairs
 
 
 ### JSON Export Tool
-
-IMPL TASK: implement new tool
 
     dh_hl json_export -C ...
 
