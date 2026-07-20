@@ -1000,10 +1000,11 @@ schedule's C++; duplicates the parent as the new idea's canonical). Model suppor
 added in `catalog.py`: `mint_session_id`, `create_session(session_id=...)`,
 session-edge linking (`_ensure_session_linked` / `child_sessions`), and the
 derived predicates `session_is_closed` (self-closed, or a sub-session of a closed
-session — successor edges don't propagate; iterative up the parent chain with a
-timestamp-invariant loop guard per the tree-structure policy, so it terminates
-even on a cooked catalog) and `session_is_terminus` (depth 0, not delisted, no
-successor). The JSON builders were factored into
+session — successor edges don't propagate; iterative up the parent chain and, per
+the tree-structure loop-guard policy, RAISES if a sub-session step would violate
+the parent-older invariant rather than silently absorbing a cooked catalog — this
+both terminates the walk and surfaces the corruption) and `session_is_terminus`
+(depth 0, not delisted, no successor). The JSON builders were factored into
 `_schedule_json` / `_idea_json` / `_session_json` and reused by `json_export`.
 
 Session-tree invariants: parent-older-than-child is checked in `create_session`;

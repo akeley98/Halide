@@ -846,12 +846,13 @@ class Catalog:
         closed session.  Successor edges do NOT propagate closedness.
 
         Iterative walk up the sub-session parent chain.  Per the tree-structure
-        policy (idea.md), guard against infinite loops on a cooked catalog: every
-        step must go to a strictly-older session (the session timestamp
-        invariant), so the walk visits each session at most once and always
-        terminates.  A step that would violate the invariant is treated as a
-        broken edge and stops the walk (we do not diagnose pre-existing
-        violations, only avoid looping)."""
+        policy (idea.md), the walk must not loop on a cooked catalog: every step
+        up a sub-session edge must go to a strictly-older session (the session
+        timestamp invariant).  Rather than silently absorb a violation (which
+        would invite off-label reliance on the walk's behavior over corrupt
+        state), we RAISE on it -- this both terminates the walk and surfaces the
+        corruption.  Since each valid step is strictly older, the walk visits
+        each session at most once and always terminates."""
         current = session
         while True:
             if current.is_self_closed():
@@ -861,9 +862,12 @@ class Catalog:
                 return False
             parent = self.sessions[pid]
             if parent.depth != current.depth - 1:
-                return False  # successor edge or cooked: not a sub-session parent
+                return False  # successor edge (legit) or non-sub edge: don't walk
             if not (parent.timestamp < current.timestamp):
-                return False  # invariant violated -> stop rather than loop
+                raise DhHlError(
+                    "tree invariant violation: session {} is not older than its "
+                    "sub-session {} (cooked catalog)".format(
+                        parent.full_id, current.full_id))
             current = parent
 
     def session_is_terminus(self, session):
