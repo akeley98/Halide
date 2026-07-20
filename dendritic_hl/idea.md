@@ -339,6 +339,18 @@ This locking *never* fails for correct usage: failure to acquire is diagnosed as
 NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
 
 
+<!--
+  FORMAT CONTRACT for the code (main.py `_parse_idea_sections`): `dh_hl help`
+  renders its docs from this "## Tools" section, so keep the shape:
+  * The prose between this "## Tools" heading and the first "###" below is
+    printed verbatim by `dh_hl help` (no argument) as the common usage notes.
+  * Each tool is a "### <Name> Tool(s)" heading whose FIRST indented block is a
+    synopsis with one "dh_hl <command> ..." line per command it documents;
+    `dh_hl help <command>` locates the section by that command and prints it.
+    One section may document several commands (they render together).
+  * "NOTE: [link ...]" lines and "<!-- ... -->" comments are stripped from the
+    rendered help output.
+-->
 ## Tools
 
 The tools are invoked with `dh_hl {tool name} args...`.

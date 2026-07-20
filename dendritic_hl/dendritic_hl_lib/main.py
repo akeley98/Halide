@@ -25,29 +25,52 @@ _IDEA_MD = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 _SYNOPSIS_RE = re.compile(r"^    (?:# .*)?dh_hl ([a-z_]+)\b")
 
 
-def _parse_idea_help(path=_IDEA_MD):
-    """Map each command name -> the text of the idea.md `### ... Tool` section
-    that documents it.  A section is keyed by the commands appearing in its
-    *leading* indented synopsis block (before the first prose line), so the
-    multi-command sections (e.g. the copy / id-of family) map all their commands
-    to the same shared section.  Returns {} if idea.md can't be read."""
+def _strip_maintainer_lines(lines):
+    """Drop lines that are for maintainers, not `dh_hl help` readers."""
+    return [ln for ln in lines
+            if not ln.strip().startswith("NOTE: [link") and "<!--" not in ln]
+
+
+def _parse_idea_sections(path=_IDEA_MD):
+    """Parse the idea.md "## Tools" section.  Returns `(intro, mapping)`:
+
+    * `intro` — the prose between the "## Tools" heading and the first "###"
+      tool section (the common usage notes shown by `dh_hl help` with no arg).
+    * `mapping` — command name -> the text of the "### ... Tool" section that
+      documents it, keyed by the commands in each section's *leading* indented
+      synopsis block (so a multi-command section maps all its commands to the
+      same shared text).
+
+    Maintainer-only lines are stripped from both.  Returns `("", {})` if idea.md
+    can't be read.  See the FORMAT CONTRACT comment above "## Tools" in idea.md."""
     try:
         with open(path, "r", encoding="utf-8") as f:
             lines = f.read().split("\n")
     except OSError:
-        return {}
+        return "", {}
 
-    # Split into "### ..." sections (stop each at the next ### or ## heading).
-    sections = []  # list of (heading, body_lines)
+    intro_lines = None       # collecting the "## Tools" intro (until first "###")
+    intro_captured = []      # the finished intro (saved at that first "###")
+    sections = []            # list of (heading, body_lines)
     cur = None
     for line in lines:
         if line.startswith("### "):
+            if intro_lines is not None:
+                intro_captured = intro_lines  # intro ends at the first tool section
+            intro_lines = None
             cur = (line, [])
             sections.append(cur)
         elif line.startswith("## "):
-            cur = None  # a non-tool top-level section; ignore until next ###
+            cur = None
+            intro_lines = [] if line.strip() == "## Tools" else None
+        elif intro_lines is not None:
+            intro_lines.append(line)
         elif cur is not None:
             cur[1].append(line)
+    if intro_lines is not None:  # "## Tools" had no following "###" (degenerate)
+        intro_captured = intro_lines
+
+    intro = "\n".join(_strip_maintainer_lines(intro_captured)).strip("\n")
 
     mapping = {}
     for heading, body in sections:
@@ -65,16 +88,15 @@ def _parse_idea_help(path=_IDEA_MD):
                 cmds.append(m.group(1))
         if not cmds:
             continue
-        # Render the section: heading + body, dropping maintainer-only lines.
-        rendered = [heading]
-        for line in body:
-            if line.strip().startswith("NOTE: [link") or "<!--" in line:
-                continue
-            rendered.append(line)
-        text = "\n".join(rendered).strip("\n")
+        text = "\n".join([heading] + _strip_maintainer_lines(body)).strip("\n")
         for c in cmds:
             mapping.setdefault(c, text)
-    return mapping
+    return intro, mapping
+
+
+def _parse_idea_help(path=_IDEA_MD):
+    """The command -> section mapping (see `_parse_idea_sections`)."""
+    return _parse_idea_sections(path)[1]
 
 
 # name -> one-line description (also drives `dh_hl help`)
@@ -344,6 +366,9 @@ def cmd_help(args):
         print("dh_hl commands:\n")
         for name in COMMAND_HELP:
             print("  {:20} {}".format(name, COMMAND_HELP[name]))
+        intro, _ = _parse_idea_sections()
+        if intro:
+            print("\n" + intro)
         print("\nUse `dh_hl help <command>` or `dh_hl <command> -h` for details.")
         return
     if args.topic not in COMMAND_HELP:

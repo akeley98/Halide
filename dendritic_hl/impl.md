@@ -339,16 +339,22 @@ Otherwise, the status is "workspace inconsistent, unexpected current idea state"
 
 ## Help Tool — Implementation Details
 
-`dh_hl help` (no arg) lists the `COMMAND_HELP` one-liners.  `dh_hl help
-<command>` renders the detailed `### ... Tool` section from **this repo's
-`idea.md`** — the single source for per-command detail — via
-`main._parse_idea_help()`.  That helper keys sections by the commands appearing
-in each section's leading indented `dh_hl <cmd>` synopsis block (not by heading
-name), so a multi-command section like "Copy Schedule, ID-of Schedule Tools"
-maps all its commands to the same shared text; maintainer-only lines (`NOTE:
-[link…]`, `<!-- … -->`) are stripped.  `idea.md` lives one level above the
-package dir, so a copy run detached from the repo won't find it — `help
-<command>` then falls back to the `COMMAND_HELP` one-liner.
+Both help views render from **this repo's `idea.md`** (the single source), via
+`main._parse_idea_sections()`, which returns `(intro, mapping)`:
+
+* `dh_hl help` (no arg) lists the `COMMAND_HELP` one-liners, then prints the
+  `intro` — the prose between the "## Tools" heading and the first "###" tool
+  section (the shared argument conventions).
+* `dh_hl help <command>` prints `mapping[command]` — the detailed "### ... Tool"
+  section, keyed by the commands in each section's leading indented `dh_hl <cmd>`
+  synopsis block (not by heading name), so a multi-command section like "Copy
+  Schedule, ID-of Schedule Tools" maps all its commands to the same shared text.
+
+Maintainer-only lines (`NOTE: [link…]`, `<!-- … -->`) are stripped from both.
+The format `_parse_idea_sections` relies on is spelled out in a FORMAT CONTRACT
+comment just above "## Tools" in `idea.md`.  `idea.md` lives one level above the
+package dir, so a copy run detached from the repo won't find it — `help` then
+degrades to the command list / one-liner (no crash).
 
 Doc/code stay bound by a test (`tests/test_help.py`) asserting the CLI command
 set equals the set of commands `_parse_idea_help()` finds — add a command

@@ -13,6 +13,24 @@ def test_every_command_is_documented_in_idea_md():
     assert set(main._parse_idea_help()) == set(main.COMMAND_HELP)
 
 
+def test_top_level_help_includes_tools_intro(capsys):
+    """`dh_hl help` (no arg) lists commands AND prints the shared "## Tools"
+    intro (argument conventions) from idea.md."""
+    main.cmd_help(types.SimpleNamespace(topic=None))
+    out = capsys.readouterr().out
+    assert "dh_hl commands:" in out
+    assert "`{...}` (curly brackets) means a mandatory argument." in out
+    assert "`-` means stdin for any input file argument." in out
+    # ends with the detail hint
+    assert out.rstrip().endswith("for details.")
+
+
+def test_parse_sections_returns_intro_and_mapping():
+    intro, mapping = main._parse_idea_sections()
+    assert "The tools are invoked with" in intro
+    assert set(mapping) == set(main.COMMAND_HELP)
+
+
 def test_help_renders_full_idea_section(capsys):
     main.cmd_help(types.SimpleNamespace(topic="status"))
     out = capsys.readouterr().out
