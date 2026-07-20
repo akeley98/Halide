@@ -843,16 +843,28 @@ class Catalog:
 
     def session_is_closed(self, session):
         """Self-closed (output schedule or delisted), or a sub-session of a
-        closed session.  Successor edges do NOT propagate closedness."""
-        if session.is_self_closed():
-            return True
-        pid = session.parent_id
-        if pid is not None and pid in self.sessions:
+        closed session.  Successor edges do NOT propagate closedness.
+
+        Iterative walk up the sub-session parent chain.  Per the tree-structure
+        policy (idea.md), guard against infinite loops on a cooked catalog: every
+        step must go to a strictly-older session (the session timestamp
+        invariant), so the walk visits each session at most once and always
+        terminates.  A step that would violate the invariant is treated as a
+        broken edge and stops the walk (we do not diagnose pre-existing
+        violations, only avoid looping)."""
+        current = session
+        while True:
+            if current.is_self_closed():
+                return True
+            pid = current.parent_id
+            if pid is None or pid not in self.sessions:
+                return False
             parent = self.sessions[pid]
-            if parent.depth == session.depth - 1:  # sub-session edge
-                # Depth strictly decreases up sub-edges, so this terminates.
-                return self.session_is_closed(parent)
-        return False
+            if parent.depth != current.depth - 1:
+                return False  # successor edge or cooked: not a sub-session parent
+            if not (parent.timestamp < current.timestamp):
+                return False  # invariant violated -> stop rather than loop
+            current = parent
 
     def session_is_terminus(self, session):
         """Top-level (depth 0), not delisted, and no successor sessions."""

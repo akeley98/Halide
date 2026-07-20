@@ -8,9 +8,9 @@ import os
 
 import pytest
 
-from dendritic_hl_lib import tools
+from dendritic_hl_lib import ids, safety, tools
 from dendritic_hl_lib.errors import DhHlError
-from conftest import ns
+from conftest import ns, open_catalog
 
 
 def _out(run_tool, capsys, fn, args):
@@ -214,3 +214,43 @@ def test_json_export_has_all_categories(session, run_tool, capsys):
     assert session.session_id in obj["sessions"]
     assert len(obj["schedules"]) == 2  # root + canonical dup
     assert len(obj["ideas"]) == 1
+
+
+# ---- session_is_closed loop guard (cooked catalog) ------------------------
+
+def _write_session_dir(cat_dir, sid, seed_idea, parent=None, delisted=False):
+    d = os.path.join(cat_dir, "session", sid)
+    os.makedirs(d)
+    with open(os.path.join(d, "seed_idea.txt"), "w") as f:
+        f.write(seed_idea + "\n")
+    if parent is not None:
+        with open(os.path.join(d, "parent.txt"), "w") as f:
+            f.write(parent + "\n")
+    if delisted:
+        open(os.path.join(d, "delisted.txt"), "w").close()
+
+
+def test_session_is_closed_guards_bad_parent_edge(tmp_path):
+    """A sub-session whose parent is NOT strictly older (a tree-invariant
+    violation on a cooked catalog) must not propagate closedness through the
+    broken edge, and the walk must terminate (idea.md loop-guard policy)."""
+    cat_dir = str(tmp_path / "proj.dh_hl")
+    cat = open_catalog(cat_dir)
+    cat.ensure_created()
+    R = cat.create_schedule("r", parent_idea=None)
+    I = cat.create_idea(R, "seed", "x\n")
+    cat.flush()
+    safety.commit()
+
+    # Craft a depth-0 delisted (self-closed) parent that is NEWER than its
+    # depth-1 "child" -- i.e. the parent-older invariant is violated.
+    parent_id = ids.make_session_id(0, "2026-07-20T120000_000000Z", "u", "h")
+    child_id = ids.make_session_id(1, "2026-07-20T110000_000000Z", "u", "h")
+    _write_session_dir(cat_dir, parent_id, I.full_id, delisted=True)
+    _write_session_dir(cat_dir, child_id, I.full_id, parent=parent_id)
+
+    cat2 = open_catalog(cat_dir)  # fresh view
+    # Parent is self-closed; the child would inherit that -- but the edge is
+    # invalid, so the guard stops the walk and the child is treated as open.
+    assert cat2.session_is_closed(cat2.get_session(parent_id)) is True
+    assert cat2.session_is_closed(cat2.get_session(child_id)) is False
