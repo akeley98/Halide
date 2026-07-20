@@ -723,7 +723,8 @@ Session edges:
   violation (see the note in that method / the History Tool's analogous guard).
 
 FUTURE: consolidating all of these into one checked-edge helper is still
-advisable; each edge-creating site currently checks inline.
+advisable if we end up adding more entry-points that add edges;
+each edge-creating site currently checks inline.
 
 
 ### Tool Safety: Timestamp Conflicts
