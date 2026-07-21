@@ -407,9 +407,12 @@ With no `[command]`, lists all commands briefly; with a `[command]`, describes t
     dh_hl detail name
     dh_hl examples name
 
-The `prompt` tool prints the standing agent prompt.
+The `prompt` tool prints the standing agent prompt,
 for either the main-agent (`--main`) or sub-agent (`--sub`) audience.
 Exactly one of `--main`/`--sub` is required.
+The audience is deliberately **not** inferred from the current session,
+so the prompt can double-check that the agent is running with the role it thinks
+it is (e.g. that a spawned sub-agent wasn't handed a main-agent's session).
 
 The prompt mentions supplemental documents in the `detail/` or
 `examples/` directory, which are part of the harness source repo.

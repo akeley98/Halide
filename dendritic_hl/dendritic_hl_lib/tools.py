@@ -1023,3 +1023,13 @@ def cmd_prompt(args):
     if bool(args.main) == bool(args.sub):
         raise DhHlError("prompt requires exactly one of --main / --sub")
     sys.stdout.write(prompts.load_prompt("main" if args.main else "sub"))
+
+
+def cmd_detail(args):
+    """Print a supplemental document from the harness source `detail/` dir."""
+    sys.stdout.write(prompts.load_doc("detail", args.name))
+
+
+def cmd_examples(args):
+    """Print an example file from the harness source `examples/` dir."""
+    sys.stdout.write(prompts.load_doc("examples", args.name))

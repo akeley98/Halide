@@ -162,6 +162,8 @@ COMMAND_HELP = {
     "json_session_info": "Dump the current session's state as JSON.",
     "json_export": "Dump the entire catalog (ideas, schedules, sessions) as JSON.",
     "prompt": "Print the assembled main-agent or sub-agent prompt.",
+    "detail": "Print a supplemental document from the harness `detail/` dir.",
+    "examples": "Print an example file from the harness `examples/` dir.",
 }
 
 
@@ -331,6 +333,12 @@ def _build_parser():
     grp.add_argument("--sub", action="store_true",
                      help="emit the sub-agent prompt")
 
+    sp = add("detail")
+    sp.add_argument("name", help="file name inside the detail/ directory")
+
+    sp = add("examples")
+    sp.add_argument("name", help="file name inside the examples/ directory")
+
     return p
 
 
@@ -393,6 +401,8 @@ _DISPATCH = {
     "json_session_info": tools.cmd_json_session_info,
     "json_export": tools.cmd_json_export,
     "prompt": tools.cmd_prompt,
+    "detail": tools.cmd_detail,
+    "examples": tools.cmd_examples,
 }
 
 

@@ -387,12 +387,20 @@ without an idea.md tool section (or vice versa) and it fails.
 
 ## Prompt Tools — Implementation Details
 
-IMPL TASK: update `prompt` tool, add `doc_detail`
+    dh_hl prompt --main
+    dh_hl prompt --sub
+    dh_hl detail name
+    dh_hl examples name
 
-The `prompt` tool concatenates four processed files together, in order:
+All three live in `prompts.py` (the assembly logic) with thin `cmd_*` wrappers
+in `tools.py`; none needs a catalog or session (they read the harness *source*
+repo, one level above the package dir, via `prompts._REPO_DIR`).
 
-* `prompt_commond.md`, with main/sub-agent specialization and HTML
-  comments removed.
+`prompt` (`prompts.load_prompt`) concatenates four processed docs, in order,
+separated by a single blank line:
+
+* `prompt_common.md`, with main/sub-agent specialization applied AND HTML
+  comments removed (`parse_prompt`, below).
 
 * `idea.md`, with HTML comments removed
 
@@ -400,16 +408,30 @@ The `prompt` tool concatenates four processed files together, in order:
 
 * `adams_opus_scheduling_guide.md`, with HTML comments removed
 
-The `detail` and `examples` tools take the name of a file inside
-the `detail/` or `examples/` directory, respectively, and prints it.
-Give a clean error if the filename is wrong (including attempts
-to read other directories -- consider sanitizing by ensuring
-`os.path.split(...)[0] == ""`).
-The only processing done is comment removal for Markdown files.
+The doc list is `prompts._PROMPT_DOCS`; `load_prompt(audience, path)` reads
+`prompt_common.md` from `path` and the other docs from that same directory, so a
+detached copy missing any of them errors cleanly (`_read_source` →
+`DhHlError`).  "HTML comments removed" is `prompts.strip_html_comments`: a
+non-greedy `<!--.*?-->` (DOTALL) substitution that drops inline *and*
+multi-line comments, followed by `_collapse_blanks`.
 
-IMPL TASK: document the actual sanitization method.
+`detail`/`examples` (`prompts.load_doc(kind, name)`) print a named file from the
+harness source `detail/` or `examples/` directory, applying the same HTML-comment
+removal but ONLY to Markdown files (`name.endswith(".md")`); other files (e.g.
+example `.cpp`/`.hpp`) are emitted verbatim.
 
-**Main/sub-agent specialization:** `prompt_command.md` content is
+**Sanitization (implemented).** The sole filename check is
+`os.path.split(name)[0] == ""`: `name` must have no directory part.  This
+rejects every path separator form — a leading `/` (absolute), any embedded
+`sub/x`, a `../` escape, and a trailing `foo/` — because `os.path.split` puts
+all of those in the head.  A bare `.` or `..` slips through the split check
+(head is `""`) but then `open()` hits the directory and raises `IsADirectoryError`,
+which is caught and reported as a clean "cannot read {kind} file" `DhHlError`.
+So directory traversal is impossible: reads are confined to a direct child of
+the fixed `detail/`/`examples/` directory.  A missing file is likewise a clean
+`DhHlError`, not a traceback.
+
+**Main/sub-agent specialization:** `prompt_common.md` content is
 COMMON unless wrapped in an audience *fence* — an HTML comment whose
 only word is `main`/`sub`, closed by `end main`/`end sub`.
 
