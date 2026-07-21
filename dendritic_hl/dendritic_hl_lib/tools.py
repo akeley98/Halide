@@ -97,7 +97,8 @@ INCONSISTENT_WARNING = """\
 AGENTS: If this is the first time editing this file this session,
 this means the file was edited without correct harness tracking.
 DO NOT PROCEED, unless you have been advised otherwise.
-Likely causes include user action, and git checkouts / merges."""
+Likely causes include user action, git checkouts / merges,
+or concurrent/interrupted agent sessions."""
 
 _SUBAGENT_NO_WORKSPACE = """\
 AGENTS: the current session is a sub-agent session,
@@ -209,7 +210,7 @@ def cmd_restore_idea(args):
                     if idea.canonical in catalog.schedules else idea.canonical)
         print("WARNING: this idea already has a canonical schedule: " + canon_id)
         print("  To start from that implementation instead, use:")
-        print("    dh_hl restore_schedule " + canon_id)
+        print("    dh_hl restore_schedule -s ... " + canon_id)
 
 
 # ---------------------------------------------------------------------------

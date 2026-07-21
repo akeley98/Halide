@@ -189,7 +189,8 @@ and the full ID of a session node within the catalog.
 The pair can be succinctly communicated using "session handles",
 described a few sections later.
 
-**Session Golden Rule:** two concurrent agents must never have the current session.
+**Session Golden Rule:** two concurrent agents must never have the same
+current session, unless the tool is marked as an exception (`does not acquire session lock`)
 The session lock (see "Locking") will catch many such violations,
 but will not prevent observing a partial edit to the workspace C++ file.
 
@@ -1127,6 +1128,39 @@ short ID can silently *change meaning*
 (as opposed to become ambiguous, with a diagnostic).
 However, this tool should be very rarely used,
 only needed for dealing with regrettable git merges.
+
+
+## Main Agent Default Session Behavior
+
+This step gives reasonable defaults, which take second priority to the
+user's instructions or more authoritative prompts.
+
+If the user provided an existing C++ file, suggest the `new_catalog`
+tool with a reasonable directory location, and execute the tool if approved.
+
+If the user provided an existing `*.dh_hl` catalog,
+inspect it with the `list_termini` tool.
+If there's exactly one terminus, adopt it as your current session
+and inspect it with `dh_hl status`.
+
+* If there's an output schedule node (closed),
+  use the `new_successor_session` tool,
+  and adopt the successor as your current session.
+  Add a reasonable proposal (prompt for yourself) if you have more specific
+  goals for the session, or just write a generic description if not.
+
+* Otherwise, advise the user that there may be another session
+  already running. Advise them to close that session explicitly if possible,
+  but that you can start anyway if that session is not running concurrently.
+  If the user wants you to start anyway, follow the `dh_hl status` advice.
+
+Unless advised otherwise, obey any warnings given by `dh_hl status`
+and advise the user of it.
+
+If none of these cases (e.g. multiple termini),
+then the user needs to provide more specific intentions.
+The user may not be familiar with the harness.
+Try to advise of the implications of various actions.
 
 
 ## Generator Parameters JSON Object Format

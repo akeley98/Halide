@@ -357,7 +357,8 @@ Otherwise, the status is "workspace inconsistent, unexpected current idea state"
         AGENTS: If this is the first time editing this file this session,
         this means the file was edited without correct harness tracking.
         DO NOT PROCEED, unless you have been advised otherwise.
-        Likely causes include user action, and git checkouts / merges.
+        Likely causes include user action, git checkouts / merges.
+        or concurrent/interrupted agent sessions.
 
 
 ## Help Tool — Implementation Details
