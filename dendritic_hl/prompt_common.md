@@ -42,7 +42,7 @@ Always pass `-s`
 dh_hl workspace [problem if there isn't one -- main agent can recover]
 This is the file you will edit
 
-dh_hl status needs to be updated 
+dh_hl status needs to be updated
 
 dh_hl restore
 
@@ -121,16 +121,53 @@ Halide program.
 <!-- end sub -->
 
 You will use the Dendritic Halide Harness to track progress on this task.
-The tool is usually invoked on the CLI with `dh_hl`;
+The harness tool is usually invoked on the CLI with `dh_hl`;
 this was the same tool used to generate this prompt.
+
 
 # The Harness
 
-The process of 
+The process of optimizing a Halide program often takes the form of a
+tree search. Each schedule is a node of the tree, and various
+branches explore different mutations to the schedule.
+Some explorations work out well and lead to further refinements,
+and some fail and will get backtracked.
 
-as well as manage 
+The harness makes this process explicit by recording this
+"tree history" on disk as a **catalog**.
+It also takes the responsibility of building and profiling Halide programs,
+with other harness users locked-out from using the CPU during profiling.
 
-TODO
+The catalog tree structure is built out of
+
+* **Schedule Nodes**, which hold a snapshot of a Halide program,
+  and a history of benchmarking/profiler results for those programs.
+
+* **Idea Nodes**, which are child nodes of a schedule nodes,
+  holding plain text proposals of changes to that schedule.
+  The idea nodes may in turn have child schedule nodes:
+  implementations of that plain text idea.
+
+* **Session Nodes**, which form a separate tree structure.
+  Each agent interacts with the harness through an assigned session node,
+  referenced via a **session handle**.
+  A session is *opened* with a seed idea and *closed* with an output schedule.
+
+Multiple agents can work on the same catalog simultaneously,
+as long as each uses their own session handle.
+As an agent, you will contribute to scheduling by suggesting
+new idea nodes, implementing schedules for those ideas,
+or orchestrating sub-agents thath do those tasks.
+
+The following prompt gives a summary of the harness workflow.
+It will be followed by:
+
+* More detailed usage information on the Dendritic Halide Harness
+
+* A guide explaining the concepts behind how Halide schedules
+  get converted into the output program's loop nest
+
+* A guide giving suggestions on how to produce a Halide schedule
 
 
 # Important Requirements
@@ -221,7 +258,7 @@ Interact with this list using the `list_private_ideas` and `delete_private_idea`
 
 ## Choice B: Implement an Idea
 
-Pick an idea to be your "current idea".
+Pick an idea to be your "current idea" (e.g. pick from `list_private_ideas_todo`).
 Use `dh_hl restore_idea` to prepare your workspace for implementing it.
 This will wipe whatever schedule was in your workspace before.
 
@@ -235,8 +272,8 @@ We want to track every schedule created, even if it's problematic or didn't comp
 Some ideas will require multiple attempts to implement.
 Don't force yourself to "one shot" complicated ideas.
 
-If you are satisfied with the implementation of the idea, then use `dh_hl canon`
-to set your code as the "canonical schedule" of the idea.
+If you are satisfied with the implementation of the idea,
+then use `dh_hl canon` to set your code as the "canonical schedule" of the idea.
 This canonical schedule is eligible to have child ideas added.
 
 ## Choice C: Launch Sub-agent
@@ -315,17 +352,3 @@ If they are sure, use the `new_successor_session` to assign yourself
 a new session handle (remember this leads to a new workspace assignment).
 This needs to be closed just like the original session.
 <!-- end main -->
-
-
-# Additional Information
-
-This prompt will be followed by
-
-* More detailed usage information on the Dendritic Halide Harness
-
-* A guide explaining the concepts behind how Halide schedules
-  get converted into the output program's loop nest
-
-* A guide giving suggestions on how to produce a Halide schedule
-
-
