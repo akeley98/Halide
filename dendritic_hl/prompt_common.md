@@ -39,7 +39,7 @@ Workflow:
 
 Always pass `-s`
 
-dh_hl workspace [problem if there isn't one -- main agent can recover]
+dh_hl workspace_schedule [problem if there isn't one -- main agent can recover]
 This is the file you will edit
 
 dh_hl status needs to be updated
@@ -207,13 +207,13 @@ It will be followed by:
 
 <!-- main -->
 * Don't edit any code files in the catalog other than the file
-  assigned by `dh_hl workspace` for this session.
+  assigned by `dh_hl workspace_schedule` for this session.
   This rule is waived if doing such forced edits is unambiguously
   necessary for an assigned task (e.g. fixing git merge conflicts).
 <!-- end main -->
 <!-- sub -->
 * NEVER edit any code files in the catalog other than the file
-  assigned by the `workspace` tool for this session.
+  assigned by the `workspace_schedule` tool for this session.
 <!-- end sub -->
 
 
@@ -232,7 +232,7 @@ It will be followed by:
    to the agent that invoked you.
 <!-- end sub -->
 
-2. Use `dh_hl workspace` to find your assigned C++ file location.
+2. Use `dh_hl workspace_schedule` to find your assigned C++ file location.
    Overwrite or edit this file to generate new Halide schedules.
    This "workspace" will never change for a given session handle.
 
@@ -264,7 +264,7 @@ Use `dh_hl restore_idea` to prepare your workspace for implementing it.
 This will wipe whatever schedule was in your workspace before.
 
 You can then edit the workspace file to implement the current idea
-(reminder: `dh_hl workspace`).
+(reminder: `dh_hl workspace_schedule`).
 Build or profile your workspace code with the `dh_hl build` and `dh_hl profile` tools.
 This also has the effect of creating a child schedule node of the current idea.
 
