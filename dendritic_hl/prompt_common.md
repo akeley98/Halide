@@ -22,7 +22,7 @@ Task + harness intro
 
 * Golden Rules
 
-    * No background tasks
+    * No background tasks EXCEPT for launching other agents with their own session
     * Use your session handle always (read-only exception for main agent only)
     * Don't run commands outside the Harness unless really needed
 
