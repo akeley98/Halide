@@ -400,18 +400,23 @@ due to errors in the existing `current_idea_state.txt`.
 With no `[command]`, lists all commands briefly; with a `[command]`, describes that one.
 
 
-### Prompt Tool
+### Prompt Tools
 
     dh_hl prompt --main
     dh_hl prompt --sub
+    dh_hl detail name
+    dh_hl examples name
 
-Prints the standing agent prompt assembled from `prompt_common.md`, for either
-the main-agent (`--main`) or sub-agent (`--sub`) audience.
+The `prompt` tool prints the standing agent prompt.
+for either the main-agent (`--main`) or sub-agent (`--sub`) audience.
 Exactly one of `--main`/`--sub` is required.
-The audience is deliberately **not** inferred from the current session,
-so the prompt can double-check that the agent is running with the role it thinks
-it is (e.g. that a spawned sub-agent wasn't handed a main-agent's session).
-See `prompt_common.md` for the common/main/sub fence format.
+
+The prompt mentions supplemental documents in the `detail/` or
+`examples/` directory, which are part of the harness source repo.
+The `detail` and `examples` tools fetch a named file from those
+respective directories and prints it to `stdout`.
+
+NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
 
 
 ### Status Tool

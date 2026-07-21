@@ -385,13 +385,35 @@ set equals the set of commands `_parse_idea_help()` finds — add a command
 without an idea.md tool section (or vice versa) and it fails.
 
 
-## Prompt Tool — Implementation Details
+## Prompt Tools — Implementation Details
 
-`dh_hl prompt --main` / `--sub` assembles the standing agent prompt from the
-single source `prompt_common.md` (the same "one source, code emits the view"
-scheme as `help`), via `prompts.py`.  Content is COMMON unless wrapped in an
-audience *fence* — an HTML comment whose only word is `main`/`sub`, closed by
-`end main`/`end sub`.  `parse_prompt(text, audience)` emits common lines plus
+IMPL TASK: update `prompt` tool, add `doc_detail`
+
+The `prompt` tool concatenates four processed files together, in order:
+
+* `prompt_commond.md`, with main/sub-agent specialization and HTML
+  comments removed.
+
+* `idea.md`, with HTML comments removed
+
+* `loopdoc.md`, with HTML comments removed
+
+* `adams_opus_scheduling_guide.md`, with HTML comments removed
+
+The `detail` and `examples` tools take the name of a file inside
+the `detail/` or `examples/` directory, respectively, and prints it.
+Give a clean error if the filename is wrong (including attempts
+to read other directories -- consider sanitizing by ensuring
+`os.path.split(...)[0] == ""`).
+The only processing done is comment removal for Markdown files.
+
+IMPL TASK: document the actual sanitization method.
+
+**Main/sub-agent specialization:** `prompt_command.md` content is
+COMMON unless wrapped in an audience *fence* — an HTML comment whose
+only word is `main`/`sub`, closed by `end main`/`end sub`.
+
+`parse_prompt(text, audience)` emits common lines plus
 matching-audience lines, dropping the other audience's fenced regions, fence
 lines, and all HTML comments (the format-contract comment included); it then
 collapses the blank runs so the output reads cleanly.
