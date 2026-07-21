@@ -137,23 +137,7 @@ Inside the `private/{session id}` sub-directory, there is
 
 * `bin/` directory
 
-* `private_ideas.txt`, the session private idea list: one idea node full ID
-  per line, newline-terminated, in the order the ideas were added, with **new
-  ideas appended to the END (bottom)** of the file. The file is absent until
-  the first idea is added (an empty list reads as no file). It is not robust to
-  malformed data: blank lines are skipped, and any line that is not the full ID
-  of an existing idea node is silently ignored by the listing tools (this can
-  happen after a git checkout desyncs the gitignored workspace from the catalog
-  graph). Because new IDs go on the bottom, `dh_hl list_private_ideas` prints
-  the list **backwards** (reads the file, reverses it) so the most recently
-  added idea is shown first. `SessionWorkspace.{read,add,remove}_private_idea`
-  (context.py) own this file; mutations go through `safety.write_allowed`
-  (whole-file rewrite), so they participate in the deferred-overwrite/rollback
-  machinery like the other workspace files.
-  Interacting tools: `new_idea` and the session-creation flow append (the
-  latter to the *parent/current* session's list, and `new_catalog` appends to
-  nothing since it has no parent session); `forget_private_idea` removes;
-  `list_private_ideas[_todo|_done]` read.
+* `private_ideas.txt`, the session private idea list
 
 Any command accessing `private/` or giving paths to it (`dh_hl bin` etc.)
 must initialize `private/{session id}` and its contents lazily,
@@ -173,6 +157,27 @@ It's a single line with trailing newline holding
 FUTURE: there's a bunch of "merge conflict" handling that's not really useful at the moment.
 If it's relatively harmless, I'd like to keep it for now,
 in case circumstances cause me to again change my mind about gitignoring `current_idea_state.txt`.
+
+
+### Private Ideas List State on Disk
+
+one idea node full ID per line, newline-terminated, in the order the ideas were added,
+
+with **new ideas appended to the END (bottom)** of the file. The file is absent
+until the first idea is added (an empty list reads as no file). It is not robust to
+malformed data: blank lines are skipped, and any line that is not the full ID
+of an existing idea node is silently ignored by the listing tools (this can
+happen after a git checkout desyncs the gitignored workspace from the catalog
+graph). Because new IDs go on the bottom, `dh_hl list_private_ideas` prints
+the list **backwards** (reads the file, reverses it) so the most recently
+added idea is shown first. `SessionWorkspace.{read,add,remove}_private_idea`
+(context.py) own this file; mutations go through `safety.write_allowed`
+(whole-file rewrite), so they participate in the deferred-overwrite/rollback
+machinery like the other workspace files.
+Interacting tools: `new_idea` and the session-creation flow append (the
+latter to the *parent/current* session's list, and `new_catalog` appends to
+nothing since it has no parent session); `forget_private_idea` removes;
+`list_private_ideas[_todo|_done]` read.
 
 
 ## Session Handles on Disk
