@@ -137,6 +137,13 @@ Inside the `private/{session id}` sub-directory, there is
 
 * `bin/` directory
 
+* IMPL TASK: pick a reasonable format for storing
+  the private idea list and document it here.
+  The tool doesn't have to be robust to malformed data.
+  Document which end to append new idea nodes
+  (which implies whether `dh_hl list_private_ideas` should print
+  this list forwards or backwards).
+
 Any command accessing `private/` or giving paths to it (`dh_hl bin` etc.)
 must initialize `private/{session id}` and its contents lazily,
 except for `generator.cpp` and `current_idea_state.txt` (we can't know this).
@@ -318,7 +325,7 @@ Otherwise, the status is "workspace inconsistent, unexpected current idea state"
         To start editing a C++ schedule, consider one of
           dh_hl seed_schedule_short_id
         to get the ID of a schedule to start editing, followed by
-          dh_hl restore {schedule ID}
+          dh_hl restore_schedule {schedule ID}
         to initialize the workspace
 
         # Session depth != 0

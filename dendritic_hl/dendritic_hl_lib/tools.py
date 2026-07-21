@@ -98,7 +98,7 @@ def _print_no_workspace_advice(session):
         print("To start editing a C++ schedule, consider one of")
         print("  dh_hl seed_schedule_short_id")
         print("to get the ID of a schedule to start editing, followed by")
-        print("  dh_hl restore {schedule ID}")
+        print("  dh_hl restore_schedule {schedule ID}")
         print("to initialize the workspace")
 
 

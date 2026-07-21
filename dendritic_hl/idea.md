@@ -177,7 +177,11 @@ may be used as an out-of-band method to recommend the "official" parameter value
   The `username` and `hostname` are sanitized.
 
 * **Session Private Workspace** state: gitignore'd per-session-node state.
-  This contains a session lock, current idea state, a workspace C++ schedule, and a `bin` directory.
+  This contains a session lock,
+  current idea state,
+  a session private ideas list,
+  a workspace C++ schedule,
+  and a `bin` directory.
 
 Most harness tools require a "current session",
 which is identified with the catalog directory
@@ -478,9 +482,11 @@ outside the git-tracked state. It's not impossible some heavy-handed
 git merging could cause the session private workspace to desync.
 
 
-### Restore Tool
+### Restore Schedule Tool
 
-    dh_hl restore -s ... {schedule ID}
+    dh_hl restore_schedule -s ... {schedule ID}
+
+IMPL TASK: renamed from `restore`
 
 Copies the schedule node's C++ schedule to the workspace C++ file,
 and updates the current idea state as follows,
@@ -489,6 +495,28 @@ depending on the number of parent idea nodes of the referenced schedule node.
 * **No parents:** set to "no current idea" state, embedding the timestamp of the schedule node.
 
 * **One parent:** set to "some current idea" state, embedding the ID of the parent idea node.
+
+
+### Restore Idea Tool
+
+    dh_hl restore_idea -s ... {idea ID}
+
+IMPL TASK: add this tool
+
+Copies the idea's parent schedule's C++ code to the workspace C++ file,
+and updates the current idea state to "some current idea" state,
+embedding the idea referenced in the command.
+
+This restores the private workspace to a state where you are ready
+to begin *implementing* the idea.
+Note; the workspace will probably be inconsistent according to
+`dh_hl status` after this command. This is normal.
+
+This tool gives a warning if the referenced idea already has a canonical schedule.
+The warning includes
+
+* The ID of the canonical schedule
+* A suggestion to use `restore_schedule` instead.
 
 
 ### Build Tool
@@ -566,7 +594,7 @@ and all subprocesses succeeded.
 NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
 
 
-### Canon Tool
+### Canon Tool (Make Canonical Tool)
 
     dh_hl canon -s ...
 
@@ -639,13 +667,21 @@ Updates the current idea state to "some current idea",
 embedding the given idea node ID.
 It is an error if the ID doesn't resolve to a single existing idea node.
 
+This leaves the workspace C++ file alone.
+To reset both the workspace C++ file and the current idea state,
+consider `restore_schedule` or `restore_idea`.
+
 
 ### New Idea Tool
 
     dh_hl new_idea -s ... {proposal name} {proposal file} [schedule ID]
 
+IMPL TASK: session private idea list interaction
+
 Adds a new child idea node to the referenced schedule node,
 which must be a major schedule.
+Furthermore, the idea node is added to the current session's
+private idea list.
 
 It is an error if this would cause an ID collision (i.e. the proposal name is already used).
 
@@ -664,13 +700,19 @@ If the schedule node is a minor schedule, the tool advises:
 
     dh_hl list_ideas -C ... [schedule ID]
 
+IMPL TASK: `Created for session:` logic and canonical schedule
+
 It is an error if the referenced schedule node is not a major schedule.
 
-For each child idea node of the referenced schedule node, prints three lines:
+For each child idea node of the referenced schedule node, prints 4-5 lines:
 
 * The ID of the idea node
 * The proposal name (indent by 2)
+* ID of canonical schedule, or `(none)`
 * The first up-to 72 characters of the first line of the proposal text (indent by 2)
+* If the last non-empty line of the proposal text starts with
+  `Created for session:`, print that line (indent by 2).
+  (See "Session Creation Tools: Common Information").
 
 
 ### View Idea Tools
@@ -701,6 +743,8 @@ For each schedule node, prints:
   marking the child idea node that is the parent of the previously printed schedule node.
 * For each commentary file, its timestamp on one line,
   and the first up-to-72 characters of the first line of the commentary text.
+
+IMPL TASK: test that the `Created for session:` logic works for this tool.
 
 NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
 
@@ -768,6 +812,8 @@ Rarely needed, mostly for when a new root node was created and you regret it.
 
 ### Session Creation Tools: Common Information
 
+IMPL TASK: private idea list interaction
+
 The following session-creation tools create session nodes and idea nodes in pairs.
 The process starts with a given parent schedule node:
 
@@ -775,13 +821,14 @@ The process starts with a given parent schedule node:
 
 * A new idea node is created from the proposal name and proposal file,
   in the same manner as `dh_hl new_idea {proposal name} {proposal file} {parent schedule ID}`,
-  except the proposal text has this line appended:
-
-    Created for session: {session_id}
+  except that,
+  (a) the `new_catalog` tool doesn't result in adding an idea to the private idea list
+  (b) the proposal text has the line `Created for session: {session_id}` appended.
 
 * Create a new session seeded with the new idea node.
   The session private workspace is initialized with the parent schedule node's C++ file,
   and with "some current idea" state pointing to the new idea node.
+  The private idea list is empty.
 
 * A new schedule node is created, holding a copy of the parent schedule node's C++ file.
   This is immediately set as the canonical schedule of the new idea node.
@@ -834,6 +881,16 @@ The current session must be self-closed and have depth 0.
 Create a new session/idea pair, with the output schedule of the current session as the parent schedule.
 
 
+### Catalog Location Tool
+
+    dh_hl catalog_location -C ...
+
+IMPL TASK: add this tool
+
+Print the path to the catalog directory.
+Non-trivial when the `-s {session handle}` option is used.
+
+
 ### List Sessions Tools
 
     dh_hl list_open_sessions -C ...
@@ -861,12 +918,41 @@ Set the is-delisted flag of the current session to true.
 Useful to get rid of old abandoned sessions in the open sessions or termini list.
 
 
+### List Session Private Ideas Tool
+
+    dh_hl list_private_ideas -s ... [N]
+    dh_hl list_private_ideas_todo -s ... [N]
+    dh_hl list_private_ideas_done -s ... [N]
+
+IMPL TASK: add this tool
+
+List the session private ideas, in the same format as `list_ideas`.
+The list is sorted by the time the idea was added to the private idea list,
+most recent first.
+
+`list_private_ideas_todo` excludes idea nodes with canonical schedules.
+`list_private_ideas_done` exclused idea nodes without canonical schedules.
+
+If `[N]` (integer) is provided, list only the first up-to-`N` ideas.
+Excluded ideas don't count against the limit.
+
+
+### Forget Session Private Idea Tool
+
+    dh_hl forget_private_idea -s ... {idea ID}
+
+IMPL TASK: add this tool
+
+Remove the referenced idea node from the current session's private idea list.
+This reports an error if the idea already wasn't in the list.
+
+
 ### Copy Schedule, ID-of Schedule Tools
 
     # All commands do not acquire the session lock
     dh_hl copy_schedule -C ... {output file} [schedule ID]
     dh_hl copy_terminus_schedule -C ... {output file}
-    dh_hl copy_session_seed_schedule -s ... {output file}
+    dh_hl copy_seed_schedule -s ... {output file}
     dh_hl copy_session_output -s ... {output file}
 
     dh_hl terminus_schedule_short_id -C ...
@@ -876,6 +962,8 @@ Useful to get rid of old abandoned sessions in the open sessions or termini list
     dh_hl terminus_schedule_full_id -C ...
     dh_hl seed_schedule_full_id -s ...
     dh_hl session_output_full_id -s ...
+
+IMPL TASK: `dh_hl copy_session_seed_schedule` renamed to `dh_hl copy_seed_schedule`
 
 Find a certain schedule node (noun), and do something with it (verb):
 
@@ -887,7 +975,7 @@ Find a certain schedule node (noun), and do something with it (verb):
   Error if there is not exactly one session node that is a terminus
   or the terminus has no output schedule.
 
-* `session_seed_schedule`: the canonical schedule of the current session's seed idea.
+* `seed_schedule`: the canonical schedule of the current session's seed idea.
 
 * `session_output`: the output schedule of the current session;
   error if there is no output schedule yet.
@@ -900,7 +988,7 @@ Find a certain schedule node (noun), and do something with it (verb):
 
 * `short_id`: give a short ID of the schedule node (may fall back to full ID)
 
-NB see also `schedule_full_id`, `schedule_short_id`, `restore` tools.
+NB see also `schedule_full_id`, `schedule_short_id`, `restore_schedule` tools.
 
 
 ### Workspace Location Tools
