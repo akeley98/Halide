@@ -1,5 +1,10 @@
 # Halide loop-doc
 
+UPDATE: experiment over for now.
+The docs were migrated to `dendritic_hl`.
+If I try for further improvement, I should probably hide the expected outputs
+from the micro agent. There was too much reward hacking.
+
 I'm not happy with the clarity of Halide's documentation.
 Although there are a lot of comments for each scheduling directive, it is not always clear how they interact.
 This is particularly the case for scheduling that results in generating "intermediate functions" within other functions that nominally have the same name:
