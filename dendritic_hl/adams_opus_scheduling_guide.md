@@ -1,17 +1,3 @@
-<!-- CLAUDE: read the doc paying attention to the following points:
-
-* The guide was written in a rather heavy-handed way.
-  Please flag places where the guide is more-or-less dictating the reader to do something,
-  without much room for nuance. Some of this tone may even be appropriate, (e.g. profiling
-  hygiene), but I'd like to review them all.
-
-* Look for content that may be obsolete due to dh_hl harness capabilities.
-
-* Look for tasks assigned to the reader that may be useful to incorporate to dh_hl.
-  A particularly important case: tasks involving ingesting profiler output.
-
--->
-
 # A Concise Guide to CPU Scheduling in Halide (for LLMs)
 
 This is a compact, practical guide to writing a fast CPU **schedule** for a
@@ -45,7 +31,7 @@ is no §3.55).
 - §4 The 95% schedule: one outer parallel loop + vectorize stride-1
 - §5 Inline cheap Funcs; schedule only the ones that earn it
 - §6 Exceptions: when to break the 95% shape
-- §7 The dev loop
+- §7 Benchmarking hygiene — CRITICAL
 - §8 The profiler is your primary tool
 - §9 Reading `.stmt` for vectorization shape
 - §10 Sliding window for stencils
@@ -99,9 +85,9 @@ of three things happens:
 2. The compiled code is absurdly large and slow.
 3. The algorithm compiles but produces enormous redundant recomputation.
 
-So the **first step for a new pipeline** is: apply `.compute_root()` to
-every `Func` that is not a trivial, cheap, single-use expression. This
-gives you a slow-but-working baseline, which you optimize from there.
+So a reasonable first step is: apply `.compute_root()` to
+every `Func` that is not a trivial, cheap, single-use expression.
+This gives you a slow-but-working baseline, which you optimize from there.
 
 But don't stop there. A fully-materialized chain of `compute_root`
 intermediates is a *starting point*, not a good schedule — see §4. And
@@ -343,9 +329,9 @@ everything downstream inlines into the next cached stage or the output.
 ## 6. Exceptions: when to break the 95% shape
 
 *Use when:* the §4 default doesn't fit because of the structural
-properties listed below. If none apply, stay with §4.
+properties listed below.
 
-Three named exceptions justify a separate `compute_root` (and its own
+Some patterns justify a separate `compute_root` (and its own
 parallel region) for an intermediate:
 
 ### 6.1 Multi-consumer with different footprints
@@ -356,9 +342,9 @@ next-level downsampler AND the upsampling-back-up path; a LUT read by
 two different parts of the pipeline) should `compute_root`. Otherwise
 it's recomputed once per consumer.
 
-This rule does NOT mean "compute_root every pyramid level." See §12
+This rule does NOT mean "`compute_root` every pyramid level." See §12
 for pyramid handling — only the down-sampling-pyramid levels that
-truly have multiple consumers earn compute_root; the up-sampling chain
+truly have multiple consumers earn `compute_root`; the up-sampling chain
 is single-use and stays compute_at the output.
 
 ### 6.2 Strip-axis overlap when the producer is small
@@ -410,41 +396,16 @@ or inlined.
 
 # Part 3: Diagnose and iterate
 
-## 7. The dev loop
+## 7. Benchmarking hygiene — CRITICAL
 
-*Use when:* writing or improving any schedule. This is THE process.
+Halide CPU schedules use all cores. Even one stray binary competing
+for CPU can double the reported runtime. The `dh_hl` harness locks
+out other harness usage while a profiler is running, but cannot block
+all other processes.
 
-You will not get a good schedule in one shot. The loop:
-
-1. **Edit** the CPU branch of `<app>_generator.cpp`.
-2. **Compile** with `make test`. Produces `bin/host/<app>.stmt`.
-3. **Profile** with `HL_TARGET=host-profile make clean && HL_TARGET=host-profile make test`.
-   Read the per-Func table and warnings (§8). Pick the next change based
-   on the worst column for the hottest Func.
-4. **Read `.stmt`** only if you need to verify vectorization shape (§9)
-   or confirm a specific compute_at level. The profile catches almost
-   everything else.
-5. **Benchmark** with `make test`; keep min of 3+ runs.
-6. Keep the best-so-far. Revert regressions.
-
-5–10 rounds is normal. Most speedup comes from round 3+.
-
-### 7.1 Benchmarking hygiene — CRITICAL
-
-Halide CPU schedules use all cores. Even one stray binary competing for
-CPU can double the reported runtime. Before you trust any number, make
-sure the CPU is idle:
-
-- **NEVER** run a benchmark in the background. No `&`. Every benchmark
-  is foreground; you wait for it to finish.
-- **NEVER** run two benchmarks in parallel.
-- Before each benchmark, check no stray binaries are running:
-  `pgrep -af filter` (or the binary name) should show nothing but your
-  shell. `kill` strays before benchmarking.
-- If a number is surprising (5–10× worse than expected), do NOT
-  conclude "my change regressed" — first check for stray processes,
-  then re-run. Unstable numbers are noise, not signal.
-- Take the **min of ~5 runs**, not the first one.
+If a number is surprising (5–10× worse than expected), do NOT
+conclude "my change regressed" — first check for stray processes,
+then re-run. Unstable numbers are noise, not signal.
 
 If you chase noisy numbers, you will revert good schedules and keep bad
 ones.
@@ -455,8 +416,8 @@ ones.
 "what to fix next" reference for the whole guide; §21 defers to it for
 the profile-driven half of the pre-flight checklist.
 
-Run with `HL_TARGET=host-profile`. The profiler emits a per-Func table
-plus explicit warnings for known antipatterns.
+The profiler emits to `stdout` a per-Func table plus explicit warnings
+for known antipatterns.  Detailed JSON statistics are captured by `dh_hl`.
 
 Sample (max_filter):
 
@@ -479,6 +440,9 @@ Performance warnings:
     thread pool. Ensure the parallel loop is the outermost one. ...
 ```
 
+Make improving the worst column of the hottest func a priority.
+Use `dh_hl new_idea` to save ideas for fixing these bottlenecks.
+
 ### Top-line stats
 
 - `time per run` — the thing to minimize.
@@ -486,8 +450,11 @@ Performance warnings:
   under-parallelized. Look for the Func with high `active` time and
   low `active threads`.
 - `parallel loops` (pipeline-level) — total `halide_do_par_for` calls
-  per run. **Aim for 1.** More than 1 means multiple parallel regions;
-  collapse them with `compute_at` (§4) unless §6 justifies splitting.
+  per run. **Expect only 1** `halide_do_par_for` if you're following
+  the 95% schedule (§4). More than 1 means the parallel loop is not
+  outermost (almost always suboptimal (§17)), or there is more than 1
+  parallel region.  The latter may be intentional (§6), but collapse
+  them with `compute_at` if they're not.
 - `peak heap usage` — if it's a large fraction of L3 (or larger than
   DRAM bandwidth × runtime), some `compute_root` is too eager (§6).
 
@@ -535,8 +502,8 @@ Performance warnings:
 5. **Hottest Func has low `active threads`** — its parallel loop isn't
    outermost (§17), or its task count is too small (§4).
 
-This profile alone can drive most iterations. Open it first; only drop
-into `.stmt` (§9) for vectorization-shape questions.
+This profile alone can drive most iterations. Open it first,
+but consider reading `.stmt` (§9) for vectorization-shape questions.
 
 ## 9. Reading `.stmt` for vectorization shape
 
@@ -546,6 +513,7 @@ you want to confirm a specific compute_at level took effect.
 
 Read `.stmt` mainly to check **vectorization shape** (scatter/gather,
 vector width). The profile catches most other things.
+The `dh_hl build` tool emits `.stmt` into the `dh_hl workspace_bin` directory.
 
 ### What the lowered IR looks like
 
@@ -765,16 +733,15 @@ For `hist(..., bin, ...) += value` where the bin is data-dependent
 - **Do NOT vectorize the spatial axes of the update.** Different
   vector lanes may compute different bins; the scatter becomes
   non-vectorizable, and Halide will refuse, scalarize, or race.
-  Vectorize is for dense, aligned, contiguous writes. Use `unroll`
-  for small inner dims (e.g. `c`) instead.
-- **Do NOT separately schedule the pure init.** Treat `hist` and
+  Vectorize is best for dense, aligned, contiguous writes.
+  Consider `unroll` for small inner dims (e.g. `c`) instead.
+- **Avoid separately scheduling the pure init.** Treat `hist` and
   `hist.update()` as one unit at the same `compute_at` site.
-- **Preferred pattern:** `compute_at` the histogram per-tile of its
+- **Recommended pattern:** `compute_at` the histogram per-tile of its
   downstream consumer, so each tile owns a small private histogram
   that fits in cache and has no cross-tile races.
 - A reasonable default: `hist.update().reorder(c, r.x, r.y, x, y).unroll(c)`.
-- If you genuinely need to parallelize across the reduction itself,
-  see `rfactor`.
+- If you need to parallelize across the reduction itself, use `rfactor`.
 
 **Caveat — global aggregates.** Histogram-equalization-style pipelines
 where the histogram is *upstream* of the output (every output pixel
@@ -872,7 +839,7 @@ consumer's parallel axis crossed the producer's serial dim) AND
 `recompute ratio` > 1. Or, if the producer is `compute_root`'d to
 work around it: a high `peak heap` and a single-threaded `free`.
 
-## 17. The parallel loop must be OUTERMOST
+## 17. The parallel loop should be OUTERMOST
 
 *Use when:* the profiler shows a Func with low `active threads`
 relative to `cores`, or shows `parallel loops` > 1 for a Func that
@@ -1130,24 +1097,3 @@ stayed at 1.00. Stop here, or tune strip height once more.
 - If a change is more than a few lines of scheduling code, test after
   each line.
 - Trust the profiler and the `.stmt` file. Don't guess.
-
-<!-- CLAUDE:
-
-* The guide was written in a rather heavy-handed way.
-  Please flag places where the guide is more-or-less dictating the reader to do something,
-  without much room for nuance. Some of this tone may even be appropriate, (e.g. profiling
-  hygiene), but I'd like to review them all.
-
-* Please flag places in the guide where the harness capabilities makes obsolete the steps
-  being explained (e.g. profiling hygiene again). In fact, the advice to `kill`
-  will need to be removed since innocent lock-stalled `dh_hl` processes will be killed.
-
-* The profiler output isn't surfaced in a particularly structured way by `dh_hl`.
-  Based on the contents of this document, try to come up with some ideas for tools
-  that ingest the JSON benchmark info and give useful information.
-  (I didn't read this doc fully, so it's possible there's not much to go off of).
-  Also any other tasks that reasonably should be bundled into the harness.
-
-  You can see an example json output with `./dh_hl json_schedule_info -s tmp.aab`
-
--->
