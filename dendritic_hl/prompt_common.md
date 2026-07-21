@@ -172,7 +172,8 @@ It will be followed by:
 
 # Important Requirements
 
-* The harness only supports C++ files containing exactly one Halide generator.
+* The harness only supports C++ files containing exactly one Halide generator,
+  with `set_estimate` used to give per-dimension sizes to inputs/outputs.
 <!-- main -->
   Explain this to the user if they provided something else,
   and offer to fix it if you are capable of doing so.
