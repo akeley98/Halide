@@ -680,8 +680,10 @@ Each tool may do a subset of these four actions, done strictly in top-to-bottom 
   (so read-only queries of the session's *git-tracked catalog state* won't fail).
   The failure message is:
 
-    AGENTS: stop work immediately. Concurrent usage of session detected.
-    This could be due to an agent error (e.g. same session given to 2 agents)
+    AGENTS: Concurrent usage of session detected.
+    Don't run concurrent tool invocations.
+    If the concurrent usage is not due to your error, stop and report the issue:
+    this could be due to a parent agent error (e.g. same session given to 2 agents)
     or human user action interfering with agent work.
 
 * "Upgrade" machine lock to exclusive, by releasing it then re-acquiring exclusively

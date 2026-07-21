@@ -116,11 +116,12 @@ def acquire_machine_shared():
     _trace(("machine", "shared"))
 
 
-_SESSION_BUSY_MSG = (
-    "AGENTS: stop work immediately. Concurrent usage of session detected.\n"
-    "This could be due to an agent error (e.g. same session given to 2 agents)\n"
-    "or human user action interfering with agent work."
-)
+_SESSION_BUSY_MSG = """\
+AGENTS: Concurrent usage of session detected.
+Don't run concurrent tool invocations.
+If the concurrent usage is not due to your error, stop and report the issue:
+this could be due to a parent agent error (e.g. same session given to 2 agents)
+or human user action interfering with agent work."""
 
 
 def acquire_session(catalog_dir, session_id):
