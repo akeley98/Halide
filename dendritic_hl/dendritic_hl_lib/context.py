@@ -100,6 +100,41 @@ class SessionWorkspace:
         else:
             self.current_idea_state.set_no_idea(val)
 
+    # -- private idea list ----------------------------------------------
+    # Stored as private/{id}/private_ideas.txt: one idea full ID per line,
+    # newline-terminated, NEW ideas APPENDED to the END (bottom).  So the file
+    # is in oldest-added-first order; list_private_ideas prints it reversed
+    # (most recent first).  Not robust to malformed data (blank lines are just
+    # skipped).  See impl.md "Session Private Workspace".
+    @property
+    def private_ideas_path(self):
+        return os.path.join(self.private_dir, "private_ideas.txt")
+
+    def read_private_ideas(self):
+        """The private idea list as full IDs, oldest-added first (disk order)."""
+        try:
+            with open(self.private_ideas_path, "r", encoding="utf-8") as f:
+                return [ln.strip() for ln in f if ln.strip()]
+        except FileNotFoundError:
+            return []
+
+    def _write_private_ideas(self, ideas):
+        self.ensure_private_dir()
+        safety.write_allowed(self.private_ideas_path,
+                             "".join(i + "\n" for i in ideas))
+
+    def add_private_idea(self, idea_id):
+        """Append *idea_id* to the end of the private idea list."""
+        self._write_private_ideas(self.read_private_ideas() + [idea_id])
+
+    def remove_private_idea(self, idea_id):
+        """Remove *idea_id* from the private idea list, erroring if absent."""
+        ideas = self.read_private_ideas()
+        if idea_id not in ideas:
+            raise DhHlError(
+                "idea is not in the session's private idea list: " + idea_id)
+        self._write_private_ideas([i for i in ideas if i != idea_id])
+
 
 def read_text_or_stdin(path):
     """Read a text input argument.  Universally, "-" means read from stdin;

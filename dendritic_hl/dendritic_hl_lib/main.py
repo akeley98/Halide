@@ -103,7 +103,8 @@ def _parse_idea_help(path=_IDEA_MD):
 COMMAND_HELP = {
     "help": "List commands, or describe one command.",
     "status": "Report whether the workspace matches a tracked schedule node.",
-    "restore": "Copy a schedule node's C++ into the workspace + set current idea.",
+    "restore_schedule": "Copy a schedule node's C++ into the workspace + set current idea.",
+    "restore_idea": "Load an idea's parent schedule into the workspace to implement it.",
     "build": "Compile the workspace and add/update its schedule node.",
     "profile": "Like build, but benchmark with the profiler over parameter sets.",
     "canon": "Make the current schedule the canonical schedule of the current idea.",
@@ -113,6 +114,10 @@ COMMAND_HELP = {
     "set_idea": "Set the current idea state to an existing idea node.",
     "new_idea": "Add a child idea node (proposal) to a major schedule.",
     "list_ideas": "List the child idea nodes of a major schedule.",
+    "list_private_ideas": "List the current session's private idea list.",
+    "list_private_ideas_todo": "List private ideas without a canonical schedule.",
+    "list_private_ideas_done": "List private ideas with a canonical schedule.",
+    "forget_private_idea": "Remove an idea from the session's private idea list.",
     "list_sibling_schedules": "List schedules sharing a parent idea with the given schedule.",
     "list_child_schedules": "List the child schedules of an idea node.",
     "list_equal_schedules": "List schedules with the same source hash as the given one.",
@@ -134,8 +139,9 @@ COMMAND_HELP = {
     "list_termini": "List all termini (top-level, not-delisted, no successor).",
     "copy_schedule": "Write a schedule node's C++ to a file ('-' for stdout).",
     "copy_terminus_schedule": "Write the unique terminus's output schedule C++ to a file.",
-    "copy_session_seed_schedule": "Write the session seed idea's canonical C++ to a file.",
+    "copy_seed_schedule": "Write the session seed idea's canonical C++ to a file.",
     "copy_session_output": "Write the current session's output schedule C++ to a file.",
+    "catalog_location": "Print the catalog directory path (resolves a session handle).",
     "terminus_schedule_full_id": "Print the terminus output schedule's full ID.",
     "terminus_schedule_short_id": "Print the terminus output schedule's short ID.",
     "seed_schedule_full_id": "Print the session seed idea's canonical schedule full ID.",
@@ -176,8 +182,11 @@ def _build_parser():
 
     add("status")
 
-    sp = add("restore")
+    sp = add("restore_schedule")
     sp.add_argument("schedule", help="schedule ID")
+
+    sp = add("restore_idea")
+    sp.add_argument("idea", help="idea ID")
 
     sp = add("build")
     sp.add_argument("parameters", nargs="?",
@@ -210,6 +219,15 @@ def _build_parser():
 
     sp = add("list_ideas")
     sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
+
+    for _name in ("list_private_ideas", "list_private_ideas_todo",
+                  "list_private_ideas_done"):
+        sp = add(_name)
+        sp.add_argument("n", nargs="?", type=int,
+                        help="list only the first up-to-N ideas")
+
+    sp = add("forget_private_idea")
+    sp.add_argument("idea", help="idea ID")
 
     sp = add("list_sibling_schedules")
     sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
@@ -268,11 +286,13 @@ def _build_parser():
     sp = add("copy_terminus_schedule")
     sp.add_argument("output", help="output file ('-' for stdout)")
 
-    sp = add("copy_session_seed_schedule")
+    sp = add("copy_seed_schedule")
     sp.add_argument("output", help="output file ('-' for stdout)")
 
     sp = add("copy_session_output")
     sp.add_argument("output", help="output file ('-' for stdout)")
+
+    add("catalog_location")
 
     add("terminus_schedule_full_id")
     add("terminus_schedule_short_id")
@@ -316,7 +336,8 @@ def _build_parser():
 
 _DISPATCH = {
     "status": tools.cmd_status,
-    "restore": tools.cmd_restore,
+    "restore_schedule": tools.cmd_restore_schedule,
+    "restore_idea": tools.cmd_restore_idea,
     "build": build_mod.cmd_build,
     "profile": build_mod.cmd_profile,
     "canon": tools.cmd_canon,
@@ -326,6 +347,10 @@ _DISPATCH = {
     "set_idea": tools.cmd_set_idea,
     "new_idea": tools.cmd_new_idea,
     "list_ideas": tools.cmd_list_ideas,
+    "list_private_ideas": tools.cmd_list_private_ideas,
+    "list_private_ideas_todo": tools.cmd_list_private_ideas_todo,
+    "list_private_ideas_done": tools.cmd_list_private_ideas_done,
+    "forget_private_idea": tools.cmd_forget_private_idea,
     "list_sibling_schedules": tools.cmd_list_sibling_schedules,
     "list_child_schedules": tools.cmd_list_child_schedules,
     "list_equal_schedules": tools.cmd_list_equal_schedules,
@@ -345,8 +370,9 @@ _DISPATCH = {
     "list_termini": tools.cmd_list_termini,
     "copy_schedule": tools.cmd_copy_schedule,
     "copy_terminus_schedule": tools.cmd_copy_terminus_schedule,
-    "copy_session_seed_schedule": tools.cmd_copy_session_seed_schedule,
+    "copy_seed_schedule": tools.cmd_copy_seed_schedule,
     "copy_session_output": tools.cmd_copy_session_output,
+    "catalog_location": tools.cmd_catalog_location,
     "terminus_schedule_full_id": tools.cmd_terminus_schedule_full_id,
     "terminus_schedule_short_id": tools.cmd_terminus_schedule_short_id,
     "seed_schedule_full_id": tools.cmd_seed_schedule_full_id,

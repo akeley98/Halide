@@ -486,8 +486,6 @@ git merging could cause the session private workspace to desync.
 
     dh_hl restore_schedule -s ... {schedule ID}
 
-IMPL TASK: renamed from `restore`
-
 Copies the schedule node's C++ schedule to the workspace C++ file,
 and updates the current idea state as follows,
 depending on the number of parent idea nodes of the referenced schedule node.
@@ -500,8 +498,6 @@ depending on the number of parent idea nodes of the referenced schedule node.
 ### Restore Idea Tool
 
     dh_hl restore_idea -s ... {idea ID}
-
-IMPL TASK: add this tool
 
 Copies the idea's parent schedule's C++ code to the workspace C++ file,
 and updates the current idea state to "some current idea" state,
@@ -676,8 +672,6 @@ consider `restore_schedule` or `restore_idea`.
 
     dh_hl new_idea -s ... {proposal name} {proposal file} [schedule ID]
 
-IMPL TASK: session private idea list interaction
-
 Adds a new child idea node to the referenced schedule node,
 which must be a major schedule.
 Furthermore, the idea node is added to the current session's
@@ -699,8 +693,6 @@ If the schedule node is a minor schedule, the tool advises:
 ### List Ideas Tool
 
     dh_hl list_ideas -C ... [schedule ID]
-
-IMPL TASK: `Created for session:` logic and canonical schedule
 
 It is an error if the referenced schedule node is not a major schedule.
 
@@ -743,8 +735,6 @@ For each schedule node, prints:
   marking the child idea node that is the parent of the previously printed schedule node.
 * For each commentary file, its timestamp on one line,
   and the first up-to-72 characters of the first line of the commentary text.
-
-IMPL TASK: test that the `Created for session:` logic works for this tool.
 
 NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
 
@@ -811,8 +801,6 @@ Rarely needed, mostly for when a new root node was created and you regret it.
 
 
 ### Session Creation Tools: Common Information
-
-IMPL TASK: private idea list interaction
 
 The following session-creation tools create session nodes and idea nodes in pairs.
 The process starts with a given parent schedule node:
@@ -885,8 +873,6 @@ Create a new session/idea pair, with the output schedule of the current session 
 
     dh_hl catalog_location -C ...
 
-IMPL TASK: add this tool
-
 Print the path to the catalog directory.
 Non-trivial when the `-s {session handle}` option is used.
 
@@ -924,8 +910,6 @@ Useful to get rid of old abandoned sessions in the open sessions or termini list
     dh_hl list_private_ideas_todo -s ... [N]
     dh_hl list_private_ideas_done -s ... [N]
 
-IMPL TASK: add this tool
-
 List the session private ideas, in the same format as `list_ideas`.
 The list is sorted by the time the idea was added to the private idea list,
 most recent first.
@@ -940,8 +924,6 @@ Excluded ideas don't count against the limit.
 ### Forget Session Private Idea Tool
 
     dh_hl forget_private_idea -s ... {idea ID}
-
-IMPL TASK: add this tool
 
 Remove the referenced idea node from the current session's private idea list.
 This reports an error if the idea already wasn't in the list.
@@ -962,8 +944,6 @@ This reports an error if the idea already wasn't in the list.
     dh_hl terminus_schedule_full_id -C ...
     dh_hl seed_schedule_full_id -s ...
     dh_hl session_output_full_id -s ...
-
-IMPL TASK: `dh_hl copy_session_seed_schedule` renamed to `dh_hl copy_seed_schedule`
 
 Find a certain schedule node (noun), and do something with it (verb):
 

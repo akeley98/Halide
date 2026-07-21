@@ -168,7 +168,7 @@ def test_copy_and_id_getters(session, run_tool, capsys, tmp_path):
     assert len(seed_full) == 90  # a schedule full ID
 
     dest = str(tmp_path / "copied.cpp")
-    run_tool(tools.cmd_copy_session_seed_schedule,
+    run_tool(tools.cmd_copy_seed_schedule,
              session.ns(output=dest))
     from conftest import DUMMY_SOURCE
     assert open(dest).read() == DUMMY_SOURCE

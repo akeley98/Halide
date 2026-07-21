@@ -120,7 +120,7 @@ def test_restore_roundtrips_workspace(session, run_tool, capsys):
     session.write_workspace(original + "\n// scratch edit\n")
     assert open(session.workspace_path, encoding="utf-8").read() != original
 
-    run_tool(tools.cmd_restore, session.ns(schedule=sid))
+    run_tool(tools.cmd_restore_schedule, session.ns(schedule=sid))
     assert open(session.workspace_path, encoding="utf-8").read() == original
 
     # After restoring, status should be consistent again.

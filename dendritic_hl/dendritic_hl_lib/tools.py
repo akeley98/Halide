@@ -32,11 +32,29 @@ def _first_line_72(text):
     return first[:72]
 
 
+def _last_nonempty_line(text):
+    for line in reversed(text.split("\n")):
+        if line.strip():
+            return line.strip()
+    return ""
+
+
 def _print_idea_listing(ctx, idea, marker=""):
-    """The 3-line idea summary shared by list_ideas and history."""
-    print("{}{}".format(marker, ctx.catalog.format_idea_id(idea)))
+    """The 4-5 line idea summary shared by list_ideas, history, and the
+    private-idea listings (idea.md "List Ideas Tool")."""
+    catalog = ctx.catalog
+    print("{}{}".format(marker, catalog.format_idea_id(idea)))
     print("  " + idea.proposal_name)
+    if idea.canonical is None:
+        print("  (none)")
+    elif idea.canonical in catalog.schedules:
+        print("  " + catalog.format_schedule_id(catalog.schedules[idea.canonical]))
+    else:
+        print("  " + idea.canonical)  # dangling (e.g. git checkout desync)
     print("  " + _first_line_72(idea.proposal_text))
+    last = _last_nonempty_line(idea.proposal_text)
+    if last.startswith("Created for session:"):
+        print("  " + last)
 
 
 def _current_idea_description(cis):
@@ -149,7 +167,7 @@ def cmd_status(args):
 # restore
 # ---------------------------------------------------------------------------
 
-def cmd_restore(args):
+def cmd_restore_schedule(args):
     ctx = Context.for_session(args, session_lock=True)
     node = ctx.catalog.resolve_schedule(args.schedule)
     ws = ctx.workspace
@@ -164,6 +182,34 @@ def cmd_restore(args):
     safety.queue_overwrite(ws.workspace_path, node.source)
     ctx.finish()
     print("Restored workspace from " + ctx.catalog.format_schedule_id(node))
+
+
+# ---------------------------------------------------------------------------
+# restore_idea
+# ---------------------------------------------------------------------------
+
+def cmd_restore_idea(args):
+    ctx = Context.for_session(args, session_lock=True)
+    catalog = ctx.catalog
+    idea = catalog.resolve_idea(args.idea)
+    parent = idea.parent_schedule()
+    ws = ctx.workspace
+    ws.ensure_private_dir()
+    ws.current_idea_state.set_idea(idea.full_id)
+    # Overwrite workspace file last (deferred; never rolled back).
+    from . import safety
+    safety.queue_overwrite(ws.workspace_path, parent.source)
+    ctx.finish()
+    print("Restored workspace from idea {}'s parent schedule {}".format(
+        catalog.format_idea_id(idea), catalog.format_schedule_id(parent)))
+    print("(ready to implement the idea; `dh_hl status` will read inconsistent, "
+          "which is normal)")
+    if idea.canonical is not None:
+        canon_id = (catalog.format_schedule_id(catalog.schedules[idea.canonical])
+                    if idea.canonical in catalog.schedules else idea.canonical)
+        print("WARNING: this idea already has a canonical schedule: " + canon_id)
+        print("  To start from that implementation instead, use:")
+        print("    dh_hl restore_schedule " + canon_id)
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +294,7 @@ def cmd_new_idea(args):
         raise DhHlError(_minor_schedule_advice(ctx.catalog, node))
     text = _read_file_or_stdin(args.proposal)
     idea = ctx.catalog.create_idea(node, args.proposal_name, text)
+    ctx.workspace.add_private_idea(idea.full_id)
     ctx.finish()
     print("Created idea " + ctx.catalog.format_idea_id(idea))
 
@@ -603,6 +650,13 @@ def _create_session_and_idea(catalog, parent_schedule, proposal_name,
     text = proposal_text if proposal_text.endswith("\n") else proposal_text + "\n"
     text += "Created for session: {}\n".format(session_id)
     idea = catalog.create_idea(parent_schedule, proposal_name, text)
+    # The new idea joins the PARENT (current) session's private idea list, just
+    # like `new_idea` would (idea.md "Session Creation Tools: Common
+    # Information").  new_catalog has no parent session, so it adds to nothing.
+    if parent_session is not None:
+        parent_ws = SessionWorkspace(catalog.catalog_dir, parent_session.full_id,
+                                     catalog=catalog)
+        parent_ws.add_private_idea(idea.full_id)
     session = catalog.create_session(idea, parent_session, depth,
                                      session_id=session_id)
     ws = SessionWorkspace(catalog.catalog_dir, session_id, catalog=catalog)
@@ -703,6 +757,56 @@ def cmd_delist_session(args):
     print("Delisted session " + ctx.session.full_id)
 
 
+# ---- session private idea list --------------------------------------------
+
+def _list_private_ideas(args, *, filter_kind):
+    """Shared body of list_private_ideas / _todo / _done.  Prints the private
+    idea list most-recent-first (disk order reversed), filtered by canonical
+    status, capped at N *printed* ideas (excluded ideas don't count)."""
+    ctx = Context.for_session(args, session_lock=True)
+    catalog = ctx.catalog
+    limit = getattr(args, "n", None)
+    printed = 0
+    any_printed = False
+    for idea_id in reversed(ctx.workspace.read_private_ideas()):
+        idea = catalog.ideas.get(idea_id)
+        if idea is None:
+            continue  # dangling (e.g. git checkout desync); not robust per spec
+        has_canon = idea.canonical is not None
+        if filter_kind == "todo" and has_canon:
+            continue
+        if filter_kind == "done" and not has_canon:
+            continue
+        _print_idea_listing(ctx, idea)
+        any_printed = True
+        printed += 1
+        if limit is not None and printed >= limit:
+            break
+    if not any_printed:
+        print("(no private ideas)")
+
+
+def cmd_list_private_ideas(args):
+    _list_private_ideas(args, filter_kind="all")
+
+
+def cmd_list_private_ideas_todo(args):
+    _list_private_ideas(args, filter_kind="todo")
+
+
+def cmd_list_private_ideas_done(args):
+    _list_private_ideas(args, filter_kind="done")
+
+
+def cmd_forget_private_idea(args):
+    ctx = Context.for_session(args, session_lock=True)
+    idea = ctx.catalog.resolve_idea(args.idea)
+    ctx.workspace.remove_private_idea(idea.full_id)
+    ctx.finish()
+    print("Removed idea from private idea list: "
+          + ctx.catalog.format_idea_id(idea))
+
+
 # ---- listing --------------------------------------------------------------
 
 def _print_session_line(catalog, session):
@@ -780,7 +884,7 @@ def cmd_copy_terminus_schedule(args):
     _write_output(args.output, _the_terminus_output(ctx.catalog).source)
 
 
-def cmd_copy_session_seed_schedule(args):
+def cmd_copy_seed_schedule(args):
     ctx = Context.for_session(args, session_lock=False)
     _write_output(args.output, _session_seed_schedule(ctx).source)
 
@@ -832,6 +936,15 @@ def cmd_workspace_bin(args):
     ctx = Context.for_session(args, session_lock=False)
     ctx.session
     print(ctx.workspace.bin_dir)
+
+
+# ---- catalog location -----------------------------------------------------
+
+def cmd_catalog_location(args):
+    """Print the catalog directory path.  Non-trivial when -s is a session
+    handle, whose file encodes the catalog dir; resolve_target does that."""
+    catalog_dir, _ = resolve_target(args)
+    print(catalog_dir)
 
 
 # ---- ID translation -------------------------------------------------------
