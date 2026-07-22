@@ -2038,6 +2038,10 @@ struct HALIDE_ATTRIBUTE_ALIGN(8) halide_profiler_func_stats {
 
 /** Per-pipeline state tracked by the sampling profiler. These exist
  * in a linked list. */
+// Number of smallest per-run wall-clock durations the profiler retains as an
+// outlier-robust error bar on a pipeline's best-case runtime.
+#define HALIDE_PROFILER_WALL_TIME_SMALLEST_K 16
+
 struct HALIDE_ATTRIBUTE_ALIGN(8) halide_profiler_pipeline_stats {
     /** Total time spent in this pipeline (in nanoseconds) */
     uint64_t time;
@@ -2088,17 +2092,22 @@ struct HALIDE_ATTRIBUTE_ALIGN(8) halide_profiler_pipeline_stats {
     /** The total number of memory allocation of funcs in this pipeline. */
     int num_allocs;
 
-    /** Wall-clock per-run duration aggregates over ALL runs (not just
-     * billed ones), measured directly start->end, independent of the
-     * sampling profiler. Together with `runs` these give a low-noise
-     * best-case (wall_time_min), an unbiased mean (wall_time_sum / runs,
-     * free of the sampled-billing survivorship bias), and enough for a
-     * stddev (wall_time_sum_sq, in ns^2; only overflows for absurd run
-     * counts). All in nanoseconds. */
+    /** Wall-clock per-run duration stats over ALL runs (not just billed),
+     * measured directly start->end, independent of the sampling profiler and
+     * so free of the sampled-billing survivorship bias. `runs` is the count.
+     *
+     * mean/m2 form a numerically-stable Welford accumulator: variance =
+     * m2 / runs, stddev = sqrt(m2 / runs). This avoids both the overflow (a
+     * single run over ~4.3s overflows a uint64 ns^2 term) and the catastrophic
+     * cancellation of a naive sum / sum-of-squares. smallest[] holds the K
+     * smallest per-run durations seen, ascending (smallest[0] == wall_time_min):
+     * an outlier-robust error bar on the best case -- the statistic schedules
+     * are actually compared on. All times in nanoseconds. */
     uint64_t wall_time_min;
     uint64_t wall_time_max;
-    uint64_t wall_time_sum;
-    uint64_t wall_time_sum_sq;
+    double wall_time_mean;
+    double wall_time_m2;
+    uint64_t wall_time_smallest[HALIDE_PROFILER_WALL_TIME_SMALLEST_K];
 };
 
 /** Per-invocation-of-a-pipeline state. Lives on the stack of the Halide

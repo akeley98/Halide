@@ -331,21 +331,43 @@ WEAK int halide_profiler_instance_end(void *user_context, halide_profiler_instan
         uint64_t true_duration = end_time - instance->start_time;
         halide_profiler_pipeline_stats *p = instance->pipeline_stats;
 
-        // Directly-measured wall-clock aggregates over EVERY run (before the
-        // p->runs++ below, so p->runs == 0 marks the first run). Independent of
-        // the sampler, so unaffected by the billed-run survivorship bias.
-        if (p->runs == 0) {
-            p->wall_time_min = p->wall_time_max = true_duration;
-        } else {
+        // Directly-measured wall-clock stats over EVERY run (computed before the
+        // p->runs++ below, so p->runs is this run's 0-based index). Independent
+        // of the sampler, so free of the billed-run survivorship bias.
+        {
+            // Welford update: numerically stable mean/variance, no overflow.
+            double x = (double)true_duration;
+            double n = (double)(p->runs + 1);
+            double delta = x - p->wall_time_mean;
+            p->wall_time_mean += delta / n;
+            p->wall_time_m2 += delta * (x - p->wall_time_mean);
+
+            // Min/max and the K-smallest fast-tail error bar. The struct is
+            // memset to 0, so seed smallest[] to "infinity" on the first run.
+            const int K = HALIDE_PROFILER_WALL_TIME_SMALLEST_K;
+            if (p->runs == 0) {
+                p->wall_time_min = p->wall_time_max = true_duration;
+                for (int i = 0; i < K; i++) {
+                    p->wall_time_smallest[i] = (uint64_t)(-1);
+                }
+            }
             if (true_duration < p->wall_time_min) {
                 p->wall_time_min = true_duration;
             }
             if (true_duration > p->wall_time_max) {
                 p->wall_time_max = true_duration;
             }
+            // Insert into the ascending K-smallest buffer. Common case: one
+            // compare against the largest kept value, then reject.
+            if (true_duration < p->wall_time_smallest[K - 1]) {
+                int i = K - 1;
+                while (i > 0 && p->wall_time_smallest[i - 1] > true_duration) {
+                    p->wall_time_smallest[i] = p->wall_time_smallest[i - 1];
+                    i--;
+                }
+                p->wall_time_smallest[i] = true_duration;
+            }
         }
-        p->wall_time_sum += true_duration;
-        p->wall_time_sum_sq += true_duration * true_duration;
 
         // Retire the instance, accumulating statistics onto the statistics
         // for this pipeline. Memory and per-Func counter fields accumulate
@@ -1751,8 +1773,15 @@ WEAK void halide_profiler_report_unlocked(void *user_context, halide_profiler_st
                 field_u64("      ", "native_vector_bytes", pp->native_vector_bytes);
                 field_u64("      ", "wall_time_min", pp->wall_time_min);
                 field_u64("      ", "wall_time_max", pp->wall_time_max);
-                field_u64("      ", "wall_time_sum", pp->wall_time_sum);
-                field_u64("      ", "wall_time_sum_sq", pp->wall_time_sum_sq);
+                // Welford mean/M2 rounded to integer nanoseconds (sub-ns is
+                // noise). Consumer: variance = wall_time_m2 / runs.
+                field_u64("      ", "wall_time_mean", (uint64_t)(pp->wall_time_mean + 0.5));
+                field_u64("      ", "wall_time_m2", (uint64_t)(pp->wall_time_m2 + 0.5));
+                json << "      \"wall_time_smallest\": [";
+                for (int i = 0; i < HALIDE_PROFILER_WALL_TIME_SMALLEST_K; i++) {
+                    json << (i ? ", " : "") << pp->wall_time_smallest[i];
+                }
+                json << "],\n";
                 json << "      \"funcs\": [";
 
                 for (int i = 0; i < pp->num_funcs; i++) {
