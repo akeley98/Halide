@@ -331,6 +331,22 @@ WEAK int halide_profiler_instance_end(void *user_context, halide_profiler_instan
         uint64_t true_duration = end_time - instance->start_time;
         halide_profiler_pipeline_stats *p = instance->pipeline_stats;
 
+        // Directly-measured wall-clock aggregates over EVERY run (before the
+        // p->runs++ below, so p->runs == 0 marks the first run). Independent of
+        // the sampler, so unaffected by the billed-run survivorship bias.
+        if (p->runs == 0) {
+            p->wall_time_min = p->wall_time_max = true_duration;
+        } else {
+            if (true_duration < p->wall_time_min) {
+                p->wall_time_min = true_duration;
+            }
+            if (true_duration > p->wall_time_max) {
+                p->wall_time_max = true_duration;
+            }
+        }
+        p->wall_time_sum += true_duration;
+        p->wall_time_sum_sq += true_duration * true_duration;
+
         // Retire the instance, accumulating statistics onto the statistics
         // for this pipeline. Memory and per-Func counter fields accumulate
         // regardless of whether the run produced samples — those counters
@@ -1733,6 +1749,10 @@ WEAK void halide_profiler_report_unlocked(void *user_context, halide_profiler_st
                 field_u64("      ", "active_threads_numerator", pp->active_threads_numerator);
                 field_u64("      ", "active_threads_denominator", pp->active_threads_denominator);
                 field_u64("      ", "native_vector_bytes", pp->native_vector_bytes);
+                field_u64("      ", "wall_time_min", pp->wall_time_min);
+                field_u64("      ", "wall_time_max", pp->wall_time_max);
+                field_u64("      ", "wall_time_sum", pp->wall_time_sum);
+                field_u64("      ", "wall_time_sum_sq", pp->wall_time_sum_sq);
                 json << "      \"funcs\": [";
 
                 for (int i = 0; i < pp->num_funcs; i++) {

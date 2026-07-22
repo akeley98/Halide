@@ -2087,6 +2087,18 @@ struct HALIDE_ATTRIBUTE_ALIGN(8) halide_profiler_pipeline_stats {
 
     /** The total number of memory allocation of funcs in this pipeline. */
     int num_allocs;
+
+    /** Wall-clock per-run duration aggregates over ALL runs (not just
+     * billed ones), measured directly start->end, independent of the
+     * sampling profiler. Together with `runs` these give a low-noise
+     * best-case (wall_time_min), an unbiased mean (wall_time_sum / runs,
+     * free of the sampled-billing survivorship bias), and enough for a
+     * stddev (wall_time_sum_sq, in ns^2; only overflows for absurd run
+     * counts). All in nanoseconds. */
+    uint64_t wall_time_min;
+    uint64_t wall_time_max;
+    uint64_t wall_time_sum;
+    uint64_t wall_time_sum_sq;
 };
 
 /** Per-invocation-of-a-pipeline state. Lives on the stack of the Halide
