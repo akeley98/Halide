@@ -1697,6 +1697,92 @@ WEAK void halide_profiler_report_unlocked(void *user_context, halide_profiler_st
             }
             support_colors = old;
         }
+
+        // [TEMPORARY -- do not upstream] Auxiliary structured-warning dump.
+        // Emitted here, inside the text-report loop, so it can reuse the
+        // in-scope warnings[] / rule() / canon_fs / canon_cs without hoisting
+        // them out of this monolith (which would create merge pain against
+        // upstream). Touches no existing output/struct/counter. Gated on its
+        // own env var. Output is JSON Lines: one compact object per pipeline.
+        // The first pipeline opens "w" (fresh file per process); later ones
+        // append, so multiple pipelines each get their own line rather than
+        // clobbering each other.
+        if (const char *warn_path = getenv("HL_PROFILER_JSON_TEMPORARY_WARNINGS")) {
+            void *wf = halide_fopen(warn_path, p == s->pipelines ? "w" : "a");
+            if (wf) {
+                bool old_colors = support_colors;
+                support_colors = false;  // keep ANSI escapes out of the JSON
+                StringStreamPrinter<4096> js(user_context);
+                auto flush = [&]() {
+                    if (js.size() > 0) {
+                        fwrite(js.str(), js.size(), 1, wf);
+                        js.clear();
+                    }
+                };
+                auto esc = [&](const char *s) {
+                    char one[2] = {0, 0};
+                    for (const char *q = s; *q; q++) {
+                        char c = *q;
+                        if (c == '"' || c == '\\') {
+                            one[0] = c;
+                            js << "\\" << one;
+                        } else if (c == '\n') {
+                            js << "\\n";
+                        } else if (c == '\r') {
+                            js << "\\r";
+                        } else if (c == '\t') {
+                            js << "\\t";
+                        } else {
+                            one[0] = c;
+                            js << one;
+                        }
+                    }
+                };
+                auto slug = [](WarningKind w) -> const char * {
+                    switch (w) {
+                    case warning_allocs_in_parallel_loop: return "allocs_in_parallel_loop";
+                    case warning_poor_thread_utilization_many_loops: return "poor_thread_utilization_many_loops";
+                    case warning_poor_thread_utilization_fine_tasks: return "poor_thread_utilization_fine_tasks";
+                    case warning_too_few_parallel_tasks: return "too_few_parallel_tasks";
+                    case warning_not_parallelized: return "not_parallelized";
+                    case warning_high_recompute: return "high_recompute";
+                    case warning_could_compute_further_inside: return "could_compute_further_inside";
+                    case warning_no_vector_ops: return "no_vector_ops";
+                    case warning_more_gathers_than_vector_loads: return "more_gathers_than_vector_loads";
+                    case warning_more_scatters_than_vector_stores: return "more_scatters_than_vector_stores";
+                    case warning_many_scalar_stores: return "many_scalar_stores";
+                    case warning_narrow_vector_stores: return "narrow_vector_stores";
+                    case warning_approximated_counters: return "approximated_counters";
+                    case warning_device_bouncing: return "device_bouncing";
+                    default: return "unknown";
+                    }
+                };
+                js << "{\"pipeline\": \"";
+                esc(p->name);
+                js << "\", \"warnings\": [";
+                for (int w = 0; w < num_warnings; w++) {
+                    int cid = warnings[w].canonical_id;
+                    WarningKind k = (WarningKind)warnings[w].rule_id;
+                    sstr.clear();
+                    rule(&canon_fs[cid], &canon_cs[cid], k, /*emit=*/true);
+                    js << (w ? ",{" : "{");
+                    js << "\"rule_id\": " << (int)k << ", \"rule\": \"" << slug(k)
+                       << "\", \"canonical_id\": " << cid << ", \"func\": \"";
+                    esc(canon_fs[cid].name);
+                    js << "\", \"message\": \"";
+                    esc(sstr.str());
+                    js << "\"}";
+                    if (js.size() > 2048) {
+                        flush();
+                    }
+                }
+                js << "]}\n";
+                flush();
+                fclose(wf);
+                support_colors = old_colors;
+            }
+        }
+
         sstr.clear();
         emit_dim(horiz_rule);
         halide_print(user_context, sstr.str());
