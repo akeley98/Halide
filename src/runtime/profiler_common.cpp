@@ -1836,8 +1836,21 @@ WEAK void halide_profiler_report_unlocked(void *user_context, halide_profiler_st
                 str(v);
                 json << (last ? "\n" : ",\n");
             };
+            auto field_f64 = [&](const char *indent, const char *name, double v, bool last = false) {
+                json << indent;
+                str(name);
+                json << ": " << v;
+                json << (last ? "\n" : ",\n");
+            };
 
-            json << "{\n  \"pipelines\": [";
+            // Bump when the JSON schema or measurement semantics change, so
+            // consumers (e.g. the profiler-campaign tool) can refuse to compare
+            // records across incompatible versions. Records with no
+            // profiler_version at all predate this field and are legacy.
+            const int profiler_json_version = 1;
+            json << "{\n";
+            field_i("  ", "profiler_version", profiler_json_version);
+            json << "  \"pipelines\": [";
             bool first_pipeline = true;
             for (halide_profiler_pipeline_stats *pp = s->pipelines; pp;
                  pp = (halide_profiler_pipeline_stats *)(pp->next)) {
@@ -1845,6 +1858,11 @@ WEAK void halide_profiler_report_unlocked(void *user_context, halide_profiler_st
                 first_pipeline = false;
 
                 json << "    {\n";
+                // Also stamped per-pipeline (not just top-level) because the
+                // dh_hl harness stores only pipelines[0] as a benchmark record's
+                // "profiler" object and drops the top-level wrapper -- so the
+                // top-level profiler_version wouldn't otherwise reach consumers.
+                field_i("      ", "profiler_version", profiler_json_version);
                 field_str("      ", "name", pp->name);
                 field_i("      ", "runs", pp->runs);
                 field_i("      ", "billed_runs", pp->billed_runs);
@@ -1905,7 +1923,20 @@ WEAK void halide_profiler_report_unlocked(void *user_context, halide_profiler_st
                     field_u64("          ", "vector_stores", fs->vector_stores);
                     field_u64("          ", "scatters", fs->scatters);
                     field_u64("          ", "bytes_stored", fs->bytes_stored);
-                    field_u64("          ", "inlined_calls", fs->inlined_calls, true);
+                    field_u64("          ", "inlined_calls", fs->inlined_calls);
+                    // Claude: Computed here (not left to the consumer) because the
+                    // formula is subtle: points_computed captures over-compute
+                    // the box-required counter misses (RoundUp tails, failed
+                    // sliding windows), and inlined Funcs have no stage-0
+                    // stores so they fall back to inlined_calls. Mirrors the
+                    // recompute-ratio the text report / warnings use.
+                    //
+                    // David Zhao Akeley 2026-07-23: scared this formula is
+                    // subtly different; recompute_ratio helper in the future?
+                    uint64_t rc_num = fs->points_computed + fs->inlined_calls;
+                    double recompute_ratio = fs->points_required_at_root ?
+                        (double)rc_num / (double)fs->points_required_at_root : 0.0;
+                    field_f64("          ", "recompute_ratio", recompute_ratio, true);
                     json << "        }";
 
                     // Flush periodically so we don't overflow the buffer for
