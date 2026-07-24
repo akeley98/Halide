@@ -73,12 +73,17 @@ is OK, because "no anchor at all" is global). Issue a warning, with a
 brief explanation of possible noise consequences. We DO need this
 fallback to work though, because of the bootstrapping problem.
 
+Claude's warning: "ranking is drift-exposed until you set an anchor"
+
+TODO: consider warning if `A` drifts far from `S` performance.
+Large gaps make `A` less effective as an anti-drift mechanism.
+
 ### Obsoleted-by
 
 The obsolete check run for parent/child (`P`/`C`) is basically as you
 proposed. Search for all benchmark sets containing a comparison
 between `P` and `C`, aggregate all their batches, and extract
-one sample value `min_runtime(C) - min_runtime(P)`.
+one sample value `min_runtime(C) / min_runtime(P)`.
 If the confidence interval of all these values is strictly less than 0,
 then conclude `P` is obsoleted-by the faster `C`.
 
@@ -86,6 +91,16 @@ If no such benchmark sets are found, just quietly not report anything.
 This is the degenerate case of 0 samples found (<=2 implies NaN
 confidence interval). Obsoleted-by is just a convenience to help the
 agent drop ideas buried in the interior of the sub-tree.
+
+Claude argued for divide instead of subtract: obsoleted-by uses a
+difference; a ratio would be more powerful (minor-medium).
+`min(C) − min(P)` is sign-robust (so the CI < 0 conclusion is safe),
+but under multiplicative drift each same-batch difference is scaled by that
+batch's factor m(b)·(τC − τP), so the magnitude jitters
+batch-to-batch, widening the CI and costing you significance
+power. Using `min(C)/min(P)` < 1 (or the log-difference) cancels m(b) in
+magnitude too → tighter CI, and it's consistent with how you compute
+cost. Same sign conclusion, more sensitivity.
 
 ### Siblings
 
