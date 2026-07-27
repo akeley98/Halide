@@ -58,9 +58,15 @@ This contains files and directories holding state:
 
 * **Benchmark Result Files:** store in `bench/{hostname}_{timestamp of benchmark}.json`
 
-* **Commentary Files:** store in `comment/{timestamp of commentary}.txt` if no importance value,
-  otherwise `comment/{timestamp of commentary}_{importance}.txt`; importance formatted base-10 like `%d`.
-  Contents are just the text of the commentary.
+IMPL TASK: new commentary state
+
+* **Commentary Files:**
+  store in `comment/{timestamp}_{hash}.json` with key-value pairs:
+  * `text`: text of commentary
+  * `review`: review value
+  * `cancels`: list of strings; each giving the `{timestamp}_{hash}` value
+    of a commentary sub-object in the cancels list.
+    NB this makes inter-schedule-node cancellations literally impossible to express
 
 *Merge risk:* `parent.txt` merge conflict if two branches retroactively parented
 a root schedule node to two different idea nodes.
@@ -895,6 +901,8 @@ them from names another process already committed (the catalog lock guarantees
 those are on disk before we mint). One `stat` per name, no enumeration of the
 timestamp population.
 
+IMPL TASK: remove reference to commentary importance
+
 This is implemented as `Catalog.mint_timestamped_name(build_path)` in
 `catalog.py`, where `build_path` maps a candidate timestamp to the absolute path
 whose uniqueness must hold. Its callers: `Catalog.create_schedule` (mints over
@@ -1061,8 +1069,6 @@ When traversing up the tree,
 check that the two edges follow the tree structure timestamp invariant.
 So we are guaranteed not to end up in an infinite loop
 even if the catalog state is cooked.
-
-FUTURE: use the `importance` stuff to filter to less info.
 
 
 # Tests

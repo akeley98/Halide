@@ -114,20 +114,19 @@ sha256, lowercase hex digits.
 
 * **UTC wall time timestamp:** timestamp of when the schedule node was created.
 
-* **Schedule Node Full ID:** `{timestamp}_{hash}` where `hash` is that of the stored C++ code encoded as UTF-8.
+* **Schedule Node Full ID:**
+  `{timestamp}_{hash}` where `hash` is that of the stored C++ code encoded as UTF-8.
   Exactly 90 characters.
 
 * **Edges:** 0 or 1 parent idea nodes, 0 or more child idea nodes.
 
 * **Result:** C++ compiler error, Halide compiler error, or success.
 
-* **Benchmark Result Files** JSON format, documented later
+* **Benchmark Result Files** JSON format, documented later.
 
-* **Commentary Files:** Contains timestamp, optional integer importance value, commentary text.
-  For minor schedules, should be used to explain what went wrong with this implementation attempt.
-  For major schedules, should be used as a post-mortem, or commentary on the effectiveness of the change
-  implemented from the idea.
-  The harness doesn't enforce these "shoulds"
+* **Commentary:** remarks with possible opinionated review; documented later.
+
+* **Review:** derived value from commentary; documented later.
 
 FUTURE: consider how to store history of sweeping over `GeneratorParam` values.
 For now, the required default value of the `GeneratorParam`
@@ -150,11 +149,10 @@ may be used as an out-of-band method to recommend the "official" parameter value
   The other child schedules are compiler errors or imperfect attempts,
   tracked for research purposes.
 
-* **Importance:** derived state; higher is more important.
-  If there exists no canonical schedule: negative infinity
-  If there exists a canonical schedule with no commentary containing importance values: 0
-  Otherwise: maximum of all commentary importance values.
-  Note: this design means adding commentary with negative importance can "demote" a 0-importance node.
+IMPL TASK: remove importance stuff; replace with review
+
+* **Review:** Inherits the review value of the canonical schedule.
+  The review is `neutral` if there's no canonical schedule.
 
 * **Idea Side Links:** Encodes semantic connections between ideas,
   outside the tree discipline.
@@ -200,6 +198,37 @@ described a few sections later.
 current session, unless the tool is marked as an exception (`does not acquire session lock`)
 The session lock (see "Locking") will catch many such violations,
 but will not prevent observing a partial edit to the workspace C++ file.
+
+
+### Commentary State (Sub-Object of Schedule Nodes)
+
+IMPL TASK: totally revamped from what exists now
+
+* **Text of commentary**
+
+* **Commentary Full ID:**
+  `{parent schedule full ID}_{timestamp}_{hash}`
+  where `hash` is that of the commentary text encoded as UTF-8.
+
+* **Review:** one of `neutral`, `negative`, `positive`, or `lost_interest`.
+  This may be used as an adjective (e.g. "positive commentary").
+
+* **Cancels List:** list of other commentary sub-objects
+  with the *same parent* schedule node.
+
+A commentary is **cancelled** if it appears in any cancels list.
+The "review" of a schedule node is derived from its **non-cancelled**
+commentary sub-objects:
+
+* At least one positive and one negative: `mixed`
+
+* Otherwise, at least one positive: `positive`
+
+* Otherwise, at least one negative: `negative`
+
+* Otherwise, at least one lost-interest: `lost_interest`
+
+* Otherwise, `neutral`
 
 
 ### Current Idea State
@@ -302,9 +331,16 @@ Unless otherwise stated, any of the `{...}` components may be empty.
   which cannot be empty.
   The tool accepts but does not generate short IDs of this form.
 
+**Commentary short ID:**
+
+* `{schedule ID}.{hash prefix}`:
+  Find all schedule nodes matching the given ID (long or short),
+  then match any commentary sub-objects of those schedule nodes
+  that have a hash starting with `{hash prefix}`.
+
 **Warning:** short IDs may become invalid due to new ambiguities.
 Use them only as convenient IDs for immediate tool use,
-and not long-term identification (e.g. in commentary).
+and not long-term identification (e.g. in commentary text).
 
 
 ## Session Handles
@@ -631,16 +667,20 @@ There is intentionally no "change canonical schedule" tool.
 
     dh_hl comment -C ... {commentary file} [schedule ID]
 
+IMPL TASK: remove `comment_importance` tool; add `--review`
+
 Adds a new commentary file to the referenced schedule node,
 with contents copied from the passed `commentary file`.
-The commentary has no importance value.
 
+Use the optional `--review [review]` arguments to override
+the review from the default `neutral` value.
+This must be a valid review type other than `mixed`.
 
-### Comment With Importance Tool
-
-    dh_hl comment_importance -C ... {commentary file} {importance} [schedule ID]
-
-Like the `comment` tool but with the addition of the importance value.
+Use the optional `--cancels [commentary ID]` arguments to add to
+the cancels list of the new commentary.
+Use multiple `--cancels` to create a longer list.
+It's an error if any commentary object that isn't parented
+to the referenced schedule node is passed.
 
 
 ### New Root Tool
@@ -806,13 +846,26 @@ There is no predefined order of the schedules.
 
     dh_hl view_commentary -C ... [schedule ID]
 
+IMPL TASK: tool completely revamped
+
 Print all commentary of the referenced schedule node.
 
-Prints each commentary file separated by dividers, with its
+Prints each commentary file separated by dividers, with contents:
 
-* timestamp
-* importance
+* `timestamp: [timestamp]`
+
+* `review: [review]`
+
+* `cancelled: [true|false]`
+
+* One `cancels: [commentary ID]` for each entry is the cancels list
+
 * full text
+
+IMPL TASK: can only cancel other commentary objects
+belonging to the same schedule node.
+Therefore `cancelled` may be derived only from one schedule node.
+Don't waste time touring the entire catalog.
 
 
 ### View Session Commentary Tool
@@ -820,10 +873,14 @@ Prints each commentary file separated by dividers, with its
     # Does not acquire session lock
     dh_hl view_session_commentary -s ...
 
+IMPL TASK: remove `importance` filter
+
 Similar to `view_commentary`, except
 
-* The referenced schedule node is the output schedule node of the current session (error if not yet set).
-* Only commentary with a positive importance value is printed.
+* The referenced schedule node is the output schedule node of the
+  current session (error if not yet set).
+
+* TODO will change when sessions are updated to have multiple outputs
 
 
 ### Force Parent Idea Tool
@@ -931,10 +988,12 @@ Give both full session IDs and session handles.
 
     dh_hl close_session -s ... [schedule ID]
 
+IMPL TASK: remove importance requirement
+
 Set the given schedule node to be the current session's output schedule node.
 Error if the current session already has an output schedule node,
-or if the given schedule node has no commentary with positive importance.
-In the latter case, remind the caller of the `comment_importance` tool.
+or if the given schedule node has no commentary sub-objects.
+In the latter case, remind the caller of the `comment` tool.
 
 
 ### Delist Session Tool
@@ -1060,6 +1119,16 @@ this is load bearing for correctness, since it encodes more than a session full 
 
     dh_hl json_schedule_info -C ... [schedule ID]
 
+IMPL TASK: `commentary` output update, `review` state.
+
+IMPL TASK: as before, the "cancelled-by" state of each commentary sub-object
+can be derived solely from the information in this schedule node only
+
+IMPL TASK: add end-to-end CLI tests that create catalog, idea, schedule nodes,
+add commentary with various reviews to at least 2 different schedule nodes,
+and check that the `review`, `cancels`, `cancelled_by` values are correct
+for multiple idea/schedule nodes.
+
 Prints the state of the referenced schedule node as a JSON object, with key/value pairs
 
 * `id`: full ID of node
@@ -1079,15 +1148,32 @@ Prints the state of the referenced schedule node as a JSON object, with key/valu
 * `benchmark`: list of objects,
   each benchmark file becomes one benchmark JSON object (described later)
 
-* `commentary`: list of objects, one for each commentary file.
-  Has key/value pairs `timestamp` (formatted string timestamp value),
-  `importance` (number if importance exists, null if not),
-  `text` (string contents).
+* `review`: string value derived from commentary
+
+* `commentary`: list of objects, with key/value pairs:
+    * `id`: full ID of commentary
+
+    * `text`: full commentary text
+
+    * `review`: string review value
+
+    * `cancels`: cancels list as list of commentary full ID strings
+
+    * `cancelled_by`: unordered list of commentary sub-objects (by full ID)
+      that contain this commentary sub-object in their cancels list.
+      This commentary is cancelled iff the `cancelled_by` list is non-empty.
 
 
 ### JSON Idea Info Tool
 
     dh_hl json_idea_info -C ... {idea ID}
+
+IMPL TASK: `idea_side_links`, `review`, remove `importance`.
+
+IMPL TASK: add end-to-end CLI tests that create catalog, idea, schedule nodes,
+add commentary with various reviews to at least 2 different schedule nodes,
+add (ignored) commentary to minor schedule nodes,
+and check that the `review` value is correct for multiple idea/schedule nodes.
 
 Prints the state of the referenced idea node as a JSON object, with key/value pairs
 
@@ -1108,6 +1194,8 @@ Prints the state of the referenced idea node as a JSON object, with key/value pa
 * `idea_side_links`: list of objects in unspecified order;
   each unique link starting from this idea node is in the list exactly once,
   with key/values `id: string` (destination of link) and `type: string`.
+
+* `review`: string value derived from commentary
 
 
 ### JSON Session Info Tool
@@ -1135,6 +1223,10 @@ Prints the state of the current session as a JSON object, with key/value pairs
 ### JSON Export Tool
 
     dh_hl json_export -C ...
+
+IMPL TASK: Test this in connection with new commentary.
+Don't make these separate tests, just check both the `json_*_info` and
+`json_export` CLI commands at the end of the same tests.
 
 Exports the entire catalog as a JSON object, with key/value pairs
 

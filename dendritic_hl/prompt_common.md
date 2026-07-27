@@ -277,6 +277,11 @@ If you are satisfied with the implementation of the idea,
 then use `dh_hl canon` to set your code as the "canonical schedule" of the idea.
 This canonical schedule is eligible to have child ideas added.
 
+If you find the idea too flawed to implement,
+restore the parent schedule's state and set a copy of it as canonical.
+Then give the new child schedule a commentary with a negative review.
+
+
 ## Choice C: Launch Sub-agent
 
 NOTE: this section does not override any other prompts if they forbid
@@ -336,8 +341,7 @@ Conclude the session as follows:
   This could, for example, be the canonical schedule of one of your ideas,
   or be the output schedule of a sub-agent.
 
-* Record the outcome and findings of the session through the
-  `comment_importance` tool. Use a positive importance value (`1` is reasonable).
+* Record the outcome and findings of the session through the `comment` tool.
 
 * Close the session with the `close_session` tool.
 
