@@ -4,6 +4,21 @@ These are the implementation-side companion notes to [idea.md](idea.md) (the
 behavior contract).  Keep the two in sync when changing a tool.
 
 
+# Stable Hostname
+
+Linux: Read `/etc/hostname`
+
+Mac: `scutil --get ComputerName`; seems to be the only stable option on Mac
+so I'll just tolerate that `hostname` is a misnomer here.
+(I'd rather not expand to `hostname_on_Linux_ComputerName_on_Mac`).
+
+IMPL TASK: use this for all places where `hostname` is needed.
+This computer is a Mac; best-effort implement the Linux path and I'll test it myself later.
+Hard-wire a test for now that `username == "dakeley"` implies `hostname == "David's MacBook Pro"`
+and `username == "mantissa"` implies `hostname == "MantissaAmpere"`.
+This will remind me not to forget this next time I'm on the mantissa Linux machine.
+
+
 # Catalog Directory State
 
 The top-level catalog directory contains sub-directories for each node type:
@@ -86,6 +101,14 @@ This contains files and directories holding state:
   File doesn't exist if there's not yet a canonical schedule.
   *Merge risk:* Different IDs in incoming `canonical.txt`.
   Fix with `fix_canonical` tool.
+
+IMPL TASK: idea side links
+
+* **Idea Side Links:** Idea side links are encoded by the mere existence of files.
+  This design is to prevent merge conflicts.
+  The files are empty.
+  `idea/{id A}/borrows_from/{id B}` encodes a "borrows" link from A to B.
+  `idea/{id A}/superseded_by/{id B}` encodes a "superseded-by" link from A to B.
 
 
 ## Session Nodes on Disk
@@ -272,6 +295,8 @@ which Python 3 is compiled to work around.
 But we are already not portable to Windows for other reasons anyway.
 Mac limit is `1024` characters; should be plenty.
 
+
+# Tool Details
 
 ## Status Tool — Implementation Details
 
@@ -1040,7 +1065,7 @@ even if the catalog state is cooked.
 FUTURE: use the `importance` stuff to filter to less info.
 
 
-## Tests
+# Tests
 
 There is a `tests/` directory holding a `pytest` suite for the harness.
 

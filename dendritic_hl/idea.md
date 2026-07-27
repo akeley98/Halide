@@ -156,6 +156,11 @@ may be used as an out-of-band method to recommend the "official" parameter value
   Otherwise: maximum of all commentary importance values.
   Note: this design means adding commentary with negative importance can "demote" a 0-importance node.
 
+* **Idea Side Links:** Encodes semantic connections between ideas,
+  outside the tree discipline.
+  A link is directional: it connects one idea node to another,
+  and is either a `borrows_from` link, or a `superseded_by` link.
+
 
 ### Session Node State
 
@@ -172,9 +177,11 @@ may be used as an out-of-band method to recommend the "official" parameter value
 
 * **Parent Session:** Optional, reference to another session node.
 
+IMPL TASK: `hostname` change
+
 * **Session Node Full ID:** `{depth}_{timestamp}_{username}@{hostname}`.
   This is, for now, intentionally de-anonymizing.
-  The `username` and `hostname` are sanitized.
+  The `username` and `hostname` are sanitized in the filename.
 
 * **Session Private Workspace** state: gitignore'd per-session-node state.
   This contains a session lock,
@@ -705,15 +712,23 @@ If the schedule node is a minor schedule, the tool advises:
 
 It is an error if the referenced schedule node is not a major schedule.
 
-For each child idea node of the referenced schedule node, prints 4-5 lines:
+For each child idea node of the referenced schedule node, prints 4 or more lines:
 
-* The ID of the idea node
-* The proposal name (indent by 2)
+* The ID of the idea node (indent all lines except this by 2)
+
+* The proposal name
+
 * ID of canonical schedule, or `(none)`
-* The first up-to 72 characters of the first line of the proposal text (indent by 2)
+
+* The first up-to 72 characters of the first line of the proposal text
+
 * If the last non-empty line of the proposal text starts with
-  `Created for session:`, print that line (indent by 2).
+  `Created for session:`, print that line.
   (See "Session Creation Tools: Common Information").
+
+* For each idea side link,
+  print `borrowed from: {idea short ID}`
+  or `superseded by: {idea short ID}` as appropriate.
 
 
 ### View Idea Tools
@@ -725,10 +740,27 @@ For each child idea node of the referenced schedule node, prints 4-5 lines:
 Prints the referenced idea node's
 
 * proposal name
+
 * full proposal text
+
 * list of child schedule IDs, one line each
 
+* idea side links, in the same format as `list_ideas`
+
 `view_session_idea` references the current session's seed idea.
+
+
+### Idea Side Link Tool
+
+    # Reads like a sentence, e.g. abcdef.foo borrows_from 123456.bar
+    dh_hl add_idea_side_link -C ... {idea ID lhs} {type} {idea ID rhs}
+
+IMPL TASK: add tool
+
+Add an idea side link from the LHS idea to the RHS idea,
+of type `borrows_from` or `superseded_by`.
+Silent no-op if this exactly duplicates an existing idea side link.
+(i.e. same LHS, RHS, and type).
 
 
 ### History Tool
@@ -1073,6 +1105,10 @@ Prints the state of the referenced idea node as a JSON object, with key/value pa
 
 * `importance`: number if finite, null for negative infinity
 
+* `idea_side_links`: list of objects in unspecified order;
+  each unique link starting from this idea node is in the list exactly once,
+  with key/values `id: string` (destination of link) and `type: string`.
+
 
 ### JSON Session Info Tool
 
@@ -1179,6 +1215,8 @@ All pairs go to the Halide generator as `key=value`.
 
 
 ## Benchmark JSON Format
+
+IMPL TASK: `hostname` change
 
 Key value pairs:
 
