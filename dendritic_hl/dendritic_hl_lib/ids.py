@@ -18,6 +18,8 @@ Formats (see idea.md):
 
 import hashlib
 import re
+import subprocess
+import sys
 from datetime import datetime, timezone
 
 TIMESTAMP_LEN = 25
@@ -113,6 +115,40 @@ _SESSION_ID_RE = re.compile(
     r"(?:0|[1-9]\d*)_"
     r"\d{4}-\d\d-\d\dT\d{6}_\d{6}Z_"
     r"[A-Za-z0-9_-]+@[A-Za-z0-9_-]+\Z")
+
+
+def stable_hostname():
+    """A human-readable hostname that stays stable across reboots/networks.
+
+    Deliberately de-anonymizing (see idea.md).  Platform-specific because the
+    plain `socket.gethostname()` is not stable enough:
+
+    * macOS: ``scutil --get ComputerName`` (the only stable option here, so we
+      tolerate that "hostname" is a misnomer -- e.g. "David's MacBook Pro").
+    * Linux: the contents of ``/etc/hostname``.
+
+    Falls back to ``socket.gethostname()`` if the platform path fails, so a
+    profiling run never crashes just because the name lookup misbehaved.  The
+    RAW string is returned; callers that use it in an ID or filename must run it
+    through ``sanitize_component`` first (only the benchmark JSON ``hostname``
+    field keeps the raw value, as a hedge against losing information)."""
+    try:
+        if sys.platform == "darwin":
+            out = subprocess.run(["scutil", "--get", "ComputerName"],
+                                 capture_output=True, text=True, check=True)
+            name = out.stdout.strip()
+            if name:
+                return name
+        else:
+            # Best-effort Linux path (David tests this on the mantissa machine).
+            with open("/etc/hostname", "r", encoding="utf-8") as f:
+                name = f.read().strip()
+            if name:
+                return name
+    except Exception:
+        pass
+    import socket
+    return socket.gethostname()
 
 
 def sanitize_component(s, maxlen=64):

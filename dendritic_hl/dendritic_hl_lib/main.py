@@ -108,8 +108,7 @@ COMMAND_HELP = {
     "build": "Compile the workspace and add/update its schedule node.",
     "profile": "Like build, but benchmark with the profiler over parameter sets.",
     "canon": "Make the current schedule the canonical schedule of the current idea.",
-    "comment": "Attach commentary text to a schedule node.",
-    "comment_importance": "Attach commentary with an integer importance value.",
+    "comment": "Attach commentary (with a review and optional cancels) to a schedule node.",
     "new_root": "Create a new root schedule node from the workspace.",
     "set_idea": "Set the current idea state to an existing idea node.",
     "new_idea": "Add a child idea node (proposal) to a major schedule.",
@@ -122,6 +121,7 @@ COMMAND_HELP = {
     "list_child_schedules": "List the child schedules of an idea node.",
     "list_equal_schedules": "List schedules with the same source hash as the given one.",
     "view_idea": "Show an idea node's proposal and child schedules.",
+    "add_idea_side_link": "Add a borrows_from/superseded_by link between two idea nodes.",
     "force_parent_idea": "Parent a root schedule to an idea as its canonical (rare).",
     "json_schedule_info": "Dump a schedule node's full state as JSON.",
     "json_idea_info": "Dump an idea node's full state as JSON.",
@@ -158,7 +158,7 @@ COMMAND_HELP = {
     "session_handle": "Print (allocating if needed) the current session's handle.",
     "view_session_idea": "Show the current session's seed idea.",
     "view_commentary": "Show all commentary of a schedule node.",
-    "view_session_commentary": "Show the session output's positive-importance commentary.",
+    "view_session_commentary": "Show all commentary of the current session's output schedule.",
     "json_session_info": "Dump the current session's state as JSON.",
     "json_export": "Dump the entire catalog (ideas, schedules, sessions) as JSON.",
     "prompt": "Print the assembled main-agent or sub-agent prompt.",
@@ -203,11 +203,11 @@ def _build_parser():
     sp = add("comment")
     sp.add_argument("commentary", help="commentary file ('-' for stdin)")
     sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
-
-    sp = add("comment_importance")
-    sp.add_argument("commentary", help="commentary file ('-' for stdin)")
-    sp.add_argument("importance", type=int, help="integer importance value")
-    sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
+    sp.add_argument("--review", default="neutral",
+                    help="review value: neutral (default), negative, positive, "
+                         "or lost_interest (not 'mixed')")
+    sp.add_argument("--cancels", action="append", metavar="COMMENTARY_ID",
+                    help="cancel a same-node commentary (repeatable)")
 
     add("new_root")
 
@@ -242,6 +242,11 @@ def _build_parser():
 
     sp = add("view_idea")
     sp.add_argument("idea", help="idea ID")
+
+    sp = add("add_idea_side_link")
+    sp.add_argument("idea_lhs", help="source idea ID")
+    sp.add_argument("type", help="borrows_from or superseded_by")
+    sp.add_argument("idea_rhs", help="destination idea ID")
 
     sp = add("force_parent_idea")
     sp.add_argument("idea", help="idea ID")
@@ -350,7 +355,6 @@ _DISPATCH = {
     "profile": build_mod.cmd_profile,
     "canon": tools.cmd_canon,
     "comment": tools.cmd_comment,
-    "comment_importance": tools.cmd_comment_importance,
     "new_root": tools.cmd_new_root,
     "set_idea": tools.cmd_set_idea,
     "new_idea": tools.cmd_new_idea,
@@ -363,6 +367,7 @@ _DISPATCH = {
     "list_child_schedules": tools.cmd_list_child_schedules,
     "list_equal_schedules": tools.cmd_list_equal_schedules,
     "view_idea": tools.cmd_view_idea,
+    "add_idea_side_link": tools.cmd_add_idea_side_link,
     "force_parent_idea": tools.cmd_force_parent_idea,
     "json_schedule_info": tools.cmd_json_schedule_info,
     "json_idea_info": tools.cmd_json_idea_info,

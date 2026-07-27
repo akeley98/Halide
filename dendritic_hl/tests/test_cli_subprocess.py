@@ -7,6 +7,7 @@ are bootstrapped in-process (the `session` fixture); the child then operates on
 them via -C/-s.
 """
 
+import json
 import os
 
 
@@ -122,3 +123,43 @@ def test_successful_command_is_not_rolled_back(run_cli, session):
     r = run_cli("new_idea", *_cli(session), "vecwide", "-", input="proposal text")
     assert r.returncode == 0
     assert len(os.listdir(idea_root)) == before + 1
+
+
+def test_review_cancels_cancelled_by_via_real_cli(run_cli, session):
+    """Subprocess mirror of test_review.test_cancels_and_cancelled_by: drive the
+    real `comment`/`json_schedule_info` CLI, computing the derived review and
+    cancelled_by state end-to-end (comment text piped via stdin '-')."""
+    sid = run_cli("seed_schedule_full_id", *_cli(session)).stdout.strip()
+
+    def sched_json():
+        r = run_cli("json_schedule_info", "-C", session.catalog_dir, sid)
+        assert r.returncode == 0, r.stderr
+        return json.loads(r.stdout)
+
+    # A negative comment -> schedule review negative.
+    r = run_cli("comment", "-C", session.catalog_dir, "-", sid,
+                "--review", "negative", input="regression\n")
+    assert r.returncode == 0, r.stderr
+    obj = sched_json()
+    assert obj["review"] == "negative"
+    neg_id = obj["commentary"][0]["id"]
+
+    # A positive comment that CANCELS the negative one -> review flips positive.
+    r = run_cli("comment", "-C", session.catalog_dir, "-", sid,
+                "--review", "positive", "--cancels", neg_id,
+                input="actually fine\n")
+    assert r.returncode == 0, r.stderr
+
+    obj = sched_json()
+    by_text = {c["text"]: c for c in obj["commentary"]}
+    neg, pos = by_text["regression\n"], by_text["actually fine\n"]
+    assert pos["cancels"] == [neg_id]
+    assert neg["cancelled_by"] == [pos["id"]]
+    assert obj["review"] == "positive"
+
+    # An unresolvable --cancels target is a clean error, not a traceback.
+    r = run_cli("comment", "-C", session.catalog_dir, "-", sid,
+                "--review", "neutral", "--cancels", "root.deadbeef",
+                input="bad\n")
+    assert r.returncode == 1
+    assert "Traceback" not in r.stderr

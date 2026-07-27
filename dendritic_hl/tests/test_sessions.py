@@ -94,19 +94,19 @@ def test_new_sub_session(session, run_tool, capsys, tmp_path):
 
 # ---- close / successor / delist ------------------------------------------
 
-def _comment_importance(session, run_tool, tmp_path, importance=5):
-    cfile = _write(tmp_path, "c.txt", "session summary\n")
-    run_tool(tools.cmd_comment_importance,
-             session.ns(commentary=cfile, importance=importance))
+def _comment(session, run_tool, tmp_path, review="neutral",
+             text="session summary\n"):
+    cfile = _write(tmp_path, "c.txt", text)
+    run_tool(tools.cmd_comment, session.ns(commentary=cfile, review=review))
 
 
-def test_close_session_requires_positive_commentary(session, run_tool):
-    with pytest.raises(DhHlError, match="positive importance"):
+def test_close_session_requires_commentary(session, run_tool):
+    with pytest.raises(DhHlError, match="at least one commentary"):
         run_tool(tools.cmd_close_session, session.ns())
 
 
 def test_close_then_successor(session, run_tool, capsys, tmp_path):
-    _comment_importance(session, run_tool, tmp_path)
+    _comment(session, run_tool, tmp_path)
     out = _out(run_tool, capsys, tools.cmd_close_session, session.ns())
     assert "Closed session" in out
 
@@ -189,7 +189,7 @@ def test_copy_and_id_getters(session, run_tool, capsys, tmp_path):
 
 
 def test_terminus_and_output_getters_after_close(session, run_tool, capsys, tmp_path):
-    _comment_importance(session, run_tool, tmp_path)
+    _comment(session, run_tool, tmp_path)
     run_tool(tools.cmd_close_session, session.ns())
 
     out_full = _out(run_tool, capsys, tools.cmd_session_output_full_id,
@@ -201,9 +201,10 @@ def test_terminus_and_output_getters_after_close(session, run_tool, capsys, tmp_
 
 
 def test_view_commentary(session, run_tool, capsys, tmp_path):
-    _comment_importance(session, run_tool, tmp_path, importance=7)
+    _comment(session, run_tool, tmp_path, review="positive")
     out = _out(run_tool, capsys, tools.cmd_view_commentary, session.ns())
-    assert "importance: 7" in out
+    assert "review: positive" in out
+    assert "cancelled: false" in out
     assert "session summary" in out
 
 

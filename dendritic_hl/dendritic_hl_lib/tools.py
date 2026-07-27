@@ -13,7 +13,7 @@ from . import ids
 from . import locks
 from . import prompts
 from . import safety
-from .catalog import Catalog
+from .catalog import Catalog, COMMENTARY_REVIEWS, IDEA_SIDE_LINK_TYPES
 from .context import (Context, SessionWorkspace, resolve_target,
                       _validate_catalog_dir, read_text_or_stdin)
 from .errors import DhHlError
@@ -55,6 +55,23 @@ def _print_idea_listing(ctx, idea, marker=""):
     last = _last_nonempty_line(idea.proposal_text)
     if last.startswith("Created for session:"):
         print("  " + last)
+    for line in _side_link_lines(catalog, idea):
+        print("  " + line)
+
+
+_SIDE_LINK_LABELS = {"borrows_from": "borrowed from",
+                     "superseded_by": "superseded by"}
+
+
+def _side_link_lines(catalog, idea):
+    """One "borrowed from: {id}" / "superseded by: {id}" line per outgoing side
+    link, using the destination idea's short ID when it resolves."""
+    lines = []
+    for link_type, dest in idea.side_links:
+        dest_idea = catalog.ideas.get(dest)
+        dest_id = catalog.format_idea_id(dest_idea) if dest_idea else dest
+        lines.append("{}: {}".format(_SIDE_LINK_LABELS[link_type], dest_id))
+    return lines
 
 
 def _current_idea_description(cis):
@@ -214,26 +231,34 @@ def cmd_restore_idea(args):
 
 
 # ---------------------------------------------------------------------------
-# comment / comment_importance
+# comment
 # ---------------------------------------------------------------------------
 
 def cmd_comment(args):
     ctx = Context.for_catalog(args)
     node = ctx.resolve_schedule_arg(args.schedule)
     text = _read_file_or_stdin(args.commentary)
-    node.add_commentary(text, importance=None)
+    review = getattr(args, "review", None) or "neutral"
+    if review not in COMMENTARY_REVIEWS:
+        raise DhHlError(
+            "--review must be one of {} (not 'mixed', which is a derived "
+            "schedule review only)".format(", ".join(COMMENTARY_REVIEWS)))
+    # Resolve each --cancels target and require it to belong to THIS schedule
+    # node (a commentary can only cancel same-node commentary).
+    cancels = []
+    for cid in getattr(args, "cancels", None) or []:
+        target = ctx.catalog.resolve_commentary(cid)
+        if target.schedule.full_id != node.full_id:
+            raise DhHlError(
+                "--cancels target {} is not a commentary of schedule {}; a "
+                "commentary can only cancel others on the same schedule node"
+                .format(ctx.catalog.format_commentary_id(target),
+                        ctx.catalog.format_schedule_id(node)))
+        cancels.append(target.local_id)
+    node.add_commentary(text, review=review, cancels=cancels)
     ctx.finish()
-    print("Added commentary to " + ctx.catalog.format_schedule_id(node))
-
-
-def cmd_comment_importance(args):
-    ctx = Context.for_catalog(args)
-    node = ctx.resolve_schedule_arg(args.schedule)
-    text = _read_file_or_stdin(args.commentary)
-    node.add_commentary(text, importance=args.importance)
-    ctx.finish()
-    print("Added commentary (importance {}) to {}".format(
-        args.importance, ctx.catalog.format_schedule_id(node)))
+    print("Added {} commentary to {}".format(
+        review, ctx.catalog.format_schedule_id(node)))
 
 
 # ---------------------------------------------------------------------------
@@ -264,8 +289,7 @@ def cmd_new_root(args):
     if conflict_lines:
         node.add_commentary(
             "dh_hl new_root tool: automated merge conflict recovery\n"
-            + "\n".join(conflict_lines) + "\n",
-            importance=None)
+            + "\n".join(conflict_lines) + "\n")  # default neutral review
 
     ctx.finish()
     print("Created root schedule " + catalog.format_schedule_id(node))
@@ -415,11 +439,34 @@ def _print_idea_view(catalog, idea):
         print("  (none)")
     for s in sorted(children, key=lambda n: n.timestamp):
         print("  " + catalog.format_schedule_id(s))
+    for line in _side_link_lines(catalog, idea):
+        print(line)
 
 
 def cmd_view_idea(args):
     ctx = Context.for_catalog(args)
     _print_idea_view(ctx.catalog, ctx.catalog.resolve_idea(args.idea))
+
+
+# ---------------------------------------------------------------------------
+# add_idea_side_link
+# ---------------------------------------------------------------------------
+
+def cmd_add_idea_side_link(args):
+    ctx = Context.for_catalog(args)
+    if args.type not in IDEA_SIDE_LINK_TYPES:
+        raise DhHlError("link type must be one of {}".format(
+            ", ".join(IDEA_SIDE_LINK_TYPES)))
+    lhs = ctx.catalog.resolve_idea(args.idea_lhs)
+    rhs = ctx.catalog.resolve_idea(args.idea_rhs)
+    added = lhs.add_side_link(args.type, rhs.full_id)
+    ctx.finish()
+    if added:
+        print("Added side link: {} {} {}".format(
+            ctx.catalog.format_idea_id(lhs), args.type,
+            ctx.catalog.format_idea_id(rhs)))
+    else:
+        print("Side link already present (no-op)")
 
 
 # ---------------------------------------------------------------------------
@@ -512,6 +559,13 @@ def cmd_list_equal_schedules(args):
 # ---------------------------------------------------------------------------
 
 def _schedule_json(catalog, node):
+    # cancelled_by is derivable from this node alone (cancels are same-node);
+    # convert same-node local IDs to full commentary IDs for the output.
+    cancelled_by = node.commentary_cancelled_by()
+
+    def full(local_id):
+        return "{}_{}".format(node.full_id, local_id)
+
     return {
         "id": node.full_id,
         "parent": node.parent_id,
@@ -520,17 +574,20 @@ def _schedule_json(catalog, node):
         "timestamp": node.timestamp,
         "hash": node.hash,
         "result": node.result,
+        "review": node.review,
         "benchmark": [b.data for b in node.benchmarks],
         "commentary": [
-            {"timestamp": c.timestamp, "importance": c.importance,
-             "text": c.text}
+            {"id": c.full_id,
+             "text": c.text,
+             "review": c.review,
+             "cancels": [full(x) for x in c.cancels],
+             "cancelled_by": [full(x) for x in cancelled_by.get(c.local_id, [])]}
             for c in sorted(node.commentary, key=lambda c: c.timestamp)
         ],
     }
 
 
 def _idea_json(catalog, idea):
-    imp = idea.importance
     return {
         "id": idea.full_id,
         "parent": idea.parent_id,
@@ -538,7 +595,11 @@ def _idea_json(catalog, idea):
         "proposal_name": idea.proposal_name,
         "proposal_text": idea.proposal_text,
         "canonical_schedule": idea.canonical,
-        "importance": None if imp == float("-inf") else imp,
+        "idea_side_links": [
+            {"id": dest, "type": link_type}
+            for link_type, dest in idea.side_links
+        ],
+        "review": idea.review,
     }
 
 
@@ -740,11 +801,10 @@ def cmd_close_session(args):
             "the current session already has an output schedule: "
             + ctx.catalog.format_schedule_id(
                 ctx.catalog.get_schedule(session.output_schedule_id)))
-    if not any(c.importance is not None and c.importance > 0
-               for c in node.commentary):
+    if not node.commentary:
         raise DhHlError(
-            "the output schedule must have commentary with positive importance;\n"
-            "use `dh_hl comment_importance` to record a session summary first")
+            "the output schedule must have at least one commentary sub-object;\n"
+            "use `dh_hl comment` to record a session summary first")
     session.set_output_schedule(node.full_id)
     ctx.finish()
     print("Closed session; output schedule "
@@ -988,30 +1048,33 @@ def cmd_view_session_idea(args):
     _print_idea_view(ctx.catalog, ctx.catalog.get_idea(ctx.session.seed_idea_id))
 
 
-def _print_commentary(node, positive_only=False):
+def _print_commentary(catalog, node):
     comments = sorted(node.commentary, key=lambda c: c.timestamp)
-    if positive_only:
-        comments = [c for c in comments
-                    if c.importance is not None and c.importance > 0]
+    # cancelled state is derivable from this node alone (cancels are same-node).
+    cancelled_by = node.commentary_cancelled_by()
     if not comments:
         print("(no commentary)")
     for c in comments:
         print("=" * 72)
         print("timestamp: " + c.timestamp)
-        print("importance: "
-              + ("none" if c.importance is None else str(c.importance)))
+        print("review: " + c.review)
+        print("cancelled: "
+              + ("true" if cancelled_by.get(c.local_id) else "false"))
+        for target_local in c.cancels:
+            target_full = "{}_{}".format(node.full_id, target_local)
+            print("cancels: " + target_full)
         print("-" * 72)
         print(c.text.rstrip("\n"))
 
 
 def cmd_view_commentary(args):
     ctx = Context.for_catalog(args)
-    _print_commentary(ctx.resolve_schedule_arg(args.schedule))
+    _print_commentary(ctx.catalog, ctx.resolve_schedule_arg(args.schedule))
 
 
 def cmd_view_session_commentary(args):
     ctx = Context.for_session(args, session_lock=False)
-    _print_commentary(_session_output_schedule(ctx), positive_only=True)
+    _print_commentary(ctx.catalog, _session_output_schedule(ctx))
 
 
 # ---- prompt ---------------------------------------------------------------

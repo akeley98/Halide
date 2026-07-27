@@ -1,10 +1,27 @@
 """ID/timestamp/hash primitives, including Hypothesis round-trip properties."""
 
+import getpass
 import re
 
 from hypothesis import given, strategies as st
 
 from dendritic_hl_lib import ids
+
+
+def test_stable_hostname_hardwired_for_known_machines():
+    """Machine-specific reminder wired per impl.md: on David's known machines the
+    stable hostname must match these exact strings.  A no-op elsewhere (so it
+    reminds him to re-check when he's next on the mantissa Linux box)."""
+    try:
+        username = getpass.getuser()
+    except Exception:
+        username = None
+    # NB the real macOS ComputerName uses a typographic apostrophe (U+2019),
+    # not the ASCII "'" the impl.md note was casually written with.
+    expected = {"dakeley": "David’s MacBook Pro",
+                "mantissa": "MantissaAmpere"}
+    if username in expected:
+        assert ids.stable_hostname() == expected[username]
 
 
 def test_timestamp_shape_and_length():

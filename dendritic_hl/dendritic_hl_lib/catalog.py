@@ -22,7 +22,6 @@ TODO update for session changes.
 import getpass
 import json
 import os
-import socket
 
 from . import ids
 from . import locks
@@ -48,37 +47,86 @@ _UNLOADED = object()
 # Sub-objects
 # ---------------------------------------------------------------------------
 
-class Commentary:
-    """One commentary file: comment/{ts}.txt or comment/{ts}_{importance}.txt."""
+# The review value of a single commentary (idea.md "Commentary State").  A
+# schedule node's *derived* review may additionally be "mixed" (positive AND
+# negative present), but "mixed" is never a value a single commentary carries.
+COMMENTARY_REVIEWS = ("neutral", "negative", "positive", "lost_interest")
 
-    def __init__(self, schedule, timestamp, importance, text=_UNLOADED, is_new=False):
+# The two directional idea-side-link types (idea.md "Idea Node State").
+IDEA_SIDE_LINK_TYPES = ("borrows_from", "superseded_by")
+
+
+class Commentary:
+    """One commentary file: comment/{ts}_{hash}.json (see idea.md "Commentary
+    State").  The JSON object holds `text`, `review`, and `cancels`.
+
+    `hash` is the sha256 of the commentary text.  The commentary's *local ID* is
+    "{ts}_{hash}" -- exactly the shape of a schedule full ID, so it parses/checks
+    with the same ids helpers.  Its *full ID* prepends the parent schedule full
+    ID: "{parent schedule full ID}_{ts}_{hash}".  The `cancels` list stores only
+    local IDs, since a commentary can only cancel others on the SAME schedule
+    node (so the whole cancelled/review derivation needs just this one node)."""
+
+    def __init__(self, schedule, timestamp, comment_hash,
+                 text=_UNLOADED, review=None, cancels=None, is_new=False):
         self.schedule = schedule
         self.timestamp = timestamp
-        self.importance = importance  # int or None
+        self.hash = comment_hash
         self._text = text
+        self._review = review        # None until loaded (never a valid value)
+        self._cancels = cancels       # None until loaded
+        # A new object already has every field in memory; a disk object loads
+        # all three from the single JSON file on first access.
+        self._loaded = is_new
         if is_new:
             self.schedule.catalog._mark_dirty(self)
 
     @property
+    def local_id(self):
+        return "{}_{}".format(self.timestamp, self.hash)
+
+    @property
+    def full_id(self):
+        return "{}_{}".format(self.schedule.full_id, self.local_id)
+
+    @property
     def filename(self):
-        if self.importance is None:
-            return "{}.txt".format(self.timestamp)
-        return "{}_{:d}.txt".format(self.timestamp, self.importance)
+        return "{}.json".format(self.local_id)
 
     @property
     def path(self):
         return os.path.join(self.schedule.comment_dir, self.filename)
 
+    def _ensure_loaded(self):
+        if self._loaded:
+            return
+        with open(self.path, "r", encoding="utf-8") as f:
+            obj = json.load(f)
+        self._text = obj.get("text", "")
+        self._review = obj.get("review", "neutral")
+        self._cancels = list(obj.get("cancels", []))
+        self._loaded = True
+
     @property
     def text(self):
-        if self._text is _UNLOADED:
-            with open(self.path, "r", encoding="utf-8") as f:
-                self._text = f.read()
+        self._ensure_loaded()
         return self._text
+
+    @property
+    def review(self):
+        self._ensure_loaded()
+        return self._review
+
+    @property
+    def cancels(self):
+        self._ensure_loaded()
+        return self._cancels
 
     def flush(self):
         safety.makedirs_tracked(self.schedule.comment_dir)
-        safety.new_file(self.path, self.text)
+        obj = {"text": self.text, "review": self.review,
+               "cancels": list(self.cancels)}
+        safety.new_file(self.path, json.dumps(obj, indent=1) + "\n")
 
 
 class Benchmark:
@@ -213,42 +261,69 @@ class ScheduleNode:
             cdir = self.comment_dir
             if os.path.isdir(cdir):
                 for name in os.listdir(cdir):
-                    if not name.endswith(".txt"):
+                    if not name.endswith(".json"):
+                        continue  # legacy .txt commentary (pre-review) ignored
+                    stem = name[:-len(".json")]
+                    # stem is the local ID "{ts}_{hash}" -- same shape as a
+                    # schedule full ID, so reuse those parsers/guards.
+                    if not ids.is_schedule_id(stem):
                         continue
-                    stem = name[:-len(".txt")]
-                    # Filename is {ts}.txt or {ts}_{importance}.txt.  The ts
-                    # itself contains '_', so split off a trailing _<int> only.
-                    importance = None
-                    base = stem
-                    idx = stem.rfind("_")
-                    if idx != -1:
-                        tail = stem[idx + 1:]
-                        try:
-                            importance = int(tail)
-                            base = stem[:idx]
-                        except ValueError:
-                            importance = None
-                            base = stem
-                    # Guard: base must be a valid timestamp; else treat whole
-                    # stem as timestamp with no importance.
-                    if not ids.is_timestamp(base):
-                        base, importance = stem, None
                     self._commentary.append(
-                        Commentary(self, base, importance))
+                        Commentary(self, ids.schedule_timestamp(stem),
+                                   ids.schedule_hash(stem)))
         return self._commentary
 
-    def add_commentary(self, text, importance=None):
-        def build_path(t):
-            if importance is None:
-                fn = "{}.txt".format(t)
-            else:
-                fn = "{}_{:d}.txt".format(t, importance)
-            return os.path.join(self.comment_dir, fn)
-        ts = self.catalog.mint_timestamped_name(build_path)
-        c = Commentary(self, ts, importance, text=text, is_new=True)
+    def add_commentary(self, text, review="neutral", cancels=None):
+        assert review in COMMENTARY_REVIEWS
+        h = ids.sha256_hex(text)
+        ts = self.catalog.mint_timestamped_name(
+            lambda t: os.path.join(self.comment_dir,
+                                   "{}_{}.json".format(t, h)))
+        c = Commentary(self, ts, h, text=text, review=review,
+                       cancels=list(cancels or []), is_new=True)
         # Ensure list is loaded then append so subsequent reads see it.
         self.commentary.append(c)
         return c
+
+    def commentary_cancelled_by(self):
+        """Map each commentary local ID -> list of local IDs of same-node
+        commentary that cancel it (name it in their `cancels` list).  Derivable
+        from this node alone, since cancels are always same-node (idea.md)."""
+        by = {c.local_id: [] for c in self.commentary}
+        for c in self.commentary:
+            for target in c.cancels:
+                if target in by:
+                    by[target].append(c.local_id)
+        return by
+
+    @property
+    def review(self):
+        """Derived review of this schedule from its NON-cancelled commentary
+        (idea.md "Commentary State"): mixed if both a positive and a negative
+        are present, else positive / negative / lost_interest / neutral."""
+        cancelled = set()
+        for c in self.commentary:
+            cancelled.update(c.cancels)
+        pos = neg = lost = False
+        for c in self.commentary:
+            if c.local_id in cancelled:
+                continue
+            r = c.review
+            if r == "positive":
+                pos = True
+            elif r == "negative":
+                neg = True
+            elif r == "lost_interest":
+                lost = True
+        if pos and neg:
+            return "mixed"
+        if pos:
+            return "positive"
+        if neg:
+            return "negative"
+        if lost:
+            return "lost_interest"
+        return "neutral"
 
     # -- benchmarks ------------------------------------------------------
     @property
@@ -328,6 +403,8 @@ class IdeaNode:
                                else _UNLOADED)
         self._canonical = _UNLOADED       # _UNLOADED / None (=no canonical) / schedule id str
         self._canonical_dirty = False
+        self._side_links = _UNLOADED      # _UNLOADED / list[(type, dest_id)]
+        self._new_side_links = []         # links added this run (to be flushed)
         # Derived child edges (filled by Catalog._ensure_linked):
         self.child_schedule_ids = None
         if is_new:
@@ -393,17 +470,43 @@ class IdeaNode:
         self.catalog._mark_dirty(self)
 
     @property
-    def importance(self):
-        """Derived; float('-inf') if no canonical schedule, else max of the
-        canonical schedule's commentary importances (0 if there are none)."""
+    def review(self):
+        """Inherits the review value of the canonical schedule; `neutral` if
+        there is no canonical schedule (idea.md "Idea Node State")."""
         canon_id = self.canonical
         if canon_id is None:
-            return float("-inf")
-        canon = self.catalog.get_schedule(canon_id)
-        imps = [c.importance for c in canon.commentary if c.importance is not None]
-        if not imps:
-            return 0
-        return max(imps)
+            return "neutral"
+        canon = self.catalog.schedules.get(canon_id)
+        if canon is None:
+            return "neutral"  # dangling canonical (e.g. git checkout desync)
+        return canon.review
+
+    # -- idea side links (presence files) --------------------------------
+    @property
+    def side_links(self):
+        """Outgoing idea side links as a list of (type, dest idea full ID).
+        Encoded purely by the existence of empty files
+        idea/{id}/{type}/{dest} (anti-merge-conflict design).  Read once."""
+        if self._side_links is _UNLOADED:
+            out = []
+            for link_type in IDEA_SIDE_LINK_TYPES:
+                d = os.path.join(self.dir, link_type)
+                if os.path.isdir(d):
+                    for name in os.listdir(d):
+                        out.append((link_type, name))
+            self._side_links = out
+        return self._side_links
+
+    def add_side_link(self, link_type, dest_id):
+        """Add an outgoing side link.  Silent no-op (returns False) if it exactly
+        duplicates an existing link (same type + destination)."""
+        assert link_type in IDEA_SIDE_LINK_TYPES
+        if (link_type, dest_id) in self.side_links:
+            return False
+        self.side_links.append((link_type, dest_id))
+        self._new_side_links.append((link_type, dest_id))
+        self.catalog._mark_dirty(self)
+        return True
 
     def flush(self):
         if self.is_new:
@@ -415,6 +518,11 @@ class IdeaNode:
         if self._canonical_dirty and self._canonical is not None:
             safety.write_allowed(os.path.join(self.dir, "canonical.txt"),
                                  self._canonical + "\n")
+        # Side links: one empty presence file per newly added link.
+        for link_type, dest_id in self._new_side_links:
+            d = os.path.join(self.dir, link_type)
+            safety.makedirs_tracked(d)
+            safety.new_file(os.path.join(d, dest_id), "")
 
 
 # ---------------------------------------------------------------------------
@@ -964,7 +1072,7 @@ class Catalog:
             username = getpass.getuser()
         except Exception:
             username = "user"
-        hostname = socket.gethostname()
+        hostname = ids.stable_hostname()  # sanitized inside make_session_id
         ts = self.mint_timestamped_name(
             lambda t: os.path.join(
                 self.session_dir,
@@ -1034,12 +1142,18 @@ class Catalog:
     def format_idea_id(self, node):
         return _format_idea_short(self, node)
 
+    def format_commentary_id(self, c):
+        return _format_commentary_short(self, c)
+
     # -- ID resolution ---------------------------------------------------
     def resolve_schedule(self, s):
         return _resolve_schedule(self, s)
 
     def resolve_idea(self, s):
         return _resolve_idea(self, s)
+
+    def resolve_commentary(self, s):
+        return _resolve_commentary(self, s)
 
 
 # ---------------------------------------------------------------------------
@@ -1161,6 +1275,66 @@ def _resolve_idea_matches_lenient(catalog, idea_part):
     return _match_ideas(catalog, hp, pp)
 
 
+def _resolve_schedule_matches_lenient(catalog, s):
+    """Like _resolve_schedule but returns *all* matches (no single-match /
+    empty-match error); accepts a full or short schedule ID."""
+    if ids.is_schedule_id(s):
+        node = catalog.schedules.get(s)
+        return [node] if node is not None else []
+    try:
+        return _match_schedules(catalog, s)
+    except DhHlError:
+        return []
+
+
+def _is_commentary_full_id(s):
+    # Commentary full ID = "{schedule full id}_{ts}_{hash}".  The trailing
+    # "{ts}_{hash}" (the local ID) has the exact shape of a schedule full ID, so
+    # both halves check with is_schedule_id.  Total = 90 + 1 + 90 = 181.
+    if len(s) != ids.SCHEDULE_ID_LEN * 2 + 1:
+        return False
+    sched = s[:ids.SCHEDULE_ID_LEN]
+    sep = s[ids.SCHEDULE_ID_LEN]
+    local = s[ids.SCHEDULE_ID_LEN + 1:]
+    return sep == "_" and ids.is_schedule_id(sched) and ids.is_schedule_id(local)
+
+
+def _resolve_commentary(catalog, s):
+    # Full commentary ID?
+    if _is_commentary_full_id(s):
+        sched_id = s[:ids.SCHEDULE_ID_LEN]
+        local = s[ids.SCHEDULE_ID_LEN + 1:]
+        node = catalog.schedules.get(sched_id)
+        if node is not None:
+            for c in node.commentary:
+                if c.local_id == local:
+                    return c
+        raise DhHlError("no such commentary: " + s)
+    # Short form: {schedule ID}.{comment hash prefix}.  The schedule ID may
+    # itself be a short ID containing '.', so split off the LAST component.
+    sched_part, dot, hp = s.rpartition(".")
+    if dot == "" or not _is_hex(hp):
+        raise DhHlError("not a valid commentary ID: " + repr(s))
+    matches = []
+    for node in _resolve_schedule_matches_lenient(catalog, sched_part):
+        for c in node.commentary:
+            if c.hash.startswith(hp):
+                matches.append(c)
+    # dedupe by full_id
+    seen, uniq = set(), []
+    for c in matches:
+        if c.full_id not in seen:
+            seen.add(c.full_id)
+            uniq.append(c)
+    if len(uniq) == 1:
+        return uniq[0]
+    if not uniq:
+        raise DhHlError("no commentary matches short ID: " + repr(s))
+    ordered = sorted(uniq, key=lambda c: c.full_id)
+    raise DhHlError("\n".join(
+        ["ambiguous commentary ID; matches:"] + ["  " + c.full_id for c in ordered]))
+
+
 # ---------------------------------------------------------------------------
 # Short ID formatting (output)
 # ---------------------------------------------------------------------------
@@ -1212,3 +1386,18 @@ def _format_schedule_short(catalog, node):
         if good_candidate(catalog, cand):
             return cand
     return node.full_id
+
+
+def _format_commentary_short(catalog, c):
+    """A short commentary ID "{schedule short id}.{comment hash prefix}",
+    falling back to the full ID if none is unambiguous."""
+    sched_short = _format_schedule_short(catalog, c.schedule)
+    h = c.hash
+    for hlen in range(_MIN_HASH, len(h) + 1):
+        cand = "{}.{}".format(sched_short, h[:hlen])
+        try:
+            if catalog.resolve_commentary(cand).full_id == c.full_id:
+                return cand
+        except DhHlError:
+            pass
+    return c.full_id

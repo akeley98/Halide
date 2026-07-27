@@ -22,7 +22,6 @@ same change. See impl.md "Tests".
 
 import json
 import os
-import socket
 import subprocess
 import sys
 
@@ -357,8 +356,12 @@ def cmd_profile(args):
         _finish_and_exit(ctx, node, ok=False)
 
     # Phase 3: per-parameter emit -> link -> benchmark loop, machine held
-    # exclusively and catalog lock held.
-    hostname = socket.gethostname()
+    # exclusively and catalog lock held.  The stable hostname is de-anonymizing
+    # and may contain spaces/punctuation (e.g. "David's MacBook Pro"); keep the
+    # RAW value for the benchmark JSON field but use a SANITIZED form for the
+    # benchmark file name.
+    hostname = ids.stable_hostname()
+    file_hostname = ids.sanitize_component(hostname)
     all_ok = True
     for params in param_list:
         if _emit(bin_dir, gen_name, params, with_stmt=False) != 0:
@@ -387,7 +390,7 @@ def cmd_profile(args):
             print("dh_hl: skipping parameter set: " + str(e), file=sys.stderr)
             all_ok = False
             continue
-        node.add_benchmark(hostname, bench_obj)
+        node.add_benchmark(file_hostname, bench_obj)
 
     _finish_and_exit(ctx, node, ok=all_ok)
 

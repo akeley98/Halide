@@ -12,11 +12,21 @@ Mac: `scutil --get ComputerName`; seems to be the only stable option on Mac
 so I'll just tolerate that `hostname` is a misnomer here.
 (I'd rather not expand to `hostname_on_Linux_ComputerName_on_Mac`).
 
-IMPL TASK: use this for all places where `hostname` is needed.
-This computer is a Mac; best-effort implement the Linux path and I'll test it myself later.
-Hard-wire a test for now that `username == "dakeley"` implies `hostname == "David's MacBook Pro"`
-and `username == "mantissa"` implies `hostname == "MantissaAmpere"`.
-This will remind me not to forget this next time I'm on the mantissa Linux machine.
+**Implemented** as `ids.stable_hostname()`: `scutil --get ComputerName` on
+`darwin`, `/etc/hostname` otherwise, falling back to `socket.gethostname()` if
+the platform path fails (so profiling never crashes on a name lookup).  The RAW
+string is returned; every use as an ID or filename runs it through
+`ids.sanitize_component` first (session IDs via `make_session_id`, the benchmark
+`bench/{hostname}_{ts}.json` file name in `build.py`).  Only the benchmark JSON
+`hostname` field keeps the raw value (idea.md "Benchmark JSON Format").
+
+The Mac path is tested; the Linux path is best-effort and David will verify it
+on the mantissa machine.  A machine-specific reminder test
+(`tests/test_ids.py::test_stable_hostname_hardwired_for_known_machines`)
+hard-wires that `username == "dakeley"` implies `David’s MacBook Pro` and
+`username == "mantissa"` implies `MantissaAmpere` (a no-op on any other
+machine).  NB the real macOS `ComputerName` uses a typographic apostrophe
+(U+2019), not the ASCII `'` this note was casually written with.
 
 
 # Catalog Directory State
@@ -57,16 +67,24 @@ This contains files and directories holding state:
   The default value is `c++ error`.
 
 * **Benchmark Result Files:** store in `bench/{hostname}_{timestamp of benchmark}.json`
-
-IMPL TASK: new commentary state
+  (the `{hostname}` here is the *sanitized* stable hostname — see "Stable Hostname").
 
 * **Commentary Files:**
-  store in `comment/{timestamp}_{hash}.json` with key-value pairs:
+  store in `comment/{timestamp}_{hash}.json` (where `hash` is the sha256 of the
+  commentary text) with key-value pairs:
   * `text`: text of commentary
-  * `review`: review value
+  * `review`: review value (one of `neutral`/`negative`/`positive`/`lost_interest`)
   * `cancels`: list of strings; each giving the `{timestamp}_{hash}` value
     of a commentary sub-object in the cancels list.
-    NB this makes inter-schedule-node cancellations literally impossible to express
+    NB this makes inter-schedule-node cancellations literally impossible to express.
+
+  The commentary's *local ID* `{timestamp}_{hash}` happens to have the exact
+  shape of a schedule full ID, so the loader/resolver reuse the `ids`
+  schedule-ID helpers on it.  Its *full ID* prepends the parent schedule full ID
+  (`{parent schedule full ID}_{timestamp}_{hash}`).  Implemented as the
+  `Commentary` class in `catalog.py`; resolution/formatting are the
+  `_resolve_commentary` / `_format_commentary_short` free functions (exposed via
+  `Catalog.resolve_commentary` / `Catalog.format_commentary_id`).
 
 *Merge risk:* `parent.txt` merge conflict if two branches retroactively parented
 a root schedule node to two different idea nodes.
@@ -108,13 +126,14 @@ This contains files and directories holding state:
   *Merge risk:* Different IDs in incoming `canonical.txt`.
   Fix with `fix_canonical` tool.
 
-IMPL TASK: idea side links
-
 * **Idea Side Links:** Idea side links are encoded by the mere existence of files.
   This design is to prevent merge conflicts.
   The files are empty.
   `idea/{id A}/borrows_from/{id B}` encodes a "borrows" link from A to B.
   `idea/{id A}/superseded_by/{id B}` encodes a "superseded-by" link from A to B.
+  Implemented as `IdeaNode.side_links` / `IdeaNode.add_side_link` (the empty
+  presence files are created in `IdeaNode.flush`); the `add_idea_side_link` tool
+  is a silent no-op on an exact duplicate.
 
 
 ## Session Nodes on Disk
@@ -891,7 +910,7 @@ name another process already committed).
 **Minting scheme for concurrency (implemented):** resolve uniqueness at
 *mint time*, under the catalog lock, **uniformly for every timestamped catalog
 name** — schedule dirs (`sch/{ts}_{hash}`), session dirs (`session/{id}`),
-commentary (`comment/{ts}.txt`), and benchmarks (`bench/{host}_{ts}.json`). To
+commentary (`comment/{ts}_{hash}.json`), and benchmarks (`bench/{host}_{ts}.json`). To
 mint a name: busy-wait `fresh_timestamp()` for process-local monotonicity, then
 `os.path.exists` the full candidate path; on a hit, re-mint and retry. Both
 guards are needed and neither alone suffices: the busy-wait separates names
@@ -901,16 +920,15 @@ them from names another process already committed (the catalog lock guarantees
 those are on disk before we mint). One `stat` per name, no enumeration of the
 timestamp population.
 
-IMPL TASK: remove reference to commentary importance
-
 This is implemented as `Catalog.mint_timestamped_name(build_path)` in
 `catalog.py`, where `build_path` maps a candidate timestamp to the absolute path
 whose uniqueness must hold. Its callers: `Catalog.create_schedule` (mints over
-`sch/{id}`), `ScheduleNode.add_commentary` (over the `comment/` file, importance
-suffix included), and `ScheduleNode.add_benchmark` (over `bench/{host}_{ts}`).
+`sch/{id}`), `ScheduleNode.add_commentary` (over the `comment/{ts}_{hash}.json`
+file), and `ScheduleNode.add_benchmark` (over `bench/{host}_{ts}`).
 `add_benchmark` now mints internally and no longer takes an explicit timestamp
-argument — `build.py`'s profile loop just calls `node.add_benchmark(hostname,
-bench_obj)`. Session-dir minting routes through the same helper via
+argument — `build.py`'s profile loop just calls
+`node.add_benchmark(file_hostname, bench_obj)` (sanitized hostname for the file
+name). Session-dir minting routes through the same helper via
 `Catalog.mint_session_id`.
 
 **We deliberately standardize on this** even for names whose timestamp does not

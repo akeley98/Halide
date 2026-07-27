@@ -149,8 +149,6 @@ may be used as an out-of-band method to recommend the "official" parameter value
   The other child schedules are compiler errors or imperfect attempts,
   tracked for research purposes.
 
-IMPL TASK: remove importance stuff; replace with review
-
 * **Review:** Inherits the review value of the canonical schedule.
   The review is `neutral` if there's no canonical schedule.
 
@@ -175,11 +173,11 @@ IMPL TASK: remove importance stuff; replace with review
 
 * **Parent Session:** Optional, reference to another session node.
 
-IMPL TASK: `hostname` change
-
 * **Session Node Full ID:** `{depth}_{timestamp}_{username}@{hostname}`.
   This is, for now, intentionally de-anonymizing.
   The `username` and `hostname` are sanitized in the filename.
+  The `hostname` is the *stable* hostname (see impl.md "Stable Hostname"),
+  which on a Mac may contain spaces/punctuation before sanitization.
 
 * **Session Private Workspace** state: gitignore'd per-session-node state.
   This contains a session lock,
@@ -201,8 +199,6 @@ but will not prevent observing a partial edit to the workspace C++ file.
 
 
 ### Commentary State (Sub-Object of Schedule Nodes)
-
-IMPL TASK: totally revamped from what exists now
 
 * **Text of commentary**
 
@@ -667,8 +663,6 @@ There is intentionally no "change canonical schedule" tool.
 
     dh_hl comment -C ... {commentary file} [schedule ID]
 
-IMPL TASK: remove `comment_importance` tool; add `--review`
-
 Adds a new commentary file to the referenced schedule node,
 with contents copied from the passed `commentary file`.
 
@@ -704,7 +698,7 @@ commentary to the new schedule node of the form:
         [one line for each encoded current idea state parsed,
         in any order and the same format as the current idea state file]
 
-and with no importance value attached.
+and with the default `neutral` review.
 This is just a temporary "bare minimum" merge conflict resolution.
 
 FUTURE: probably remove this extra merge conflict recovery functionality later.
@@ -795,8 +789,6 @@ Prints the referenced idea node's
     # Reads like a sentence, e.g. abcdef.foo borrows_from 123456.bar
     dh_hl add_idea_side_link -C ... {idea ID lhs} {type} {idea ID rhs}
 
-IMPL TASK: add tool
-
 Add an idea side link from the LHS idea to the RHS idea,
 of type `borrows_from` or `superseded_by`.
 Silent no-op if this exactly duplicates an existing idea side link.
@@ -846,8 +838,6 @@ There is no predefined order of the schedules.
 
     dh_hl view_commentary -C ... [schedule ID]
 
-IMPL TASK: tool completely revamped
-
 Print all commentary of the referenced schedule node.
 
 Prints each commentary file separated by dividers, with contents:
@@ -862,18 +852,15 @@ Prints each commentary file separated by dividers, with contents:
 
 * full text
 
-IMPL TASK: can only cancel other commentary objects
-belonging to the same schedule node.
-Therefore `cancelled` may be derived only from one schedule node.
-Don't waste time touring the entire catalog.
+A commentary can only cancel other commentary objects belonging to the same
+schedule node.  Therefore `cancelled` may be derived from one schedule node
+alone — no need to tour the entire catalog.
 
 
 ### View Session Commentary Tool
 
     # Does not acquire session lock
     dh_hl view_session_commentary -s ...
-
-IMPL TASK: remove `importance` filter
 
 Similar to `view_commentary`, except
 
@@ -987,8 +974,6 @@ Give both full session IDs and session handles.
 ### Close Session Tool
 
     dh_hl close_session -s ... [schedule ID]
-
-IMPL TASK: remove importance requirement
 
 Set the given schedule node to be the current session's output schedule node.
 Error if the current session already has an output schedule node,
@@ -1119,15 +1104,8 @@ this is load bearing for correctness, since it encodes more than a session full 
 
     dh_hl json_schedule_info -C ... [schedule ID]
 
-IMPL TASK: `commentary` output update, `review` state.
-
-IMPL TASK: as before, the "cancelled-by" state of each commentary sub-object
-can be derived solely from the information in this schedule node only
-
-IMPL TASK: add end-to-end CLI tests that create catalog, idea, schedule nodes,
-add commentary with various reviews to at least 2 different schedule nodes,
-and check that the `review`, `cancels`, `cancelled_by` values are correct
-for multiple idea/schedule nodes.
+The "cancelled-by" state of each commentary sub-object can be derived solely
+from the information in this schedule node (cancels are always same-node).
 
 Prints the state of the referenced schedule node as a JSON object, with key/value pairs
 
@@ -1168,13 +1146,6 @@ Prints the state of the referenced schedule node as a JSON object, with key/valu
 
     dh_hl json_idea_info -C ... {idea ID}
 
-IMPL TASK: `idea_side_links`, `review`, remove `importance`.
-
-IMPL TASK: add end-to-end CLI tests that create catalog, idea, schedule nodes,
-add commentary with various reviews to at least 2 different schedule nodes,
-add (ignored) commentary to minor schedule nodes,
-and check that the `review` value is correct for multiple idea/schedule nodes.
-
 Prints the state of the referenced idea node as a JSON object, with key/value pairs
 
 * `id`: full ID of node
@@ -1188,8 +1159,6 @@ Prints the state of the referenced idea node as a JSON object, with key/value pa
 * `proposal_text`: string
 
 * `canonical_schedule`: null if no canonical schedule, otherwise string full ID of the canonical schedule
-
-* `importance`: number if finite, null for negative infinity
 
 * `idea_side_links`: list of objects in unspecified order;
   each unique link starting from this idea node is in the list exactly once,
@@ -1223,10 +1192,6 @@ Prints the state of the current session as a JSON object, with key/value pairs
 ### JSON Export Tool
 
     dh_hl json_export -C ...
-
-IMPL TASK: Test this in connection with new commentary.
-Don't make these separate tests, just check both the `json_*_info` and
-`json_export` CLI commands at the end of the same tests.
 
 Exports the entire catalog as a JSON object, with key/value pairs
 
@@ -1308,11 +1273,15 @@ All pairs go to the Halide generator as `key=value`.
 
 ## Benchmark JSON Format
 
-IMPL TASK: `hostname` change
-
 Key value pairs:
 
-* `hostname`: string, hostname of system used for profiling
+* `hostname`: string, the *stable* hostname of the system used for profiling
+  (see impl.md "Stable Hostname").  This is the sole place the hostname is kept
+  **raw** (unsanitized) — a deliberate hedge against losing information, since a
+  Mac's `ComputerName` may contain spaces/punctuation (e.g. "David's MacBook
+  Pro").  Everywhere the hostname is used as an ID or filename (session IDs, the
+  `bench/{hostname}_{ts}.json` file name) it is first run through
+  `ids.sanitize_component`.
 * `cpu_count`: number, CPU count of system used for profiling
 * `parameters`: object, generator parameters used to generate the profiled Halide binary
 * `profiler`: the profiler JSON output should be a JSON object whose "pipelines"

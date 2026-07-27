@@ -90,7 +90,9 @@ def test_idea_lifecycle(session, run_tool, tmp_path, capsys):
     obj = json.loads(capsys.readouterr().out)
     assert obj["proposal_name"] == "vec_wider"
     assert obj["canonical_schedule"] is None
-    assert obj["importance"] is None  # -inf -> null
+    assert obj["review"] == "neutral"  # no canonical schedule -> neutral
+    assert obj["idea_side_links"] == []
+    assert "importance" not in obj
 
 
 def test_duplicate_proposal_name_rejected(session, run_tool, tmp_path):
@@ -103,14 +105,17 @@ def test_duplicate_proposal_name_rejected(session, run_tool, tmp_path):
 
 def test_comment_shows_up_in_json(session, run_tool, tmp_path, capsys):
     cfile = _write(tmp_path, "c.txt", "a remark")
-    run_tool(tools.cmd_comment_importance,
-             session.ns(commentary=cfile, importance=5))
+    run_tool(tools.cmd_comment,
+             session.ns(commentary=cfile, review="positive"))
     capsys.readouterr()  # discard the "Added commentary" line
     run_tool(tools.cmd_json_schedule_info, session.ns())
     obj = json.loads(capsys.readouterr().out)
     assert len(obj["commentary"]) == 1
-    assert obj["commentary"][0]["importance"] == 5
+    assert obj["commentary"][0]["review"] == "positive"
     assert obj["commentary"][0]["text"] == "a remark"
+    assert obj["commentary"][0]["cancels"] == []
+    assert obj["commentary"][0]["cancelled_by"] == []
+    assert obj["review"] == "positive"  # derived from the one positive comment
 
 
 def test_restore_roundtrips_workspace(session, run_tool, capsys):
