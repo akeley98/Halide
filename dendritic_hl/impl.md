@@ -28,6 +28,13 @@ hard-wires that `username == "dakeley"` implies `David’s MacBook Pro` and
 machine).  NB the real macOS `ComputerName` uses a typographic apostrophe
 (U+2019), not the ASCII `'` this note was casually written with.
 
+**Benchmark JSON** `hostname`:
+Left **raw** (unsanitized) — a deliberate hedge against losing information, since a
+Mac's `ComputerName` may contain spaces/punctuation (e.g. "David's MacBook
+Pro").  Everywhere the hostname is used as an ID or filename (session IDs, the
+`bench/{hostname}_{ts}.json` file name) it is first run through
+`ids.sanitize_component`.
+
 
 # Catalog Directory State
 

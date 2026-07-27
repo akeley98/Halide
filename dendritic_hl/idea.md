@@ -1275,13 +1275,7 @@ All pairs go to the Halide generator as `key=value`.
 
 Key value pairs:
 
-* `hostname`: string, the *stable* hostname of the system used for profiling
-  (see impl.md "Stable Hostname").  This is the sole place the hostname is kept
-  **raw** (unsanitized) — a deliberate hedge against losing information, since a
-  Mac's `ComputerName` may contain spaces/punctuation (e.g. "David's MacBook
-  Pro").  Everywhere the hostname is used as an ID or filename (session IDs, the
-  `bench/{hostname}_{ts}.json` file name) it is first run through
-  `ids.sanitize_component`.
+* `hostname`: string, not sanitized
 * `cpu_count`: number, CPU count of system used for profiling
 * `parameters`: object, generator parameters used to generate the profiled Halide binary
 * `profiler`: the profiler JSON output should be a JSON object whose "pipelines"
