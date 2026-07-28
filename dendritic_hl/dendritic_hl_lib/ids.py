@@ -102,6 +102,91 @@ def idea_parent_id(full_id):
     return full_id[-SCHEDULE_ID_LEN:]
 
 
+# ---- WarningToggle sub-object full IDs --------------------------------------
+#
+# WarningToggle full ID = "{parent schedule full ID}_{timestamp}" (idea.md
+# "WarningToggle State").  The "{timestamp}" tail is the sub-object's *local ID*.
+# Both halves are fixed width (90 + 1 + 25 = 116), so parsing is unambiguous.
+
+WARNING_TOGGLE_ID_LEN = SCHEDULE_ID_LEN + 1 + TIMESTAMP_LEN  # 116
+
+
+def make_warning_toggle_id(schedule_id, timestamp):
+    return "{}_{}".format(schedule_id, timestamp)
+
+
+def is_warning_toggle_id(full_id):
+    if len(full_id) != WARNING_TOGGLE_ID_LEN:
+        return False
+    sched = full_id[:SCHEDULE_ID_LEN]
+    sep = full_id[SCHEDULE_ID_LEN]
+    ts = full_id[SCHEDULE_ID_LEN + 1:]
+    return sep == "_" and is_schedule_id(sched) and is_timestamp(ts)
+
+
+def warning_toggle_schedule_id(full_id):
+    return full_id[:SCHEDULE_ID_LEN]
+
+
+def warning_toggle_timestamp(full_id):
+    return full_id[SCHEDULE_ID_LEN + 1:]
+
+
+# ---- Benchmark sub-object full IDs ------------------------------------------
+#
+# Benchmark full ID = "{parent schedule full ID}_{hostname}_{timestamp}" (idea.md
+# "Schedule Node State").  The "{hostname}_{timestamp}" tail is the sub-object's
+# *local ID* -- exactly the "{hostname}_{ts}" stem of its bench/ file name.  The
+# hostname is the *sanitized* stable hostname ([A-Za-z0-9_-]+, may contain '_'),
+# but the timestamp is fixed width and the schedule prefix is fixed width, so the
+# hostname in the middle is whatever remains.
+
+def make_benchmark_id(schedule_id, hostname, timestamp):
+    return "{}_{}_{}".format(schedule_id, hostname, timestamp)
+
+
+def benchmark_local_id(hostname, timestamp):
+    return "{}_{}".format(hostname, timestamp)
+
+
+def is_benchmark_local_id(local):
+    # "{hostname}_{timestamp}": strip the fixed-width timestamp tail; the char
+    # before it must be '_', and the remaining hostname must be nonempty and
+    # match the sanitized alphabet.
+    if len(local) < 1 + 1 + TIMESTAMP_LEN:
+        return False
+    ts = local[-TIMESTAMP_LEN:]
+    sep = local[-TIMESTAMP_LEN - 1]
+    host = local[:-TIMESTAMP_LEN - 1]
+    return (sep == "_" and is_timestamp(ts) and bool(host)
+            and re.match(r"[A-Za-z0-9_-]+\Z", host) is not None)
+
+
+def is_benchmark_id(full_id):
+    if len(full_id) < SCHEDULE_ID_LEN + 1:
+        return False
+    sched = full_id[:SCHEDULE_ID_LEN]
+    sep = full_id[SCHEDULE_ID_LEN]
+    local = full_id[SCHEDULE_ID_LEN + 1:]
+    return sep == "_" and is_schedule_id(sched) and is_benchmark_local_id(local)
+
+
+def benchmark_schedule_id(full_id):
+    return full_id[:SCHEDULE_ID_LEN]
+
+
+def benchmark_local_part(full_id):
+    return full_id[SCHEDULE_ID_LEN + 1:]
+
+
+def benchmark_hostname(local):
+    return local[:-TIMESTAMP_LEN - 1]
+
+
+def benchmark_timestamp(local):
+    return local[-TIMESTAMP_LEN:]
+
+
 # ---- Session node full IDs -------------------------------------------------
 #
 # Session full ID = "{depth}_{timestamp}_{username}@{hostname}" (see idea.md).

@@ -68,8 +68,6 @@ this repo's `*.ninja*` gitignore rule and can be committed; hence the `-f`.
 
 ### Temporary-ish: Warnings Output
 
-IMPL TASK: pipe this through.
-
 Andrew Adams didn't include the warnings in the JSON output.
 For now, to make forward progress, there's a separate secret menu
 `HL_PROFILER_JSON_TEMPORARY_WARNINGS` environment variable.

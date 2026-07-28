@@ -25,6 +25,7 @@ import os
 
 from . import ids
 from . import locks
+from . import profiler_warnings
 from . import safety
 from .errors import DhHlError, HarnessError
 
@@ -131,7 +132,11 @@ class Commentary:
 
 class Benchmark:
     """One benchmark file: bench/{hostname}_{ts}.json holding a benchmark JSON
-    object (see idea.md "Benchmark JSON Format")."""
+    object (see idea.md "Benchmark JSON Format").
+
+    The file-name stem "{hostname}_{ts}" is the benchmark's *local ID* (hostname
+    is the SANITIZED stable hostname).  Its *full ID* prepends the parent schedule
+    full ID: "{parent schedule full ID}_{hostname}_{ts}" (idea.md schedule state)."""
 
     def __init__(self, schedule, filename, data=_UNLOADED, is_new=False):
         self.schedule = schedule
@@ -139,6 +144,15 @@ class Benchmark:
         self._data = data
         if is_new:
             self.schedule.catalog._mark_dirty(self)
+
+    @property
+    def local_id(self):
+        # Strip the trailing ".json" from the file name.
+        return self.filename[:-len(".json")]
+
+    @property
+    def full_id(self):
+        return "{}_{}".format(self.schedule.full_id, self.local_id)
 
     @property
     def path(self):
@@ -151,9 +165,97 @@ class Benchmark:
                 self._data = json.load(f)
         return self._data
 
+    @property
+    def warnings(self):
+        """The profiler warnings captured for this benchmark (idea.md "Benchmark
+        JSON Format" `warnings`).  Delegated to profiler_warnings, the single
+        chokepoint for the temporary warning-delivery hack."""
+        return profiler_warnings.warnings_of_benchmark(self.data)
+
     def flush(self):
         safety.makedirs_tracked(self.schedule.bench_dir)
         safety.new_file(self.path, json.dumps(self.data, indent=1) + "\n")
+
+
+class WarningToggle:
+    """One warning-toggle file: warning_toggle/{ts}.json (see idea.md
+    "WarningToggle State").  A schedule-node sub-object that either *blocks* a
+    profiler warning (a `rule`/`func` pair) or *cancels* another `WarningToggle`
+    (re-enabling a blocked warning).  Exactly one of those two forms holds -- the
+    on-disk `value` is a tagged union.
+
+    The sub-object's *local ID* is its "{ts}" timestamp; its *full ID* prepends
+    the parent schedule full ID: "{parent schedule full ID}_{ts}".  A `cancels`
+    reference stores the FULL WarningToggle ID of its target, because unlike
+    commentary cancels these may cross schedule nodes (idea.md)."""
+
+    def __init__(self, schedule, timestamp, citation=None, rule=None, func=None,
+                 cancels=None, is_new=False):
+        self.schedule = schedule
+        self.timestamp = timestamp
+        self._citation = citation    # full commentary ID (any node in catalog)
+        self._rule = rule            # block form: warning rule slug, else None
+        self._func = func            # block form: func name, else None
+        self._cancels = cancels      # cancel form: full WarningToggle ID, else None
+        self._loaded = is_new
+        if is_new:
+            self.schedule.catalog._mark_dirty(self)
+
+    @property
+    def local_id(self):
+        return self.timestamp
+
+    @property
+    def full_id(self):
+        return ids.make_warning_toggle_id(self.schedule.full_id, self.timestamp)
+
+    @property
+    def filename(self):
+        return "{}.json".format(self.local_id)
+
+    @property
+    def path(self):
+        return os.path.join(self.schedule.warning_toggle_dir, self.filename)
+
+    def _ensure_loaded(self):
+        if self._loaded:
+            return
+        with open(self.path, "r", encoding="utf-8") as f:
+            obj = json.load(f)
+        self._citation = obj.get("citation")
+        self._rule = obj.get("rule")
+        self._func = obj.get("func")
+        self._cancels = obj.get("cancels")
+        self._loaded = True
+
+    @property
+    def citation(self):
+        self._ensure_loaded()
+        return self._citation
+
+    @property
+    def rule(self):
+        self._ensure_loaded()
+        return self._rule
+
+    @property
+    def func(self):
+        self._ensure_loaded()
+        return self._func
+
+    @property
+    def cancels(self):
+        self._ensure_loaded()
+        return self._cancels
+
+    def is_block(self):
+        return self.cancels is None
+
+    def flush(self):
+        safety.makedirs_tracked(self.schedule.warning_toggle_dir)
+        obj = {"citation": self.citation, "rule": self.rule, "func": self.func,
+               "cancels": self.cancels}
+        safety.new_file(self.path, json.dumps(obj, indent=1) + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +273,7 @@ class ScheduleNode:
         self._result_dirty = False
         self._commentary = _UNLOADED      # list[Commentary]
         self._benchmarks = _UNLOADED      # list[Benchmark]
+        self._warning_toggles = _UNLOADED  # list[WarningToggle]
         # Derived child edges (filled by Catalog._ensure_linked):
         self.child_idea_ids = None        # list[str] or None if not linked
         if is_new:
@@ -197,6 +300,10 @@ class ScheduleNode:
     @property
     def bench_dir(self):
         return os.path.join(self.dir, "bench")
+
+    @property
+    def warning_toggle_dir(self):
+        return os.path.join(self.dir, "warning_toggle")
 
     # -- source ----------------------------------------------------------
     @property
@@ -345,6 +452,36 @@ class ScheduleNode:
         b = Benchmark(self, filename, data=data, is_new=True)
         self.benchmarks.append(b)
         return b
+
+    # -- warning toggles -------------------------------------------------
+    @property
+    def warning_toggles(self):
+        if self._warning_toggles is _UNLOADED:
+            self._warning_toggles = []
+            wdir = self.warning_toggle_dir
+            if os.path.isdir(wdir):
+                for name in os.listdir(wdir):
+                    if not name.endswith(".json"):
+                        continue
+                    stem = name[:-len(".json")]
+                    if not ids.is_timestamp(stem):
+                        continue
+                    self._warning_toggles.append(WarningToggle(self, stem))
+        return self._warning_toggles
+
+    def add_warning_toggle(self, citation, rule=None, func=None, cancels=None):
+        """Add a WarningToggle blocking (rule, func) OR cancelling another toggle
+        (`cancels` = full WarningToggle ID).  Exactly one form, since the on-disk
+        value is a tagged union (idea.md "WarningToggle State")."""
+        assert (cancels is None) != (rule is None and func is None), \
+            "WarningToggle is exactly one of block(rule,func) or cancel"
+        ts = self.catalog.mint_timestamped_name(
+            lambda t: os.path.join(self.warning_toggle_dir,
+                                   "{}.json".format(t)))
+        w = WarningToggle(self, ts, citation=citation, rule=rule, func=func,
+                          cancels=cancels, is_new=True)
+        self.warning_toggles.append(w)
+        return w
 
     # -- flush -----------------------------------------------------------
     def flush(self):
@@ -930,6 +1067,50 @@ class Catalog:
         self._ensure_linked()
         return [self.schedules[s] for s in idea.child_schedule_ids]
 
+    # -- warning-toggle resolution --------------------------------------
+    def schedule_path_to_root(self, schedule):
+        """The schedule nodes on the path from *schedule* up to (and including)
+        its tree root, nearest first."""
+        path = []
+        node = schedule
+        seen = set()
+        while node is not None and node.full_id not in seen:
+            seen.add(node.full_id)
+            path.append(node)
+            if node.is_root():
+                break
+            idea = node.parent_idea()
+            node = idea.parent_schedule() if idea is not None else None
+        return path
+
+    def warning_toggle_state(self, schedule):
+        """Resolve the WarningToggle block algorithm (idea.md "WarningToggle
+        State") for *schedule*.  Returns `(toggles, cancelled_ids)` where
+        `toggles` are all WarningToggle objects owned by nodes on the
+        node-to-root path and `cancelled_ids` is the set of full IDs among them
+        cancelled by some toggle in that same set."""
+        toggles = []
+        for node in self.schedule_path_to_root(schedule):
+            toggles.extend(node.warning_toggles)
+        present = {w.full_id for w in toggles}
+        cancelled_ids = set()
+        for w in toggles:
+            if w.cancels is not None and w.cancels in present:
+                cancelled_ids.add(w.cancels)
+        return toggles, cancelled_ids
+
+    def blocking_toggle(self, schedule, rule, func):
+        """A surviving (non-cancelled) WarningToggle on *schedule*'s node-to-root
+        path that blocks the (rule, func) warning, or None.  Picks arbitrarily if
+        several qualify (idea.md `view_benchmark_warnings`)."""
+        toggles, cancelled_ids = self.warning_toggle_state(schedule)
+        for w in toggles:
+            if w.full_id in cancelled_ids:
+                continue
+            if w.is_block() and w.rule == rule and w.func == func:
+                return w
+        return None
+
     # -- derived session edges ------------------------------------------
     def _ensure_session_linked(self):
         """Fill each session's child_session_ids (all-or-nothing), from every
@@ -1145,6 +1326,12 @@ class Catalog:
     def format_commentary_id(self, c):
         return _format_commentary_short(self, c)
 
+    def format_warning_toggle_id(self, w):
+        return _format_warning_toggle_short(self, w)
+
+    def format_benchmark_id(self, b):
+        return _format_benchmark_short(self, b)
+
     # -- ID resolution ---------------------------------------------------
     def resolve_schedule(self, s):
         return _resolve_schedule(self, s)
@@ -1154,6 +1341,12 @@ class Catalog:
 
     def resolve_commentary(self, s):
         return _resolve_commentary(self, s)
+
+    def resolve_warning_toggle(self, s):
+        return _resolve_warning_toggle(self, s)
+
+    def resolve_benchmark(self, s):
+        return _resolve_benchmark(self, s)
 
 
 # ---------------------------------------------------------------------------
@@ -1335,6 +1528,76 @@ def _resolve_commentary(catalog, s):
         ["ambiguous commentary ID; matches:"] + ["  " + c.full_id for c in ordered]))
 
 
+def _resolve_warning_toggle(catalog, s):
+    # Full ID?  "{schedule full id}_{timestamp}"
+    if ids.is_warning_toggle_id(s):
+        sched_id = ids.warning_toggle_schedule_id(s)
+        ts = ids.warning_toggle_timestamp(s)
+        node = catalog.schedules.get(sched_id)
+        if node is not None:
+            for w in node.warning_toggles:
+                if w.timestamp == ts:
+                    return w
+        raise DhHlError("no such WarningToggle: " + s)
+    # Short form: {schedule ID}.{timestamp}.  The schedule ID may itself be a
+    # short ID containing '.', so split off the LAST component.
+    sched_part, dot, ts = s.rpartition(".")
+    if dot == "" or not ids.is_timestamp(ts):
+        raise DhHlError("not a valid WarningToggle ID: " + repr(s))
+    matches = []
+    for node in _resolve_schedule_matches_lenient(catalog, sched_part):
+        for w in node.warning_toggles:
+            if w.timestamp == ts:
+                matches.append(w)
+    seen, uniq = set(), []
+    for w in matches:
+        if w.full_id not in seen:
+            seen.add(w.full_id)
+            uniq.append(w)
+    if len(uniq) == 1:
+        return uniq[0]
+    if not uniq:
+        raise DhHlError("no WarningToggle matches short ID: " + repr(s))
+    ordered = sorted(uniq, key=lambda w: w.full_id)
+    raise DhHlError("\n".join(
+        ["ambiguous WarningToggle ID; matches:"] + ["  " + w.full_id for w in ordered]))
+
+
+def _resolve_benchmark(catalog, s):
+    # Full ID?  "{schedule full id}_{hostname}_{timestamp}"
+    if ids.is_benchmark_id(s):
+        sched_id = ids.benchmark_schedule_id(s)
+        local = ids.benchmark_local_part(s)
+        node = catalog.schedules.get(sched_id)
+        if node is not None:
+            for b in node.benchmarks:
+                if b.local_id == local:
+                    return b
+        raise DhHlError("no such benchmark: " + s)
+    # Short form: {schedule ID}.{hostname}_{timestamp}.  The schedule ID may
+    # itself be a short ID containing '.'; the "{hostname}_{ts}" tail has none.
+    sched_part, dot, local = s.rpartition(".")
+    if dot == "" or not ids.is_benchmark_local_id(local):
+        raise DhHlError("not a valid benchmark ID: " + repr(s))
+    matches = []
+    for node in _resolve_schedule_matches_lenient(catalog, sched_part):
+        for b in node.benchmarks:
+            if b.local_id == local:
+                matches.append(b)
+    seen, uniq = set(), []
+    for b in matches:
+        if b.full_id not in seen:
+            seen.add(b.full_id)
+            uniq.append(b)
+    if len(uniq) == 1:
+        return uniq[0]
+    if not uniq:
+        raise DhHlError("no benchmark matches short ID: " + repr(s))
+    ordered = sorted(uniq, key=lambda b: b.full_id)
+    raise DhHlError("\n".join(
+        ["ambiguous benchmark ID; matches:"] + ["  " + b.full_id for b in ordered]))
+
+
 # ---------------------------------------------------------------------------
 # Short ID formatting (output)
 # ---------------------------------------------------------------------------
@@ -1401,3 +1664,29 @@ def _format_commentary_short(catalog, c):
         except DhHlError:
             pass
     return c.full_id
+
+
+def _format_warning_toggle_short(catalog, w):
+    """A short WarningToggle ID "{schedule short id}.{timestamp}", falling back to
+    the full ID if that is somehow ambiguous."""
+    sched_short = _format_schedule_short(catalog, w.schedule)
+    cand = "{}.{}".format(sched_short, w.timestamp)
+    try:
+        if catalog.resolve_warning_toggle(cand).full_id == w.full_id:
+            return cand
+    except DhHlError:
+        pass
+    return w.full_id
+
+
+def _format_benchmark_short(catalog, b):
+    """A short benchmark ID "{schedule short id}.{hostname}_{timestamp}", falling
+    back to the full ID if that is somehow ambiguous."""
+    sched_short = _format_schedule_short(catalog, b.schedule)
+    cand = "{}.{}".format(sched_short, b.local_id)
+    try:
+        if catalog.resolve_benchmark(cand).full_id == b.full_id:
+            return cand
+    except DhHlError:
+        pass
+    return b.full_id

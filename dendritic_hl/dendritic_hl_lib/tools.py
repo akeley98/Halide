@@ -11,6 +11,7 @@ import sys
 
 from . import ids
 from . import locks
+from . import profiler_warnings
 from . import prompts
 from . import safety
 from .catalog import Catalog, COMMENTARY_REVIEWS, IDEA_SIDE_LINK_TYPES
@@ -584,6 +585,14 @@ def _schedule_json(catalog, node):
              "cancelled_by": [full(x) for x in cancelled_by.get(c.local_id, [])]}
             for c in sorted(node.commentary, key=lambda c: c.timestamp)
         ],
+        "warning_toggles": [
+            {"id": w.full_id,
+             "citation": w.citation,
+             "func": w.func,
+             "rule": w.rule,
+             "cancels": w.cancels}
+            for w in sorted(node.warning_toggles, key=lambda w: w.timestamp)
+        ],
     }
 
 
@@ -1075,6 +1084,142 @@ def cmd_view_commentary(args):
 def cmd_view_session_commentary(args):
     ctx = Context.for_session(args, session_lock=False)
     _print_commentary(ctx.catalog, _session_output_schedule(ctx))
+
+
+# ---------------------------------------------------------------------------
+# warning toggles: add / debug / view benchmark warnings
+# ---------------------------------------------------------------------------
+
+def _sorted_toggles(toggles):
+    """Deterministic display order for a path-collected toggle list: nearest node
+    first (as returned by warning_toggle_state), and by timestamp within a node.
+    warning_toggle_state already concatenates in node order, so a stable sort on
+    timestamp within each node's block keeps that; we sort the whole list by
+    (implicit path index, timestamp) by relying on the input already being in
+    path order and doing a stable timestamp sort per contiguous run is overkill --
+    a single stable sort on timestamp is enough for readable, reproducible tests
+    since timestamps are globally unique."""
+    return sorted(toggles, key=lambda w: w.timestamp)
+
+
+def cmd_add_warning_toggle(args):
+    ctx = Context.for_catalog(args)
+    catalog = ctx.catalog
+    node = catalog.resolve_schedule(args.schedule)
+    citation = catalog.resolve_commentary(args.commentary).full_id
+
+    block = getattr(args, "block", None)
+    cancel = getattr(args, "cancel", None)
+    if (block is None) == (cancel is None):
+        raise DhHlError(
+            "add_warning_toggle needs exactly one of --block RULE FUNC or "
+            "--cancel WARNING_TOGGLE_ID (a WarningToggle either blocks a warning "
+            "or cancels another, never both)")
+
+    if block is not None:
+        rule, func = block
+        w = node.add_warning_toggle(citation, rule=rule, func=func)
+    else:
+        target = catalog.resolve_warning_toggle(cancel)
+        w = node.add_warning_toggle(citation, cancels=target.full_id)
+
+    ctx.finish()
+    print("Added WarningToggle {} to {}".format(
+        catalog.format_warning_toggle_id(w), catalog.format_schedule_id(node)))
+
+
+def cmd_debug_warning_toggle(args):
+    ctx = Context.for_catalog(args)
+    catalog = ctx.catalog
+    node = ctx.resolve_schedule_arg(args.schedule)
+    toggles, cancelled_ids = catalog.warning_toggle_state(node)
+
+    block = getattr(args, "block", None)
+    cancel = getattr(args, "cancel", None)
+    # --cancel filter: keep toggles whose cancel-target is the named WarningToggle.
+    # "Not an error if the named object does not exist", so resolve leniently and
+    # fall back to a literal full ID.  A sentinel (never equal to any real
+    # `cancels`, which is None or a full ID) makes an unresolvable target match
+    # nothing -- distinct from None, which real block toggles carry.
+    _NO_MATCH = object()
+    cancel_target = None
+    if cancel is not None:
+        try:
+            cancel_target = catalog.resolve_warning_toggle(cancel).full_id
+        except DhHlError:
+            cancel_target = cancel if ids.is_warning_toggle_id(cancel) else _NO_MATCH
+
+    out = []
+    for w in _sorted_toggles(toggles):
+        if block is not None:
+            rule, func = block
+            if not (w.is_block() and w.rule == rule and w.func == func):
+                continue
+        if cancel is not None:
+            if w.cancels != cancel_target:
+                continue
+        out.append(w)
+
+    first = True
+    for w in out:
+        if not first:
+            print("-" * 72)
+        first = False
+        print("id: " + catalog.format_warning_toggle_id(w))
+        _print_citation_lines(catalog, w.citation)
+        if w.is_block():
+            print("rule/func: {} {}".format(w.rule, w.func))
+        else:
+            target = _format_toggle_ref(catalog, w.cancels)
+            print("cancels: " + target)
+        print("cancelled: " + ("true" if w.full_id in cancelled_ids else "false"))
+
+
+def cmd_view_benchmark_warnings(args):
+    ctx = Context.for_catalog(args)
+    catalog = ctx.catalog
+    bench = catalog.resolve_benchmark(args.benchmark)
+    node = bench.schedule
+    always = bool(getattr(args, "always_show_message", False))
+
+    first = True
+    for warning in bench.warnings:
+        if not first:
+            print("-" * 72)
+        first = False
+        rule, func = profiler_warnings.warning_key(warning)
+        print("rule/func: {} {}".format(rule, func))
+        blocker = catalog.blocking_toggle(node, rule, func)
+        if blocker is None or always:
+            print("message: " + str(profiler_warnings.warning_message(warning)))
+        if blocker is not None:
+            print("blocked by: " + catalog.format_warning_toggle_id(blocker))
+            _print_citation_lines(catalog, blocker.citation)
+
+
+def _format_toggle_ref(catalog, full_id):
+    """A short WarningToggle ID for display, tolerating a dangling reference (the
+    target may live on a node not currently loadable / already gone)."""
+    if full_id is None:
+        return "(none)"
+    try:
+        return catalog.format_warning_toggle_id(
+            catalog.resolve_warning_toggle(full_id))
+    except DhHlError:
+        return full_id
+
+
+def _print_citation_lines(catalog, citation_full_id):
+    """Print the `citation:` line plus the first-line snippet of the cited
+    commentary.  The citation may point anywhere in the catalog; degrade to the
+    raw ID if it can no longer be resolved."""
+    try:
+        c = catalog.resolve_commentary(citation_full_id)
+    except DhHlError:
+        print("citation: " + str(citation_full_id))
+        return
+    print("citation: " + catalog.format_commentary_id(c))
+    print(_first_line_72(c.text))
 
 
 # ---- prompt ---------------------------------------------------------------

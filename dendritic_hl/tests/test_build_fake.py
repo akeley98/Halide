@@ -39,9 +39,15 @@ def fake_build(monkeypatch):
     monkeypatch.setattr(build, "_emit", lambda *a, **k: knobs["emit_rc"])
     monkeypatch.setattr(build, "_link", lambda bin_dir: knobs["link_rc"])
 
-    def fake_bench(bin_dir, json_out):
+    def fake_bench(bin_dir, json_out, warnings_out):
         with open(json_out, "w") as f:
             json.dump({"pipelines": [{"name": "dummy", "time_ns": 42}]}, f)
+        # Emit the temporary-warnings file only when the test asks for it, so the
+        # default path (no warnings file) is exercised too.
+        w = knobs.get("warnings")
+        if w is not None:
+            with open(warnings_out, "w") as f:
+                json.dump({"pipeline": "dummy", "warnings": w}, f)
         return knobs["bench_rc"]
     monkeypatch.setattr(build, "_run_benchmark", fake_bench)
     return knobs
@@ -128,8 +134,9 @@ def test_profile_json_path_is_absolute_with_relative_catalog(
     absolute, because it is handed to a child running with cwd=bin_dir."""
     seen = {}
 
-    def spy_bench(bin_dir, json_out):
+    def spy_bench(bin_dir, json_out, warnings_out):
         seen["json_out"] = json_out
+        seen["warnings_out"] = warnings_out
         with open(json_out, "w") as f:
             json.dump({"pipelines": [{"name": "x"}]}, f)
         return 0
@@ -144,6 +151,8 @@ def test_profile_json_path_is_absolute_with_relative_catalog(
     assert e.value.code == 0
     assert os.path.isabs(seen["json_out"]), \
         "profiler JSON path must be absolute, got " + repr(seen["json_out"])
+    assert os.path.isabs(seen["warnings_out"]), \
+        "warnings path must be absolute, got " + repr(seen["warnings_out"])
 
 
 def test_profile_params_from_stdin(session, run_tool, fake_build, monkeypatch,
@@ -200,3 +209,39 @@ def test_build_prints_both_stmt_paths(session, run_tool, fake_build, capsys):
 ])
 def test_format_param_value(value, expected):
     assert build._format_param_value(value) == expected
+
+
+# ---- profile: warnings piping + Benchmark ID print ------------------------
+
+_WARNINGS = [
+    {"rule": "no_vector_ops", "func": "hist_rows",
+     "message": "hist_rows not vectorized", "canonical_id": 3},
+    {"rule": "could_compute_further_inside", "func": "equalize",
+     "message": "equalize could compute further inside", "canonical_id": 7},
+]
+
+
+def test_profile_pipes_warnings_and_prints_benchmark_id(
+        session, run_tool, fake_build, capsys):
+    fake_build["warnings"] = _WARNINGS
+    with pytest.raises(SystemExit) as e:
+        run_tool(build.cmd_profile, session.ns(parameters=None))
+    assert e.value.code == 0
+    assert "Benchmark ID: " in capsys.readouterr().out
+
+    run_tool(tools.cmd_json_schedule_info, session.ns())
+    obj = json.loads(capsys.readouterr().out)
+    assert len(obj["benchmark"]) == 1
+    assert obj["benchmark"][0]["warnings"] == _WARNINGS
+
+
+def test_profile_no_warnings_file_is_empty_list(
+        session, run_tool, fake_build, capsys):
+    # fake_build leaves "warnings" unset -> no temporary-warnings file written.
+    with pytest.raises(SystemExit) as e:
+        run_tool(build.cmd_profile, session.ns(parameters=None))
+    assert e.value.code == 0
+    capsys.readouterr()
+    run_tool(tools.cmd_json_schedule_info, session.ns())
+    obj = json.loads(capsys.readouterr().out)
+    assert obj["benchmark"][0]["warnings"] == []

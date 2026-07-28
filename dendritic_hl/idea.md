@@ -124,7 +124,7 @@ sha256, lowercase hex digits.
 * **Result:** C++ compiler error, Halide compiler error, or success.
 
 * **Benchmark Result Files** JSON format, documented later.
-  Each has a full ID `{schedule node full ID}_{hostname}_{timestamp}`.
+  Each has a **benchmark full ID** `{schedule node full ID}_{hostname}_{timestamp}`.
 
 * **Commentary:** remarks with possible opinionated review; documented later.
 
@@ -234,11 +234,6 @@ commentary sub-objects:
 
 ### WarningToggle State (Sub-object of Schedule Nodes)
 
-IMPL TASK: add sub-object type.
-Make the sub-object responsible for its own flushing (write new files);
-DON'T add something like `ScheduleNode._new_warning_toggles`.
-This is an LLM-generated pattern I'm hoping to get rid of.
-
 * **WarningToggle Full ID:**
   `{parent schedule full ID}_{timestamp}`
 
@@ -248,6 +243,8 @@ This is an LLM-generated pattern I'm hoping to get rid of.
 * **Value:** either a `(warning rule name, function name)` pair identifying
   a warning to block, or, the ID of another `WarningToggle` to cancel
   (i.e. re-enable blocked warning).
+  This is a tagged union: a `WarningToggle` is *exactly one* of a block or a
+  cancel, never both and never neither.
 
 The warning-is-blocked algorithm, for a given schedule node:
 
@@ -662,8 +659,6 @@ NOTE: [link to implementation details](impl.md) <!-- Update both docs if you cha
 
     dh_hl profile -s ... [parameters file]
 
-IMPL TASK: benchmark ID print
-
 This is like `dh_hl build` except
 * The Halide binary is run with Andrew Adams's new profiler tool
   and the benchmark results are recorded.
@@ -857,8 +852,6 @@ Silent no-op if this exactly duplicates an existing idea side link.
 
     dh_hl add_warning_toggle {schedule ID} {commentary ID}
 
-IMPL TASK: add this tool.
-
 Add a new `WarningToggle` sub object to the referenced schedule,
 which cites the referenced commentary.
 
@@ -870,6 +863,9 @@ This command takes further arguments:
 * `--cancel {WarningToggle ID}` makes the `WarningToggle`
   cancel the effects of the given other object (i.e. un-block).
 
+Exactly one of `--block` / `--cancel` must be given, since a `WarningToggle`'s
+value is a tagged union (see "WarningToggle State").
+
 FUTURE: warning for unknown warning rule name or func name.
 
 FUTURE: automate schedule ID, but the defaults for `[schedule ID]`
@@ -879,13 +875,6 @@ are probably not appropriate for this command.
 ### Debug Warning Toggle Tool
 
     dh_hl debug_warning_toggle [schedule ID]
-
-IMPL TASK: add this tool. Test that `cancelled` is computed correctly
-in tricky circumstances (e.g. there exists a `WarningToggle` that
-cancels the printed `WarningToggle`, but not on the node-to-root path
-relevant for the referenced schedule).
-Test all optional arguments.
-Test cited commentary text came through as expected.
 
 By default, the tool collects all `WarningToggle` objects using the
 schedule-node-to-root algorithm specified in the `WarningToggle` state
@@ -920,17 +909,6 @@ This command takes further arguments:
 ### View Benchmark Warnings Tool
 
     dh_hl view_benchmark_warnings {benchmark ID}
-
-IMPL TASK: add this tool.
-Include coverage with genuine Halide compiler,
-and real CLI usage with the `run_cli` test fixture.
-Also test correct block behavior.
-Grep that the `x: {...}` lines above showed up as expected.
-
-IMPL TASK: for now, `tests/hist_opus_no_peeking.cpp` reliably triggers warnings
-`(no_vector_ops, hist_rows)` and `(could_compute_further_inside, equalize)`.
-Use this for the "real Halide, real CLI" tests.
-I'm OK with the tests rotting in case the profiler changes.
 
 Pretty-print the warnings embedded in the referenced benchmark object.
 Takes an optional `--always-show-message` flag.
@@ -1301,8 +1279,6 @@ Prints the state of the referenced schedule node as a JSON object, with key/valu
     * `cancelled_by`: unordered list of commentary sub-objects (by full ID)
       that contain this commentary sub-object in their cancels list.
       This commentary is cancelled iff the `cancelled_by` list is non-empty.
-
-IMPL TASK: add `WarningToggle` output
 
 * `warning_toggles`: list of `WarningToggle` sub-objects,
   each object with key/value pairs:

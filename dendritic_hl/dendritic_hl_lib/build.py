@@ -27,6 +27,7 @@ import sys
 
 from . import ids
 from . import locks
+from . import profiler_warnings
 from . import safety
 from .catalog import Catalog
 from .context import Context, SessionWorkspace, resolve_target, read_text_or_stdin
@@ -201,9 +202,13 @@ def _link(bin_dir):
     return _run_streamed(cmd, cwd=bin_dir)
 
 
-def _run_benchmark(bin_dir, json_out_path):
+def _run_benchmark(bin_dir, json_out_path, warnings_out_path):
     env = dict(os.environ)
     env["HL_PROFILER_JSON_OUTPUT"] = json_out_path
+    # Andrew Adams's profiler doesn't put warnings in the main JSON yet; a
+    # separate secret-menu env var names a "JSON lines" file of per-pipeline
+    # warnings (see reference_build_commands.md "Warnings Output").
+    env["HL_PROFILER_JSON_TEMPORARY_WARNINGS"] = warnings_out_path
     cmd = ["./" + _RUNGEN_BIN, "--verbose", "--benchmarks=all", "--estimate_all"]
     return _run_streamed(cmd, cwd=bin_dir, env=env)
 
@@ -374,28 +379,34 @@ def cmd_profile(args):
             all_ok = False
             continue
 
-        # MUST be absolute: it is handed to the benchmark child via
-        # HL_PROFILER_JSON_OUTPUT, and the child runs with cwd=bin_dir, so a
-        # bin_dir-relative path would be resolved against bin_dir twice.
+        # MUST be absolute: they are handed to the benchmark child via env vars,
+        # and the child runs with cwd=bin_dir, so a bin_dir-relative path would
+        # be resolved against bin_dir twice.
         json_out = os.path.abspath(os.path.join(bin_dir, "profile_out.json"))
-        if os.path.exists(json_out):
-            os.remove(json_out)
-        if _run_benchmark(bin_dir, json_out) != 0:
+        warnings_out = os.path.abspath(
+            os.path.join(bin_dir, "profile_warnings.json"))
+        for p in (json_out, warnings_out):
+            if os.path.exists(p):
+                os.remove(p)
+        if _run_benchmark(bin_dir, json_out, warnings_out) != 0:
             all_ok = False
             continue
 
         try:
-            bench_obj = _build_benchmark_obj(json_out, hostname, params)
+            bench_obj = _build_benchmark_obj(json_out, warnings_out, hostname,
+                                             params)
         except HarnessError as e:
             print("dh_hl: skipping parameter set: " + str(e), file=sys.stderr)
             all_ok = False
             continue
-        node.add_benchmark(file_hostname, bench_obj)
+        bench = node.add_benchmark(file_hostname, bench_obj)
+        # Print each benchmark's ID as it is saved (idea.md "Profile Tool").
+        print("Benchmark ID: " + ctx.catalog.format_benchmark_id(bench))
 
     _finish_and_exit(ctx, node, ok=all_ok)
 
 
-def _build_benchmark_obj(json_out, hostname, params):
+def _build_benchmark_obj(json_out, warnings_out, hostname, params):
     with open(json_out, "r", encoding="utf-8") as f:
         prof = json.load(f)
     pipelines = prof.get("pipelines")
@@ -412,6 +423,7 @@ def _build_benchmark_obj(json_out, hostname, params):
         "cpu_count": cpu_count,
         "parameters": params,
         "profiler": pipelines[0],
+        "warnings": profiler_warnings.warnings_from_temp_file(warnings_out),
     }
 
 

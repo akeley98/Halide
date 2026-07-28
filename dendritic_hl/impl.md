@@ -76,9 +76,37 @@ This contains files and directories holding state:
 * **Benchmark Result Files:** store in `bench/{hostname}_{timestamp of benchmark}.json`
   (the `{hostname}` here is the *sanitized* stable hostname — see "Stable Hostname").
 
-  The `{hostname}_{timestamp of benchmark}` part is exactly what's
-  after the last `.` in a benchmark short ID,
-  so don't parse files to resolve IDs.
+  The `{hostname}_{timestamp of benchmark}` part is the benchmark's *local ID*;
+  it is exactly what's after the last `.` in a benchmark short ID (and exactly the
+  file-name stem), so don't parse files to resolve IDs.  The benchmark's *full ID*
+  prepends the parent schedule full ID
+  (`{parent schedule full ID}_{hostname}_{timestamp}`).  Because the timestamp is
+  fixed width and the schedule prefix is fixed width, the hostname in the middle
+  parses out unambiguously even though it may itself contain `_`.  Implemented as
+  the `Benchmark` class in `catalog.py`; resolution/formatting are the
+  `_resolve_benchmark` / `_format_benchmark_short` free functions (exposed via
+  `Catalog.resolve_benchmark` / `Catalog.format_benchmark_id`).  The benchmark
+  JSON gains a `warnings` list (see "Benchmark JSON Format" and the
+  `HL_PROFILER_JSON_TEMPORARY_WARNINGS` note in `reference_build_commands.md`).
+
+* **WarningToggle Files:** store in `warning_toggle/{timestamp}.json` with
+  key-value pairs `citation` (a full commentary ID, from anywhere in the catalog),
+  `rule`/`func` (the blocked warning's rule slug + func name, or both null), and
+  `cancels` (the full ID of another `WarningToggle` this one cancels, or null).
+  The on-disk value is a tagged union: either `cancels` is set (a cancel) or
+  `rule`/`func` are set (a block), never both.  Unlike commentary `cancels`, a
+  `WarningToggle`'s `cancels` stores a *full* ID, because these may cross schedule
+  nodes.  The sub-object's *local ID* is its `{timestamp}`; its *full ID* prepends
+  the parent schedule full ID (`{parent schedule full ID}_{timestamp}`).
+  Implemented as the `WarningToggle` class in `catalog.py`; resolution/formatting
+  are `_resolve_warning_toggle` / `_format_warning_toggle_short` (exposed via
+  `Catalog.resolve_warning_toggle` / `Catalog.format_warning_toggle_id`).  The
+  block algorithm (idea.md "WarningToggle State") lives in
+  `Catalog.warning_toggle_state` / `blocking_toggle`, walking
+  `Catalog.schedule_path_to_root`.
+
+  *Merge risk:* (unlikely) incoming different WarningToggles with the same
+  timestamp on the same schedule node.  No automatic fix provided.
 
 * **Commentary Files:**
   store in `comment/{timestamp}_{hash}.json` (where `hash` is the sha256 of the
@@ -582,6 +610,34 @@ a harness error (generator-count / `RunGenMain.o` / link) leaves `outcome` as
 white-box `_trace` tests (see Tests).
 
 
+### Warning Delivery Hack — Assumptions (temporary)
+
+Andrew Adams's profiler doesn't yet emit warnings in its main JSON, so today they
+reach us through a side channel we fully expect to REPLACE (integrating warnings
+into the profiler payload one day).  Every assumption about that hack is funneled
+through `dendritic_hl_lib/profiler_warnings.py`; when a better mechanism arrives,
+that module plus the call sites named below is the whole blast radius.  Inventory
+of what currently bakes in the hack:
+
+* **Env-var side channel:** `build.py::_run_benchmark` points the profiler at a
+  scratch file via `HL_PROFILER_JSON_TEMPORARY_WARNINGS`.
+* **Side-channel file shape:** `profiler_warnings.warnings_from_temp_file` reads
+  that file as a *single* JSON object (nominally "JSON lines", but one generator
+  per file) and lifts its inner `warnings` list.  Absent file => no warnings.
+* **Storage shape:** `build.py::_build_benchmark_obj` stashes that list under a
+  top-level `warnings` key of the benchmark JSON, SEPARATE from the `profiler`
+  object.  `Benchmark.warnings` / `profiler_warnings.warnings_of_benchmark` read
+  it back (and default to `[]` for pre-warnings benchmarks).
+* **Warning-object fields:** each warning is a dict with `rule`, `func`,
+  `message`, `canonical_id`; only `profiler_warnings.warning_{rule,func,message,
+  key}` reach inside one.  `WarningToggle` blocks on the `(rule, func)` pair
+  (`Catalog.blocking_toggle`); within-pipeline func-name collisions are ignored
+  (idea.md, reference_build_commands.md).
+* **Consumers:** `tools.py::cmd_view_benchmark_warnings` is the only reader today;
+  future holistic "view benchmark" tools should go through `profiler_warnings`
+  too, not re-parse the JSON.
+
+
 ### Build/Profile Decisions
 
 **Build driver split (decided):** use `ninja` only for the param-independent
@@ -921,7 +977,8 @@ name another process already committed).
 **Minting scheme for concurrency (implemented):** resolve uniqueness at
 *mint time*, under the catalog lock, **uniformly for every timestamped catalog
 name** — schedule dirs (`sch/{ts}_{hash}`), session dirs (`session/{id}`),
-commentary (`comment/{ts}_{hash}.json`), and benchmarks (`bench/{host}_{ts}.json`). To
+commentary (`comment/{ts}_{hash}.json`), benchmarks (`bench/{host}_{ts}.json`), and
+warning toggles (`warning_toggle/{ts}.json`). To
 mint a name: busy-wait `fresh_timestamp()` for process-local monotonicity, then
 `os.path.exists` the full candidate path; on a hit, re-mint and retry. Both
 guards are needed and neither alone suffices: the busy-wait separates names
@@ -935,7 +992,8 @@ This is implemented as `Catalog.mint_timestamped_name(build_path)` in
 `catalog.py`, where `build_path` maps a candidate timestamp to the absolute path
 whose uniqueness must hold. Its callers: `Catalog.create_schedule` (mints over
 `sch/{id}`), `ScheduleNode.add_commentary` (over the `comment/{ts}_{hash}.json`
-file), and `ScheduleNode.add_benchmark` (over `bench/{host}_{ts}`).
+file), `ScheduleNode.add_benchmark` (over `bench/{host}_{ts}`), and
+`ScheduleNode.add_warning_toggle` (over `warning_toggle/{ts}.json`).
 `add_benchmark` now mints internally and no longer takes an explicit timestamp
 argument — `build.py`'s profile loop just calls
 `node.add_benchmark(file_hostname, bench_obj)` (sanitized hostname for the file

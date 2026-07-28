@@ -125,6 +125,9 @@ COMMAND_HELP = {
     "force_parent_idea": "Parent a root schedule to an idea as its canonical (rare).",
     "json_schedule_info": "Dump a schedule node's full state as JSON.",
     "json_idea_info": "Dump an idea node's full state as JSON.",
+    "add_warning_toggle": "Add a WarningToggle (block a warning or cancel another) to a schedule.",
+    "debug_warning_toggle": "List the WarningToggles in effect for a schedule node.",
+    "view_benchmark_warnings": "Pretty-print a benchmark's profiler warnings (with block info).",
     "history": "Walk from a schedule node up to its root, printing each hop.",
     "fix_canonical": "Resolve a canonical.txt merge conflict for an idea node.",
     "exec": "Run a command (after `--`) with the machine lock held (shared).",
@@ -258,6 +261,26 @@ def _build_parser():
     sp = add("json_idea_info")
     sp.add_argument("idea", help="idea ID")
 
+    sp = add("add_warning_toggle")
+    sp.add_argument("schedule", help="schedule ID")
+    sp.add_argument("commentary", help="commentary ID to cite")
+    sp.add_argument("--block", nargs=2, metavar=("RULE", "FUNC"),
+                    help="block warnings with this (rule, func) pair")
+    sp.add_argument("--cancel", metavar="WARNING_TOGGLE_ID",
+                    help="cancel (re-enable) another WarningToggle")
+
+    sp = add("debug_warning_toggle")
+    sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
+    sp.add_argument("--block", nargs=2, metavar=("RULE", "FUNC"),
+                    help="only toggles blocking this (rule, func) pair")
+    sp.add_argument("--cancel", metavar="WARNING_TOGGLE_ID",
+                    help="only toggles that cancel this WarningToggle")
+
+    sp = add("view_benchmark_warnings")
+    sp.add_argument("benchmark", help="benchmark ID")
+    sp.add_argument("--always-show-message", action="store_true",
+                    help="print the message even for blocked warnings")
+
     sp = add("history")
     sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
 
@@ -371,6 +394,9 @@ _DISPATCH = {
     "force_parent_idea": tools.cmd_force_parent_idea,
     "json_schedule_info": tools.cmd_json_schedule_info,
     "json_idea_info": tools.cmd_json_idea_info,
+    "add_warning_toggle": tools.cmd_add_warning_toggle,
+    "debug_warning_toggle": tools.cmd_debug_warning_toggle,
+    "view_benchmark_warnings": tools.cmd_view_benchmark_warnings,
     "history": tools.cmd_history,
     "fix_canonical": tools.cmd_fix_canonical,
     # Phase 4
