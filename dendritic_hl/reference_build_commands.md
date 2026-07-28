@@ -51,7 +51,7 @@ Phase 4 — link the standalone binary:
 
 Run / benchmark:
 
-    HL_PROFILER_JSON_OUTPUT=out.json ./brighten.rungen --benchmarks=all --estimate_all --verbose
+    HL_PROFILER_JSON_OUTPUT=out.json ./brighten.rungen --benchmarks=all --estimate_all
 
 where `$H` = `~/Halide/build`. For `profile`, phase 1 runs once and phases
 2--4 + the run loop over each parameter set. Only phase 2 sees the generator

@@ -57,7 +57,15 @@ This contains files and directories holding state:
 
 * **C++ source code:** `generator.cpp`
 
-* **UTC wall time timestamp:** derived from full ID
+* **Generator Parameters:** `generator_parameters.json`
+
+IMPL TASK: hash considers `generator_parameters.json`
+
+* **Hash:** computed from the UTF-8 encoding of `generator.cpp` and
+  `generator_parameters.json`, concatenated.
+  Forms part of the full ID.
+
+* **UTC wall time timestamp:** forms part of the full ID.
 
 * **Edges:** `parent.txt` holds the full ID of the parent idea node plus a newline,
   unless this schedule node is a root node, in which case `parent.txt` doesn't exist.
@@ -70,7 +78,7 @@ This contains files and directories holding state:
   but just raised too many tough cases for a prototype with questionable payoff.
 
 * **Result:** `result.txt`,
-  holding `c++ error`, `halide error`, or `success`.
+  holding `c++ error`, `halide error`, `runtime error`, or `success`.
   The default value is `c++ error`.
 
 * **Benchmark Result Files:** store in `bench/{hostname}_{timestamp of benchmark}.json`
@@ -545,56 +553,72 @@ the prompt has no default content).  Covered by `tests/test_prompt.py`.
 
 ## Build/Profile Tools — Implementation Details
 
-    dh_hl build -s ... [parameters file]
-    dh_hl profile -s ... [parameters file]
+    dh_hl build -s ... [schedule ID]
+    dh_hl profile_once -s ... [schedule ID]
 
-The steps are:
+Remarks for each step:
 
-(1) Compile the Halide generator in the session private workspace `bin` directory
-(1b) (`build` only) further generate the Halide binary and `stmt` files
-(2) Find or create the edited schedule node
-(3a) (`profile` only) profiling loop, with machine exclusive lock
-(3) Update edited schedule node
-(4) Print the ID of the edited schedule node
+1. Compile Halide binaries
 
-**(1)** These steps require only the session private workspace.
-They are run with only the session lock and concurrent machine lock held.
-(See "Tool Safety — Lock Hierarchy")
+TODO can't actually get the code without catalog lock.
 
-For step (1b), print the file names (in the `bin/` directory)
-of the emitted `.stmt` and `conceptual.stmt` files.
-They can be overwritten by future builds.
-Pipe all compiler and generator output `stdout` and `stderr`
-to the harness's `stdout` and `stderr`.
+This must be done with only the (exclusive) session lock and
+(concurrent) machine locks held, no catalog lock. This ensures we
+don't block other agents while waiting for compilation.
 
-**(2)** At this point, the catalog lock must now be acquired.
-Furthermore, for profiling only, the machine lock must be upgraded
-to an exclusive lock (prior to catalog lock, per "Tool Safety — Lock Hierarchy").
-These late acquisitions ensure the expensive C++ compilation step
-doesn't needlessly block other agents from using `dh_hl`.
+Compile the C++ generator from the file stored in the catalog to a
+file `bin/{schedule node full ID}_generator` (this is designed to
+avoid re-compilation when many schedules are being compiled).
 
-The edited schedule node is:
+Bracket the C++ compilation with the lines
 
-* If `dh_hl status` would give an unambiguous schedule node,
-  that schedule node is the one this tool edits.
-* Otherwise, if there is no current idea node,
-  give an error, and suggest the `set_idea` and `new_root` tools.
-* Otherwise, add a new child schedule node to the current idea node
-  holding a copy of the workspace file.
+    dh_hl: begin C++ compilation
+    dh_hl: end C++ compilation ({success or failed})
 
-**(3)** The per-generator-paramaters-object generate/profile/results loop
-runs with the machine lock held exclusively, as mentioned.
-It is somewhat wasteful that the machine lock is still held exclusively
-during the Halide generator run, but a generator is fast enough and
-I don't need the complication.
+If the generator built OK, then loop over the generator parameter objects.
+Skip all but the `N`-th iteration if `--only [N]` is given.
+`i`-th generator parameters object creates binary
+`bin/{schedule node full ID}_{i}` and stmt files `{i}[.conceptual].stmt`.
 
-FUTURE: if it's really an issue, we can fission the loop into
-"compile all binaries" and "profile all binaries" loops.
+Before the `i`-th generation, print
 
-**(4)** Finally (after all other printing including the sub-processes),
-print the ID of the edited schedule node.
+    dh_hl: begin generation {i} {generator parameters in name=value form}
 
-Don't relinquish the locks: this last step is fast enough.
+After the `i`-th generation, print
+
+    dh_hl: {.stmt absolute path, only printed if successful generation}
+    dh_hl: {.conceptual.stmt absolute path, only printed if successful generation}
+    dh_hl: end generation {i} ({success or failed})
+
+After compilation and generation, acquire the catalog lock,
+and, only if profiling, re-acquire the machine lock exclusively.
+
+2. Profiling
+
+Loop over the Halide binaries generated and execute them with the profiler.
+(Skip failed ones not generated).
+Capture the `stdout` of the Halide binaries.
+
+Each successfully exited run adds a new benchmark sub-object to the
+schedule node, with the following printed:
+
+    dh_hl: profile generation {i} ({new benchmark ID})
+
+Otherwise,
+
+    dh_hl: profile generation {i} (failed) 
+
+3. Update result
+
+Only done if no `--only` argument.
+Update the schedule node's result to the better of its current value and:
+
+* `c++ error`, if the C++ build for the schedule node failed, otherwise,
+* `halide error`, if any generator for the schedule node failed, otherwise,
+* `runtime error`, if the tool is `build` or any benchmark failed, otherwise,
+* `success`
+
+IMPL TASK: update this "as implemented" block
 
 **As implemented** (`build.py`): the two commands share `_snapshot_session`
 (resolve `-s`, take the session lock, prepare the catalog-free `SessionWorkspace`

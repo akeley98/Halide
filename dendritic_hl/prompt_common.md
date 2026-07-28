@@ -201,7 +201,7 @@ It will be followed by:
   Sub-agents may run in parallel.
 
 * DON'T compile an edited version of the target program unless it has
-  first been compiled with `dh_hl build` or `dh_hl profile`.
+  first been compiled with `dh_hl build` or related profiler tools.
   This ensures all agent-generated schedules are preserved.
   Generally, avoid working outside the harness.
 
@@ -265,8 +265,9 @@ This will wipe whatever schedule was in your workspace before.
 
 You can then edit the workspace file to implement the current idea
 (reminder: `dh_hl workspace_schedule`).
-Build or profile your workspace code with the `dh_hl build` and `dh_hl profile` tools.
-This also has the effect of creating a child schedule node of the current idea.
+
+Add the changed schedule to the catalog with `dh_hl save`.
+Build or profile your workspace code with the `dh_hl build` or `dh_hl profile_once` tools.
 
 NOTE: "not wasting" schedule nodes is an explicit NON-GOAL.
 We want to track every schedule created, even if it's problematic or didn't compile.

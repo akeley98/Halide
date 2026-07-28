@@ -50,10 +50,11 @@ The catalog is stored in a directory whose name ends with `.dh_hl`.
 
 The catalog primarily consists of a bipartite tree consisting of:
 
-* **Schedule Nodes:** Holds C++ generator file and associated benchmarking information and commentary.
+* **Schedule Nodes:** Holds C++ generator file and generator parameters.
   May have 0 or 1 "idea nodes" as parents.
   May have 0 or more idea nodes as children as well only if this is a major schedule (to be defined).
   The schedule is embedded with a UTC wall time timestamp.
+  The schedule may have commentary, benchmark, or `WarningToggle` sub-objects attached.
 
 * **Idea Nodes:** Holds a reference to exactly 1 parent schedule node,
   and includes a text proposal of how to further modify the schedule.
@@ -111,17 +112,28 @@ sha256, lowercase hex digits.
 
 ### Schedule Node State
 
-* **C++ source code**
+* **C++ source code:** `generator.cpp`
+
+* **Generator Parameters:** `generator_parameters.json`:
+  list of generator parameter JSON objects.
+  Each leads to a different Halide binary to be generated and benchmarked.
 
 * **UTC wall time timestamp:** timestamp of when the schedule node was created.
 
-* **Schedule Node Full ID:**
-  `{timestamp}_{hash}` where `hash` is that of the stored C++ code encoded as UTF-8.
-  Exactly 90 characters.
+* **Schedule Node Full ID:** `{timestamp}_{hash}`; exactly 90 characters.
 
 * **Edges:** 0 or 1 parent idea nodes, 0 or more child idea nodes.
 
-* **Result:** C++ compiler error, Halide compiler error, or success.
+IMPL TASK: Result value has changed; `runtime error` is new
+
+* **Result:** one of:
+  * `c++ error`: C++ generator not known to compile successfully (worst)
+  * `halide error`: C++ generator compiled, but not all included
+    generator parameters verified to successfully generate a Halide
+    binary yet.
+  * `runtime error`: All generator parameters led to successful Halide
+    binary generation, but not known yet that all binaries execute successfully.
+  * `success`: At least one Halide binary known to run successfully (best)
 
 * **Benchmark Result Files** JSON format, documented later.
   Each has a **benchmark full ID** `{schedule node full ID}_{hostname}_{timestamp}`.
@@ -133,9 +145,12 @@ sha256, lowercase hex digits.
 * **Warning Toggles:** list of `WarningToggle` objects, documented later.
   These are used to suppress warnings from the profiler.
 
-FUTURE: consider how to store history of sweeping over `GeneratorParam` values.
-For now, the required default value of the `GeneratorParam`
-may be used as an out-of-band method to recommend the "official" parameter values.
+
+## Generator Parameters JSON Object Format
+
+Object mapping generator parameter names to values.
+Each value can be bool, number, or string.
+All pairs go to the Halide generator as `key=value`.
 
 
 ### Idea Node State
@@ -583,9 +598,10 @@ git merging could cause the session private workspace to desync.
 
     dh_hl restore_schedule -s ... {schedule ID}
 
-Copies the schedule node's C++ schedule to the workspace C++ file,
-and updates the current idea state as follows,
-depending on the number of parent idea nodes of the referenced schedule node.
+Copies the schedule node's C++ schedule and generator parameters to
+the workspace, and updates the current idea state as follows,
+depending on the number of parent idea nodes of the referenced
+schedule node.
 
 * **No parents:** set to "no current idea" state, embedding the timestamp of the schedule node.
 
@@ -596,7 +612,8 @@ depending on the number of parent idea nodes of the referenced schedule node.
 
     dh_hl restore_idea -s ... {idea ID}
 
-Copies the idea's parent schedule's C++ code to the workspace C++ file,
+Copies the idea's parent schedule's C++ code and
+generator parameters to the workspace,
 and updates the current idea state to "some current idea" state,
 embedding the idea referenced in the command.
 
@@ -612,83 +629,80 @@ The warning includes
 * A suggestion to use `restore_schedule` instead.
 
 
-### Build Tool
+### Save Tool
 
-    dh_hl build -s ... [parameters file]
+    dh_hl save -s ...
 
-This tool compiles the workspace file and adds/updates a schedule node for it. It:
+IMPL TASK: add this (replaces implied `build` functionality)
 
-1. Compiles the Halide binary in the session private workspace `bin` directory.
-2. Finds or creates the edited schedule node.
-3. Conditionally updates the result state of the edited schedule node.
-4. Prints the ID of the edited schedule node.
+Save the current workspace C++ and generator parameters file into
+a new schedule node in the catalog, or return existing schedule node.
+The harness (by design) can only build or profile schedules in the catalog.
+So this is the first step to building or profiling a new schedule.
 
-The edited schedule node is:
+Prints the ID of the new or existing schedule node, which is:
 
 * If `dh_hl status` would give an unambiguous schedule node,
-  that schedule node is the one this tool edits.
-* Otherwise, if there is no current idea node,
-  the tool errors, suggesting the `set_idea` and `new_root` tools.
-* Otherwise, the tool adds a new child schedule node to the current idea node,
-  holding a copy of the workspace file.
+  that schedule node is the one this tool returns.
 
-The build, along with a plain `.stmt` and a `conceptual.stmt` file
-(the lowered and pre-lowering loop nests, respectively),
-is in the gitignore'd `bin` directory of the current session.
-Depending on the build outcome, the result state of the edited schedule node is updated to one of:
+* Otherwise, if there is no current idea node for the session,
+  give an error, and suggest the `set_idea` and `new_root` tools.
 
-* `c++ error`: couldn't even compile the C++ workspace file (worst)
-* `halide error`: passed said step, but Halide generator exited unsuccessfully
-* `success`: both steps exited successfully (best)
-
-However, the update is to the better of the previous and new value.
-This is to account for how some generator parameter values may cause the
-Halide generator to fail; doesn't mean the entire schedule is bad.
-
-The parameters file is in Generator Parameters JSON Object Format
-(documented later); there are no parameters if the file is omitted.
-These parameters are passed through to the Halide generator.
-
-This tool exits successfully iff no harness errors occurred
-and all subprocesses succeeded.
-
-NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
+* Otherwise, add a new child schedule node to the current idea node
+  holding a copy of the workspace files.
+  This becomes the new unambiguous schedule node for `dh_hl status`.
 
 
-### Profile Tool
+### Build/Profile-once Tools
 
-    dh_hl profile -s ... [parameters file]
+IMPL TASK: remove `--verbose` flag from generator run
 
-This is like `dh_hl build` except
-* The Halide binary is run with Andrew Adams's new profiler tool
-  and the benchmark results are recorded.
-* The parameters file may contain a list of generator parameters JSON object,
-  with each parameter set profiled in turn.
+IMPL TASK: `dh_hl: ` lines
 
-The list of generator parameters JSON objects for the command is
-* `[{}]`, if the parameters file was not given
-* `[obj]`, if the parameters file encodes a single JSON object `obj`
-* The parsed contents of the parameters file, verbatim, if it's already a list
+IMPL TASK: `profile` renamed to `profile_once`
 
-Step 1 of the `dh_hl build` command is modified to only create a Halide generator
-and omit the `stmt` file generation.
+IMPL TASK: explicit schedule ID *replaces* generator parameters file
 
-Step 3 of the `dh_hl build` command is modified to become a
-loop over this list, with the machine lock held exclusively.
-The Halide binary is generated and benchmarked
-once using each generator parameters object, with a benchmark object
-saved and the schedule node result state updated each time.
+IMPL TASK: functionality moved to `dh_hl save`
 
-Print a short ID of each benchmark as it's saved, in a line of the form
+    dh_hl build -s ... [schedule ID]
+    dh_hl profile_once -s ... [schedule ID]
 
-    Benchmark ID: {benchmark ID}
+These tools
 
-Doesn't fail irrecoverably if some builds fail; the tool skips them and moves on.
+1. Compile Halide binaries in the session private workspace `bin` directory,
+   along with `.stmt` and `.conceptual.stmt` files.
+   Compiler and generator outputs get piped to harness `stdout`/`stderr`.
+2. For `profile_once` only, run the binaries with Andrew Adams's profiler,
+   with new benchmark objects added to the edited schedule node.
+   The new objects' IDs are printed.
+3. Conditionally update the result state of the edited schedule node,
+   if no flags overriding the default generator parameters are given.
+   The result state can only go from worse to better values.
+
+One binary is generated for each of the generator parameters objects
+in the schedule node's `generator_parameters.json`, unless the flags
+`--only [N]` are passed, specifying only the Nth parameters object is
+used (0-indexed).
+
+The tool fails if 0 generator parameters JSON objects exist.
 
 This tool exits successfully iff no harness errors occurred
 and all subprocesses succeeded.
 
+Important lines emitted by the harness itself are prefixed with
+`dh_hl: ` for grep-ability.
+
 NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
+
+
+### Profile Set Tool (Benchmark Set Creation)
+
+IMPL TASK: new tool
+
+    dh_hl profile_set -s ... [schedule ID]
+
+TODO
 
 
 ### Canon Tool (Make Canonical Tool)
@@ -735,7 +749,7 @@ to the referenced schedule node is passed.
 
     dh_hl new_root -s ...
 
-Hashes the file and looks for existing schedule nodes with the same hash.
+Hashes the workspace files and looks for existing schedule nodes with the same hash.
 If any of them are major schedules, the tool errors,
 giving IDs of all such schedule nodes.
 
@@ -1061,11 +1075,15 @@ for a parent schedule that's exclusively its own.
 
 ### New Catalog Tool
 
+IMPL TASK: generator parameters init
+
     dh_hl new_catalog -C ... {proposal name} {proposal file} {input C++ file}
 
 Creates a new catalog directory with the bare minimum state to get started:
 
-* Two schedule nodes, both holding a copy of the input C++ file.
+* Two schedule nodes, both holding a copy of the input C++ file and
+  a generator parameters file containing `[{}]`
+  ("benchmark once with no parameters")
 
 * One idea node connecting the two schedule nodes.
 
@@ -1200,10 +1218,19 @@ NB see also `schedule_full_id`, `schedule_short_id`, `restore_schedule` tools.
 
 ### Workspace Location Tools
 
+IMPL TASK: generator parameters
+
     dh_hl workspace_schedule -s ...
+    dh_hl workspace_parameters -s ...
     dh_hl workspace_bin -s ...
 
-Get the filename of the workspace C++ file or bin directory, respectively.
+Respectively, get the filename of the
+
+* workspace C++ file
+
+* workspace generator parameters JSON file
+
+* bin directory
 
 
 ### Locked Execution Tools
@@ -1246,6 +1273,8 @@ this is load bearing for correctness, since it encodes more than a session full 
 
     dh_hl json_schedule_info -C ... [schedule ID]
 
+IMPL TASK: generator parameters
+
 Prints the state of the referenced schedule node as a JSON object, with key/value pairs
 
 * `id`: full ID of node
@@ -1255,6 +1284,8 @@ Prints the state of the referenced schedule node as a JSON object, with key/valu
 * `children`: list of strings, each a full ID of a child node
 
 * `source`: string, C++ source code
+
+* `parameters`: list of generator parameters JSON objects stored in the node
 
 * `timestamp`: string, timestamp
 
@@ -1416,13 +1447,6 @@ The user may not be familiar with the harness.
 Try to advise of the implications of various actions.
 
 
-## Generator Parameters JSON Object Format
-
-Object mapping generator parameter names to values.
-Each value can be bool, number, or string.
-All pairs go to the Halide generator as `key=value`.
-
-
 ## Benchmark JSON Format
 
 Key value pairs:
@@ -1439,6 +1463,10 @@ Key value pairs:
 
 * `warnings`: list of warning objects captured from profiler output,
   stored in a temporary format (`HL_PROFILER_JSON_TEMPORARY_WARNINGS` output).
+
+IMPL TASK: capture this `stdout`
+
+* `stdout`: stdout captured from the profiled Halide binary
 
 Note this is not the profiler you'll find documented on the internet.
 The profiler was rewritten internally for this project.
