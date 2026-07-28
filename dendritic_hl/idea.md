@@ -67,6 +67,7 @@ Multiple agents can work on the same catalog in parallel,
 but each must have its own session.
 
 A schedule node is a **root node** if it has 0 parents.
+The "tree" is technically a forest as multiple roots are possible.
 
 A schedule node is a **major schedule** if it is a root node or it is a canonical schedule of some idea node.
 
@@ -123,10 +124,14 @@ sha256, lowercase hex digits.
 * **Result:** C++ compiler error, Halide compiler error, or success.
 
 * **Benchmark Result Files** JSON format, documented later.
+  Each has a full ID `{schedule node full ID}_{hostname}_{timestamp}`.
 
 * **Commentary:** remarks with possible opinionated review; documented later.
 
 * **Review:** derived value from commentary; documented later.
+
+* **Warning Toggles:** list of `WarningToggle` objects, documented later.
+  These are used to suppress warnings from the profiler.
 
 FUTURE: consider how to store history of sweeping over `GeneratorParam` values.
 For now, the required default value of the `GeneratorParam`
@@ -198,7 +203,7 @@ The session lock (see "Locking") will catch many such violations,
 but will not prevent observing a partial edit to the workspace C++ file.
 
 
-### Commentary State (Sub-Object of Schedule Nodes)
+### Commentary State (Sub-object of Schedule Nodes)
 
 * **Text of commentary**
 
@@ -225,6 +230,39 @@ commentary sub-objects:
 * Otherwise, at least one lost-interest: `lost_interest`
 
 * Otherwise, `neutral`
+
+
+### WarningToggle State (Sub-object of Schedule Nodes)
+
+IMPL TASK: add sub-object type.
+Make the sub-object responsible for its own flushing (write new files);
+DON'T add something like `ScheduleNode._new_warning_toggles`.
+This is an LLM-generated pattern I'm hoping to get rid of.
+
+* **WarningToggle Full ID:**
+  `{parent schedule full ID}_{timestamp}`
+
+* **Citation:** Reference to commentary to cite.
+  This can be any commentary in the entire catalog.
+
+* **Value:** either a `(warning rule name, function name)` pair identifying
+  a warning to block, or, the ID of another `WarningToggle` to cancel
+  (i.e. re-enable blocked warning).
+
+The warning-is-blocked algorithm, for a given schedule node:
+
+* Collect the set `W` of `WarningToggle` objects owned by schedule nodes
+  on the path from the given schedule node to its tree root.
+
+* Subtract from `W` the set of `WarningToggle` objects cancelled by
+  any `WarningToggle` object in `W`.
+
+* The set of `(warning rule name, function name)` pairs carried by the
+  surviving `WarningToggle` objects identify the warnings blocked.
+
+This localizes the effect of a schedule node's `WarningToggle` -- both
+blocks and `WarningToggle` cancellations -- to the subtree of the
+schedule node.
 
 
 ### Current Idea State
@@ -284,8 +322,8 @@ For convenience, short IDs are preferred almost everywhere else instead.
 Short IDs contain at least one `.` OR contain only hex characters.
 Full IDs contain no `.` and at least one `_`.
 
-Each short ID matches some number of nodes.
-The short ID resolves successfully iff it matches exactly 1 node.
+Each short ID matches some number of nodes or sub-objects.
+The short ID resolves successfully iff it matches exactly 1 node or sub-object.
 If there's more than 1 match, the error message lists all matching IDs from oldest-to-newest.
 The timestamp of an idea is implicitly the timestamp of its parent schedule (break ties arbitrarily).
 
@@ -333,6 +371,20 @@ Unless otherwise stated, any of the `{...}` components may be empty.
   Find all schedule nodes matching the given ID (long or short),
   then match any commentary sub-objects of those schedule nodes
   that have a hash starting with `{hash prefix}`.
+
+**Benchmark short ID:**
+
+* `{schedule ID}.{hostname}_{timestamp}`
+  Find all schedule nodes matching the given ID (long or short),
+  then match any benchmark sub-objects of those schedule nodes
+  that have a matching (sanitized) hostname and timestamp.
+
+**WarningToggle short ID:**
+
+* `{scheduled ID}.{timestamp}`
+  Find all schedule nodes matching the given ID (long or short),
+  then match any `WarningToggle` sub-objects of those schedule nodes
+  that have a matching timestamp.
 
 **Warning:** short IDs may become invalid due to new ambiguities.
 Use them only as convenient IDs for immediate tool use,
@@ -610,6 +662,8 @@ NOTE: [link to implementation details](impl.md) <!-- Update both docs if you cha
 
     dh_hl profile -s ... [parameters file]
 
+IMPL TASK: benchmark ID print
+
 This is like `dh_hl build` except
 * The Halide binary is run with Andrew Adams's new profiler tool
   and the benchmark results are recorded.
@@ -629,6 +683,10 @@ loop over this list, with the machine lock held exclusively.
 The Halide binary is generated and benchmarked
 once using each generator parameters object, with a benchmark object
 saved and the schedule node result state updated each time.
+
+Print a short ID of each benchmark as it's saved, in a line of the form
+
+    Benchmark ID: {benchmark ID}
 
 Doesn't fail irrecoverably if some builds fail; the tool skips them and moves on.
 
@@ -793,6 +851,109 @@ Add an idea side link from the LHS idea to the RHS idea,
 of type `borrows_from` or `superseded_by`.
 Silent no-op if this exactly duplicates an existing idea side link.
 (i.e. same LHS, RHS, and type).
+
+
+### Add Warning Toggle Tool
+
+    dh_hl add_warning_toggle {schedule ID} {commentary ID}
+
+IMPL TASK: add this tool.
+
+Add a new `WarningToggle` sub object to the referenced schedule,
+which cites the referenced commentary.
+
+This command takes further arguments:
+
+* `--block {rule} {func}` makes the new `WarningToggle` block
+  warnings with the given rule name and function name.
+
+* `--cancel {WarningToggle ID}` makes the `WarningToggle`
+  cancel the effects of the given other object (i.e. un-block).
+
+FUTURE: warning for unknown warning rule name or func name.
+
+FUTURE: automate schedule ID, but the defaults for `[schedule ID]`
+are probably not appropriate for this command.
+
+
+### Debug Warning Toggle Tool
+
+    dh_hl debug_warning_toggle [schedule ID]
+
+IMPL TASK: add this tool. Test that `cancelled` is computed correctly
+in tricky circumstances (e.g. there exists a `WarningToggle` that
+cancels the printed `WarningToggle`, but not on the node-to-root path
+relevant for the referenced schedule).
+Test all optional arguments.
+Test cited commentary text came through as expected.
+
+By default, the tool collects all `WarningToggle` objects using the
+schedule-node-to-root algorithm specified in the `WarningToggle` state
+documentation, then prints for each object:
+
+* `id: {short ID}`
+
+* `citation: {commentary short ID}`
+
+* First up to 72 characters of the first line of the cited commentary.
+
+* `rule/func: {rule name} {func name}`, only printed for objects that block a warning
+
+* `cancels: {WarningToggle short ID}`,
+  only printed for objects that cancel another `WarningToggle` object
+
+* `cancelled: {true|false}`
+
+There are dividers between printed objects.
+
+This command takes further arguments:
+
+* `--block {rule} {func}` filters the list only to objects that
+  block warnings with the given (rule name, function name) pair,
+  including ones where `cancelled` is true.
+
+* `--cancel {WarningToggle ID}` filters the list only to objects
+  that cancel the given `WarningToggle` object.
+  It is not an error if the named object does not exist.
+
+
+### View Benchmark Warnings Tool
+
+    dh_hl view_benchmark_warnings {benchmark ID}
+
+IMPL TASK: add this tool.
+Include coverage with genuine Halide compiler,
+and real CLI usage with the `run_cli` test fixture.
+Also test correct block behavior.
+Grep that the `x: {...}` lines above showed up as expected.
+
+IMPL TASK: for now, `tests/hist_opus_no_peeking.cpp` reliably triggers warnings
+`(no_vector_ops, hist_rows)` and `(could_compute_further_inside, equalize)`.
+Use this for the "real Halide, real CLI" tests.
+I'm OK with the tests rotting in case the profiler changes.
+
+Pretty-print the warnings embedded in the referenced benchmark object.
+Takes an optional `--always-show-message` flag.
+
+For each warning, the tool prints:
+
+* `rule/func: {rule name} {func name}`
+
+* `message: {message text}`, printed only if the warning is not blocked
+  for this schedule node, or if `--always-show-message` was passed.
+
+If the warning is blocked for this schedule node (see `WarningToggle`),
+that warning has additional lines:
+
+* `blocked by: {WarningToggle ID}` (picks arbitrarily if blocked by multiple).
+
+* `citation: {Commentary ID}`, unpacked from the `WarningToggle` referenced above.
+
+* First up to 72 characters of the first line of the cited commentary.
+
+There are dividers between printed warnings.
+
+FUTURE: fix `max_warnings` limit in Halide profiler that silently drops warnings.
 
 
 ### History Tool
@@ -1141,6 +1302,21 @@ Prints the state of the referenced schedule node as a JSON object, with key/valu
       that contain this commentary sub-object in their cancels list.
       This commentary is cancelled iff the `cancelled_by` list is non-empty.
 
+IMPL TASK: add `WarningToggle` output
+
+* `warning_toggles`: list of `WarningToggle` sub-objects,
+  each object with key/value pairs:
+    * `id`: full ID of `WarningToggle` sub-object
+
+    * `citation`: full ID of commentary
+
+    * `func`: string name of blocked warnings' function name; null if not applicable
+
+    * `rule`: string name of blocked warnings' rule; null if not applicable
+
+    * `cancels`: full ID of `WarningToggle` object; null if not applicable
+
+
 
 ### JSON Idea Info Tool
 
@@ -1276,11 +1452,17 @@ All pairs go to the Halide generator as `key=value`.
 Key value pairs:
 
 * `hostname`: string, not sanitized
+
 * `cpu_count`: number, CPU count of system used for profiling
+
 * `parameters`: object, generator parameters used to generate the profiled Halide binary
+
 * `profiler`: the profiler JSON output should be a JSON object whose "pipelines"
   value is a list of 1 object. This is that inner object.
   (There will be more than 1 if we support multiple generators; just error for != 1 for now).
+
+* `warnings`: list of warning objects captured from profiler output,
+  stored in a temporary format (`HL_PROFILER_JSON_TEMPORARY_WARNINGS` output).
 
 Note this is not the profiler you'll find documented on the internet.
 The profiler was rewritten internally for this project.

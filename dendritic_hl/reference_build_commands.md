@@ -64,3 +64,37 @@ A worked, tested generator + ninja build is under
 
 The ninja file is named `build_ninja.txt` (not `build.ninja`) so it escapes
 this repo's `*.ninja*` gitignore rule and can be committed; hence the `-f`.
+
+
+### Temporary-ish: Warnings Output
+
+IMPL TASK: pipe this through.
+
+Andrew Adams didn't include the warnings in the JSON output.
+For now, to make forward progress, there's a separate secret menu
+`HL_PROFILER_JSON_TEMPORARY_WARNINGS` environment variable.
+
+This names a file in which per-pipeline warning information gets written,
+in "JSON lines" format.
+Each line is a JSON object, containing keys `pipeline` and `warnings`.
+
+The warnings are a list of objects, each object containing at least:
+
+* `rule`: string "slug" identifier of warning kind
+
+* `func`: string name of func
+
+* `message`: string
+
+* `canonical_id`: numeric unique ID of func in this pipeline
+
+For now, since the harness requires only 1 generator per file,
+parse it as if it were a single JSON object.
+Copy the inner "warnings" list to the corresponding
+`warnings` key/value pair in the `dh_hl` benchmark JSON format.
+
+The function names may collide for different functions in the same
+pipeline. This makes `WarningToggle` incapable of distinguishing
+them, which is ignored for the prototype.
+We do have `canonical_id` but that's useless for giving a
+stable identifier after scheduling changes.

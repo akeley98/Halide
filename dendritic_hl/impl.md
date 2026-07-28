@@ -76,6 +76,10 @@ This contains files and directories holding state:
 * **Benchmark Result Files:** store in `bench/{hostname}_{timestamp of benchmark}.json`
   (the `{hostname}` here is the *sanitized* stable hostname — see "Stable Hostname").
 
+  The `{hostname}_{timestamp of benchmark}` part is exactly what's
+  after the last `.` in a benchmark short ID,
+  so don't parse files to resolve IDs.
+
 * **Commentary Files:**
   store in `comment/{timestamp}_{hash}.json` (where `hash` is the sha256 of the
   commentary text) with key-value pairs:
