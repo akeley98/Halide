@@ -716,8 +716,11 @@ There is intentionally no "change canonical schedule" tool.
 
     dh_hl comment -C ... {commentary file} [schedule ID]
 
-Adds a new commentary file to the referenced schedule node,
-with contents copied from the passed `commentary file`.
+IMPL TASK: print ID
+
+Adds a new commentary sub-object to the referenced schedule node,
+with the commentary text copied from the passed `commentary file`.
+Prints the ID of the new commentary sub-object.
 
 Use the optional `--review [review]` arguments to override
 the review from the default `neutral` value.
@@ -975,11 +978,18 @@ There is no predefined order of the schedules.
 
 ### View Commentary Tool
 
-    dh_hl view_commentary -C ... [schedule ID]
+    dh_hl view_commentary -C ... {commentary ID}
+    dh_hl view_all_commentary -C ... [schedule ID]
 
-Print all commentary of the referenced schedule node.
+IMPL TASK: update this. (`view_all_commentary` is the new `view_commentary`)
 
-Prints each commentary file separated by dividers, with contents:
+Prints either the referenced commentary sub-object (`view_commentary`),
+or all commentary sub-objects of the schedule (`view_all_commentary`),
+with each commentary separated by a divider.
+
+Takes an optional `--brief` argument.
+
+Each commentary is printed as
 
 * `timestamp: [timestamp]`
 
@@ -989,11 +999,8 @@ Prints each commentary file separated by dividers, with contents:
 
 * One `cancels: [commentary ID]` for each entry is the cancels list
 
-* full text
-
-A commentary can only cancel other commentary objects belonging to the same
-schedule node.  Therefore `cancelled` may be derived from one schedule node
-alone — no need to tour the entire catalog.
+* full text, unless `--brief` is passed, in which case only the first up to
+  72 characters of the first line is printed.
 
 
 ### View Session Commentary Tool
@@ -1001,7 +1008,7 @@ alone — no need to tour the entire catalog.
     # Does not acquire session lock
     dh_hl view_session_commentary -s ...
 
-Similar to `view_commentary`, except
+Similar to `view_schedule_commentary`, except
 
 * The referenced schedule node is the output schedule node of the
   current session (error if not yet set).
@@ -1242,9 +1249,6 @@ this is load bearing for correctness, since it encodes more than a session full 
 ### JSON Schedule Info Tool
 
     dh_hl json_schedule_info -C ... [schedule ID]
-
-The "cancelled-by" state of each commentary sub-object can be derived solely
-from the information in this schedule node (cancels are always same-node).
 
 Prints the state of the referenced schedule node as a JSON object, with key/value pairs
 
