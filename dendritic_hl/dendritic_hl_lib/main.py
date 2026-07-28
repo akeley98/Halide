@@ -160,7 +160,8 @@ COMMAND_HELP = {
     "session_full_id": "Print the current session's full ID.",
     "session_handle": "Print (allocating if needed) the current session's handle.",
     "view_session_idea": "Show the current session's seed idea.",
-    "view_commentary": "Show all commentary of a schedule node.",
+    "view_commentary": "Show a single commentary sub-object by ID.",
+    "view_all_commentary": "Show all commentary of a schedule node.",
     "view_session_commentary": "Show all commentary of the current session's output schedule.",
     "json_session_info": "Dump the current session's state as JSON.",
     "json_export": "Dump the entire catalog (ideas, schedules, sessions) as JSON.",
@@ -348,7 +349,14 @@ def _build_parser():
     add("view_session_idea")
 
     sp = add("view_commentary")
+    sp.add_argument("commentary", help="commentary ID")
+    sp.add_argument("--brief", action="store_true",
+                    help="print only the first line (up to 72 chars)")
+
+    sp = add("view_all_commentary")
     sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
+    sp.add_argument("--brief", action="store_true",
+                    help="print only the first line (up to 72 chars) of each")
 
     add("view_session_commentary")
     add("json_session_info")
@@ -428,6 +436,7 @@ _DISPATCH = {
     "session_handle": tools.cmd_session_handle,
     "view_session_idea": tools.cmd_view_session_idea,
     "view_commentary": tools.cmd_view_commentary,
+    "view_all_commentary": tools.cmd_view_all_commentary,
     "view_session_commentary": tools.cmd_view_session_commentary,
     "json_session_info": tools.cmd_json_session_info,
     "json_export": tools.cmd_json_export,

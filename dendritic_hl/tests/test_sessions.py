@@ -202,7 +202,7 @@ def test_terminus_and_output_getters_after_close(session, run_tool, capsys, tmp_
 
 def test_view_commentary(session, run_tool, capsys, tmp_path):
     _comment(session, run_tool, tmp_path, review="positive")
-    out = _out(run_tool, capsys, tools.cmd_view_commentary, session.ns())
+    out = _out(run_tool, capsys, tools.cmd_view_all_commentary, session.ns())
     assert "review: positive" in out
     assert "cancelled: false" in out
     assert "session summary" in out

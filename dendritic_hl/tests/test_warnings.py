@@ -16,7 +16,7 @@ import json
 
 import pytest
 
-from dendritic_hl_lib import build, profiler_warnings, safety, tools
+from dendritic_hl_lib import build, ids, profiler_warnings, safety, tools
 from dendritic_hl_lib.errors import DhHlError
 from conftest import ns, open_catalog, make_catalog_session, Sess
 
@@ -318,3 +318,73 @@ def test_view_benchmark_warnings_real_cli(tmp_path, run_cli):
     assert "blocked by:" in r.stdout
     assert "citation:" in r.stdout
     assert "message: equalize could compute further inside" in r.stdout
+
+
+# ---------------------------------------------------------------------------
+# comment prints its ID; the citation workflow end-to-end.
+# ---------------------------------------------------------------------------
+
+def _comment_via_cli(run_tool, capsys, cat_dir, sched_id, tmp_path, text,
+                     review="neutral"):
+    """Run `comment` and return the commentary ID it prints (idea.md "Comment
+    Tool" prints the new commentary's ID so it can be cited)."""
+    cfile = tmp_path / "c.txt"
+    cfile.write_text(text)
+    run_tool(tools.cmd_comment,
+             ns(catalog=cat_dir, schedule=sched_id, commentary=str(cfile),
+                review=review, cancels=None))
+    line = capsys.readouterr().out.strip()
+    assert line.startswith("Added {} commentary ".format(review))
+    return line.split("commentary ", 1)[1].split(" to ", 1)[0]
+
+
+def test_citation_workflow_end_to_end(tmp_path, run_tool, capsys):
+    cat_dir, bench_id = _catalog_with_benchmark(tmp_path)
+    sched_id = ids.benchmark_schedule_id(bench_id)
+
+    cid = _comment_via_cli(run_tool, capsys, cat_dir, sched_id, tmp_path,
+                           "hist_rows is deliberately scalar.\n")
+    # The printed ID resolves + views as a single commentary.
+    run_tool(tools.cmd_view_commentary, ns(catalog=cat_dir, commentary=cid))
+    v = capsys.readouterr().out
+    assert "review: neutral" in v
+    assert "hist_rows is deliberately scalar." in v
+
+    # It can be cited by a WarningToggle, which then blocks the warning.
+    run_tool(tools.cmd_add_warning_toggle,
+             ns(catalog=cat_dir, schedule=sched_id, commentary=cid,
+                block=["no_vector_ops", "hist_rows"], cancel=None))
+    capsys.readouterr()
+    run_tool(tools.cmd_view_benchmark_warnings,
+             ns(catalog=cat_dir, benchmark=bench_id))
+    out = capsys.readouterr().out
+    assert "blocked by:" in out
+    assert "hist_rows is deliberately scalar" in out  # citation snippet
+
+
+def test_view_commentary_single_vs_all_and_brief(tmp_path, run_tool, capsys):
+    cat_dir, bench_id = _catalog_with_benchmark(tmp_path)
+    sched_id = ids.benchmark_schedule_id(bench_id)
+    cid1 = _comment_via_cli(run_tool, capsys, cat_dir, sched_id, tmp_path,
+                            "first remark line\nsecond line\n", review="positive")
+    _comment_via_cli(run_tool, capsys, cat_dir, sched_id, tmp_path,
+                     "another remark\n", review="negative")
+
+    # view_commentary shows ONLY the referenced commentary.
+    run_tool(tools.cmd_view_commentary, ns(catalog=cat_dir, commentary=cid1))
+    one = capsys.readouterr().out
+    assert "first remark line" in one
+    assert "another remark" not in one
+
+    # --brief prints just the first line, no full-text divider/second line.
+    run_tool(tools.cmd_view_commentary,
+             ns(catalog=cat_dir, commentary=cid1, brief=True))
+    brief = capsys.readouterr().out
+    assert "first remark line" in brief
+    assert "second line" not in brief
+
+    # view_all_commentary shows every commentary on the schedule.
+    run_tool(tools.cmd_view_all_commentary, ns(catalog=cat_dir, schedule=sched_id))
+    allout = capsys.readouterr().out
+    assert "first remark line" in allout
+    assert "another remark" in allout

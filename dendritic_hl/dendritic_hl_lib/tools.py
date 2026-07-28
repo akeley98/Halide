@@ -256,10 +256,12 @@ def cmd_comment(args):
                 .format(ctx.catalog.format_commentary_id(target),
                         ctx.catalog.format_schedule_id(node)))
         cancels.append(target.local_id)
-    node.add_commentary(text, review=review, cancels=cancels)
+    c = node.add_commentary(text, review=review, cancels=cancels)
     ctx.finish()
-    print("Added {} commentary to {}".format(
-        review, ctx.catalog.format_schedule_id(node)))
+    # Print the new commentary's ID so it can be cited (e.g. by a WarningToggle).
+    print("Added {} commentary {} to {}".format(
+        review, ctx.catalog.format_commentary_id(c),
+        ctx.catalog.format_schedule_id(node)))
 
 
 # ---------------------------------------------------------------------------
@@ -1057,33 +1059,56 @@ def cmd_view_session_idea(args):
     _print_idea_view(ctx.catalog, ctx.catalog.get_idea(ctx.session.seed_idea_id))
 
 
-def _print_commentary(catalog, node):
-    comments = sorted(node.commentary, key=lambda c: c.timestamp)
-    # cancelled state is derivable from this node alone (cancels are same-node).
+def _format_cancel_id(catalog, node, target_local):
+    """Short commentary ID for a cancels-list entry (same-node local ID); falls
+    back to the reconstructed full ID if the target no longer resolves."""
+    for other in node.commentary:
+        if other.local_id == target_local:
+            return catalog.format_commentary_id(other)
+    return "{}_{}".format(node.full_id, target_local)
+
+
+def _print_one_commentary(catalog, c, brief):
+    """Print a single commentary sub-object (idea.md "View Commentary Tool").
+    `cancelled` is derivable from the parent node alone (cancels are same-node)."""
+    node = c.schedule
     cancelled_by = node.commentary_cancelled_by()
-    if not comments:
-        print("(no commentary)")
-    for c in comments:
-        print("=" * 72)
-        print("timestamp: " + c.timestamp)
-        print("review: " + c.review)
-        print("cancelled: "
-              + ("true" if cancelled_by.get(c.local_id) else "false"))
-        for target_local in c.cancels:
-            target_full = "{}_{}".format(node.full_id, target_local)
-            print("cancels: " + target_full)
+    print("=" * 72)
+    print("timestamp: " + c.timestamp)
+    print("review: " + c.review)
+    print("cancelled: " + ("true" if cancelled_by.get(c.local_id) else "false"))
+    for target_local in c.cancels:
+        print("cancels: " + _format_cancel_id(catalog, node, target_local))
+    if brief:
+        print(_first_line_72(c.text))
+    else:
         print("-" * 72)
         print(c.text.rstrip("\n"))
 
 
+def _print_all_commentary(catalog, node, brief):
+    comments = sorted(node.commentary, key=lambda c: c.timestamp)
+    if not comments:
+        print("(no commentary)")
+    for c in comments:
+        _print_one_commentary(catalog, c, brief)
+
+
 def cmd_view_commentary(args):
     ctx = Context.for_catalog(args)
-    _print_commentary(ctx.catalog, ctx.resolve_schedule_arg(args.schedule))
+    c = ctx.catalog.resolve_commentary(args.commentary)
+    _print_one_commentary(ctx.catalog, c, brief=bool(getattr(args, "brief", False)))
+
+
+def cmd_view_all_commentary(args):
+    ctx = Context.for_catalog(args)
+    _print_all_commentary(ctx.catalog, ctx.resolve_schedule_arg(args.schedule),
+                          brief=bool(getattr(args, "brief", False)))
 
 
 def cmd_view_session_commentary(args):
     ctx = Context.for_session(args, session_lock=False)
-    _print_commentary(ctx.catalog, _session_output_schedule(ctx))
+    _print_all_commentary(ctx.catalog, _session_output_schedule(ctx), brief=False)
 
 
 # ---------------------------------------------------------------------------

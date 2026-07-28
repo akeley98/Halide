@@ -716,8 +716,6 @@ There is intentionally no "change canonical schedule" tool.
 
     dh_hl comment -C ... {commentary file} [schedule ID]
 
-IMPL TASK: print ID
-
 Adds a new commentary sub-object to the referenced schedule node,
 with the commentary text copied from the passed `commentary file`.
 Prints the ID of the new commentary sub-object.
@@ -981,8 +979,6 @@ There is no predefined order of the schedules.
     dh_hl view_commentary -C ... {commentary ID}
     dh_hl view_all_commentary -C ... [schedule ID]
 
-IMPL TASK: update this. (`view_all_commentary` is the new `view_commentary`)
-
 Prints either the referenced commentary sub-object (`view_commentary`),
 or all commentary sub-objects of the schedule (`view_all_commentary`),
 with each commentary separated by a divider.
@@ -1008,7 +1004,7 @@ Each commentary is printed as
     # Does not acquire session lock
     dh_hl view_session_commentary -s ...
 
-Similar to `view_schedule_commentary`, except
+Similar to `view_all_commentary`, except
 
 * The referenced schedule node is the output schedule node of the
   current session (error if not yet set).
