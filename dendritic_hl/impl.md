@@ -43,6 +43,7 @@ The top-level catalog directory contains sub-directories for each node type:
 * `idea`
 * `sch`
 * `session`
+* `benchmark_set`
 
 as well as
 
@@ -234,6 +235,13 @@ Inside the `private/{session id}` sub-directory, there is
 
 * `private_ideas.txt`, the session private idea list
 
+IMPL TASK: add `init_build.json`, document it in source comments (as
+specified) rather than here, as its format is really not of general
+interest.
+
+* `init_build.json`, left behind by `dh_hl init_build`.
+  The format is documented in the tool source code.
+
 Any command accessing `private/` or giving paths to it (`dh_hl bin` etc.)
 must initialize `private/{session id}` and its contents lazily,
 except for `generator.cpp` and `current_idea_state.txt` (we can't know this).
@@ -368,189 +376,6 @@ But we are already not portable to Windows for other reasons anyway.
 Mac limit is `1024` characters; should be plenty.
 
 
-# Tool Details
-
-## Status Tool — Implementation Details
-
-    dh_hl status -s ...
-
-This is a purely read-only command.
-
-If there was no current session given, the tool errors.
-Otherwise, the tool tries to find a schedule node that already holds the workspace C++ file
-and give basic information on the current catalog state.
-
-**Search:**
-
-Hash the workspace C++ file and look for schedule nodes with matching hashes.
-
-If there is no workspace C++ file, the status is "no workspace C++ file".
-
-Otherwise, if no hash matches exist,
-the status is "workspace inconsistent, unknown schedule".
-
-Otherwise, if the current idea state is parsable and holds the "no current idea" state,
-and there exists a schedule node that
-(a) has a matching hash,
-(b) is a root node,
-(c) has a timestamp matching the timestamp embedded in the current idea state,
-*then* that schedule node is the **unambiguous schedule node**
-and the status is "workspace consistent".
-
-Otherwise, if the current idea state is parsable and holds the "some current idea" state,
-and there exists a schedule node that
-(a) has a matching hash,
-(b) has its parent idea node matching the one embedded in the current idea state,
-*then* that schedule node is the **unambiguous schedule node**
-and the status is "workspace consistent".
-
-Otherwise, the status is "workspace inconsistent, unexpected current idea state".
-
-**Outputs:**
-
-* The full IDs of the current session and its parent session (if any)
-
-* The is-delisted flag of the current session
-
-* The IDs of the session's seed idea node and output schedule node
-  (may be none for the latter)
-
-* Give the current idea state
-  (no current idea/some current idea/parse error/missing/etc.).
-  Try to print errors cleanly if something is wrong with the state on disk.
-  If the current idea node exists, print the status of its canonical schedule (none, or ID of it).
-  If the current idea state is syntactically correct but references a nonexistent idea node,
-  advise of that too (could happen due to a git checkout).
-
-* Gives the status as one of
-    - "no workspace C++ file"
-    - "workspace inconsistent, unknown schedule"
-    - "workspace inconsistent, unexpected current idea state"
-    - "workspace consistent"
-
-* If the workspace C++ file is not found, print one of the following:
-
-        # Session depth = 0 and session closed
-        The current session is closed. Start a new one with
-          dh_hl new_successor_session
-
-        # Session depth = 0 and session open
-        To start editing a C++ schedule, consider one of
-          dh_hl seed_schedule_short_id
-        to get the ID of a schedule to start editing, followed by
-          dh_hl restore_schedule {schedule ID}
-        to initialize the workspace
-
-        # Session depth != 0
-        AGENTS: the current session is a sub-agent session,
-        but was not initialized with a schedule for you to edit.
-        DO NOT PROCEED and report back to the main agent,
-        unless you have been advised to do otherwise.
-
-* If the workspace is consistent, print the ID of the unambiguous schedule node.
-
-* If the workspace is inconsistent, give the warning
-
-        AGENTS: If this is the first time editing this file this session,
-        this means the file was edited without correct harness tracking.
-        DO NOT PROCEED, unless you have been advised otherwise.
-        Likely causes include user action, git checkouts / merges.
-        or concurrent/interrupted agent sessions.
-
-
-## Help Tool — Implementation Details
-
-Both help views render from **this repo's `idea.md`** (the single source), via
-`main._parse_idea_sections()`, which returns `(intro, mapping)`:
-
-* `dh_hl help` (no arg) lists the `COMMAND_HELP` one-liners, then prints the
-  `intro` — the prose between the "## Tools" heading and the first "###" tool
-  section (the shared argument conventions).
-* `dh_hl help <command>` prints `mapping[command]` — the detailed "### ... Tool"
-  section, keyed by the commands in each section's leading indented `dh_hl <cmd>`
-  synopsis block (not by heading name), so a multi-command section like "Copy
-  Schedule, ID-of Schedule Tools" maps all its commands to the same shared text.
-
-Maintainer-only lines (`NOTE: [link…]`, `<!-- … -->`) are stripped from both.
-The format `_parse_idea_sections` relies on is spelled out in a FORMAT CONTRACT
-comment just above "## Tools" in `idea.md`.  `idea.md` lives one level above the
-package dir, so a copy run detached from the repo won't find it — `help` then
-degrades to the command list / one-liner (no crash).
-
-Doc/code stay bound by a test (`tests/test_help.py`) asserting the CLI command
-set equals the set of commands `_parse_idea_help()` finds — add a command
-without an idea.md tool section (or vice versa) and it fails.
-
-
-## Prompt Tools — Implementation Details
-
-    dh_hl prompt --main
-    dh_hl prompt --sub
-    dh_hl detail name
-    dh_hl examples name
-
-All three live in `prompts.py` (the assembly logic) with thin `cmd_*` wrappers
-in `tools.py`; none needs a catalog or session (they read the harness *source*
-repo, one level above the package dir, via `prompts._REPO_DIR`).
-
-`prompt` (`prompts.load_prompt`) concatenates four processed docs, in order,
-separated by a single blank line:
-
-* `prompt_common.md`, with main/sub-agent specialization applied AND HTML
-  comments removed (`parse_prompt`, below).
-
-* `idea.md`, with HTML comments removed
-
-* `loopdoc.md`, with HTML comments removed
-
-* `adams_opus_scheduling_guide.md`, with HTML comments removed
-
-The doc list is `prompts._PROMPT_DOCS`; `load_prompt(audience, path)` reads
-`prompt_common.md` from `path` and the other docs from that same directory, so a
-detached copy missing any of them errors cleanly (`_read_source` →
-`DhHlError`).  "HTML comments removed" is `prompts.strip_html_comments`: a
-non-greedy `<!--.*?-->` (DOTALL) substitution that drops inline *and*
-multi-line comments, followed by `_collapse_blanks`.
-
-`detail`/`examples` (`prompts.load_doc(kind, name)`) print a named file from the
-harness source `detail/` or `examples/` directory, applying the same HTML-comment
-removal but ONLY to Markdown files (`name.endswith(".md")`); other files (e.g.
-example `.cpp`/`.hpp`) are emitted verbatim.
-
-**Sanitization (implemented).** The sole filename check is
-`os.path.split(name)[0] == ""`: `name` must have no directory part.  This
-rejects every path separator form — a leading `/` (absolute), any embedded
-`sub/x`, a `../` escape, and a trailing `foo/` — because `os.path.split` puts
-all of those in the head.  A bare `.` or `..` slips through the split check
-(head is `""`) but then `open()` hits the directory and raises `IsADirectoryError`,
-which is caught and reported as a clean "cannot read {kind} file" `DhHlError`.
-So directory traversal is impossible: reads are confined to a direct child of
-the fixed `detail/`/`examples/` directory.  A missing file is likewise a clean
-`DhHlError`, not a traceback.
-
-**Main/sub-agent specialization:** `prompt_common.md` content is
-COMMON unless wrapped in an audience *fence* — an HTML comment whose
-only word is `main`/`sub`, closed by `end main`/`end sub`.
-
-`parse_prompt(text, audience)` emits common lines plus
-matching-audience lines, dropping the other audience's fenced regions, fence
-lines, and all HTML comments (the format-contract comment included); it then
-collapses the blank runs so the output reads cleanly.
-
-The audience is **explicit only** — never inferred from the session — so the
-prompt can double-check the agent's role (e.g. catch a sub-agent that was handed
-a main session).  argparse makes `--main`/`--sub` a required mutually-exclusive
-pair.
-
-`parse_prompt` is the format guard: it raises `DhHlError` on nesting, an
-unmatched/dangling fence, or a fence-shaped comment naming a non-`main`/`sub`
-audience (single-word comments are reserved for fences, so a typo fails loudly
-rather than silently leaking a region into both prompts).  The rules are spelled
-out in a FORMAT CONTRACT comment atop `prompt_common.md`.  Like idea.md, the file
-sits above the package dir; if missing, `prompt` errors cleanly (no fallback —
-the prompt has no default content).  Covered by `tests/test_prompt.py`.
-
-
 ## Build/Profile Tools — Implementation Details
 
     dh_hl build -s ... [schedule ID]
@@ -634,7 +459,7 @@ a harness error (generator-count / `RunGenMain.o` / link) leaves `outcome` as
 white-box `_trace` tests (see Tests).
 
 
-### Warning Delivery Hack — Assumptions (temporary)
+# Warning Delivery Hack — Assumptions (temporary)
 
 Andrew Adams's profiler doesn't yet emit warnings in its main JSON, so today they
 reach us through a side channel we fully expect to REPLACE (integrating warnings
@@ -662,7 +487,7 @@ of what currently bakes in the hack:
   too, not re-parse the JSON.
 
 
-### Build/Profile Decisions
+# Build/Profile Decisions
 
 **Build driver split (decided):** use `ninja` only for the param-independent
 steps, and drive everything param-dependent from Python `subprocess`:
@@ -714,7 +539,6 @@ each numeric parameter value must be formatted with `%d` if it's a whole number,
 and with `%r` if not, to ensure no unexpected decimal points and no floating point roundoff.
 
 
-
 ### Build/Profile Tool Future Work
 
 FUTURE: allow benchmarking without the profiler.
@@ -732,7 +556,7 @@ More in general really we should just pass args through
 to the Halide generator and RunGenMain.
 
 
-## Tool Safety Requirements
+# Tool Safety Requirements
 
 We require `flock` file locking to make concurrent harness usage safe.
 
@@ -924,9 +748,8 @@ must survive rollback and be shared across processes.
 Wiring: `main()` takes the shared machine lock; `Context.for_catalog` /
 `for_session` acquire the catalog lock (and, for `for_session(session_lock=True)`,
 the session lock) via `Context._open_catalog`, which acquires **then** constructs
-the `Catalog`.  `build`/`profile` drive the acquisitions directly (see
-"Build/Profile Tools — Implementation Details").  `exec`/`exec_exclusive` use the
-machine lock (+ upgrade).
+the `Catalog`.  `build` drives the acquisitions directly.
+`exec`/`exec_exclusive` use the machine lock (+ upgrade).
 
 **Catalog lock invariant (load-bearing).** Possessing a `Catalog` object — or any
 sub-object reachable from it (`ScheduleNode`, `IdeaNode`, `SessionNode`,
@@ -1048,7 +871,7 @@ proposal name from `fresh_timestamp` for readability, but its uniqueness is
 still the idea-node collision check, so it does not use the mint helper.)
 
 
-## Tool Internal Design
+# Tool Internal Design
 
 **Codebase map** (`dendritic_hl/dendritic_hl_lib/`):
 
@@ -1152,34 +975,6 @@ For example, the canonical schedule of an idea node is like this.
 Don't try to read a nonexistent file more than once.
 So in this example, the `CanonicalSchedule` object has to encode a
 tri-state (a) empty (unknown state), (b) doesn't exist, (c) exists.
-
-
-### History Tool — Implementation Details
-
-    dh_hl history -C ... [schedule ID]
-
-Walk the branch of the tree starting from the referenced schedule node,
-going up towards a root node.
-
-Starting at the referenced schedule node, print:
-
-* Its ID
-* Its child idea nodes in the same format as `dh_hl list_ideas`.
-  Mark the child idea node that is the parent of the previously printed schedule node.
-  Try to recycle common code plz.
-* For each commentary file, print its timestamp on one line,
-  and print the first up-to 72 characters of the first line of the commentary text.
-
-After each printed schedule node, move on to its parent idea node's parent schedule node,
-and stop after printing the root schedule node reached.
-
-Add some minimal formatting to make it look nice.
-Put conspicuous dividers between the info printed for each schedule node.
-
-When traversing up the tree,
-check that the two edges follow the tree structure timestamp invariant.
-So we are guaranteed not to end up in an infinite loop
-even if the catalog state is cooked.
 
 
 # Tests

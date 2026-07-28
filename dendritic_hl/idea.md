@@ -124,16 +124,16 @@ sha256, lowercase hex digits.
 
 * **Edges:** 0 or 1 parent idea nodes, 0 or more child idea nodes.
 
-IMPL TASK: Result value has changed; `runtime error` is new
+IMPL TASK: Result value has changed; `runtime error` and `unknown` are new
 
 * **Result:** one of:
-  * `c++ error`: C++ generator not known to compile successfully (worst)
-  * `halide error`: C++ generator compiled, but not all included
-    generator parameters verified to successfully generate a Halide
-    binary yet.
-  * `runtime error`: All generator parameters led to successful Halide
-    binary generation, but not known yet that all binaries execute successfully.
-  * `success`: At least one Halide binary known to run successfully (best)
+  * `unknown`: Did not attempt any compilation (worst).
+  * `c++ error`: C++ generator did not compile successfully.
+  * `halide error`: C++ generator compiled, but not known *yet*
+    that all generator parameters lead to a valid Halide binary.
+  * `runtime error`: All generator parameters led to successful Halide binary
+    generation, but not known *yet* that all binaries execute successfully.
+  * `success`: All Halide binaries known to run successfully (best).
 
 * **Benchmark Result Files** JSON format, documented later.
   Each has a **benchmark full ID** `{schedule node full ID}_{hostname}_{timestamp}`.
@@ -393,7 +393,7 @@ Unless otherwise stated, any of the `{...}` components may be empty.
 
 **WarningToggle short ID:**
 
-* `{scheduled ID}.{timestamp}`
+* `{schedule ID}.{timestamp}`
   Find all schedule nodes matching the given ID (long or short),
   then match any `WarningToggle` sub-objects of those schedule nodes
   that have a matching timestamp.
@@ -401,6 +401,8 @@ Unless otherwise stated, any of the `{...}` components may be empty.
 **Warning:** short IDs may become invalid due to new ambiguities.
 Use them only as convenient IDs for immediate tool use,
 and not long-term identification (e.g. in commentary text).
+
+Currently benchmark sets don't have short IDs.
 
 
 ## Session Handles
@@ -434,7 +436,7 @@ with the `~/.cache` portion overridable with the `XDG_CACHE_HOME` environment va
 ### Locking
 
 All tools acquire the **machine lock**, usually concurrently.
-The profiling step of `profile` and any `exec_exclusive` command
+The profiling step of `build` and any `exec_exclusive` command
 acquire the machine lock exclusively.
 
 All tools that access a catalog acquire an exclusive per-catalog **catalog lock**.
@@ -446,6 +448,14 @@ This locking *never* fails for correct usage: failure to acquire is diagnosed as
 
 NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
 
+
+<!--
+deferred task: move tools to new cli.md.
+I decided to stop storing tool implementation details in impl.md
+since it was getting annoying how each tool was documented in two places.
+Source help text from cli.md instead of idea.md with "impl" sections removed.
+Future skill will get an even smaller version of cli.md, as idea.md is too verbose now.
+-->
 
 <!--
   FORMAT CONTRACT for the code (main.py `_parse_idea_sections`): `dh_hl help`
@@ -503,6 +513,31 @@ due to errors in the existing `current_idea_state.txt`.
 With no `[command]`, lists all commands briefly; with a `[command]`, describes that one.
 
 
+### Help Tool — Implementation Details
+<!-- deferred task: strip when creating prompt -->
+
+Both help views render from **this repo's `idea.md`** (the single source), via
+`main._parse_idea_sections()`, which returns `(intro, mapping)`:
+
+* `dh_hl help` (no arg) lists the `COMMAND_HELP` one-liners, then prints the
+  `intro` — the prose between the "## Tools" heading and the first "###" tool
+  section (the shared argument conventions).
+* `dh_hl help <command>` prints `mapping[command]` — the detailed "### ... Tool"
+  section, keyed by the commands in each section's leading indented `dh_hl <cmd>`
+  synopsis block (not by heading name), so a multi-command section like "Copy
+  Schedule, ID-of Schedule Tools" maps all its commands to the same shared text.
+
+Maintainer-only lines (`NOTE: [link…]`, `<!-- … -->`) are stripped from both.
+The format `_parse_idea_sections` relies on is spelled out in a FORMAT CONTRACT
+comment just above "## Tools" in `idea.md`.  `idea.md` lives one level above the
+package dir, so a copy run detached from the repo won't find it — `help` then
+degrades to the command list / one-liner (no crash).
+
+Doc/code stay bound by a test (`tests/test_help.py`) asserting the CLI command
+set equals the set of commands `_parse_idea_help()` finds — add a command
+without an idea.md tool section (or vice versa) and it fails.
+
+
 ### Prompt Tools
 
     dh_hl prompt --main
@@ -523,6 +558,76 @@ The `detail` and `examples` tools fetch a named file from those
 respective directories and prints it to `stdout`.
 
 NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
+
+
+### Prompt Tools — Implementation Details
+<!-- deferred task: strip when creating prompt -->
+
+    dh_hl prompt --main
+    dh_hl prompt --sub
+    dh_hl detail name
+    dh_hl examples name
+
+All three live in `prompts.py` (the assembly logic) with thin `cmd_*` wrappers
+in `tools.py`; none needs a catalog or session (they read the harness *source*
+repo, one level above the package dir, via `prompts._REPO_DIR`).
+
+`prompt` (`prompts.load_prompt`) concatenates four processed docs, in order,
+separated by a single blank line:
+
+* `prompt_common.md`, with main/sub-agent specialization applied AND HTML
+  comments removed (`parse_prompt`, below).
+
+* `idea.md`, with HTML comments removed
+
+* `loopdoc.md`, with HTML comments removed
+
+* `adams_opus_scheduling_guide.md`, with HTML comments removed
+
+The doc list is `prompts._PROMPT_DOCS`; `load_prompt(audience, path)` reads
+`prompt_common.md` from `path` and the other docs from that same directory, so a
+detached copy missing any of them errors cleanly (`_read_source` →
+`DhHlError`).  "HTML comments removed" is `prompts.strip_html_comments`: a
+non-greedy `<!--.*?-->` (DOTALL) substitution that drops inline *and*
+multi-line comments, followed by `_collapse_blanks`.
+
+`detail`/`examples` (`prompts.load_doc(kind, name)`) print a named file from the
+harness source `detail/` or `examples/` directory, applying the same HTML-comment
+removal but ONLY to Markdown files (`name.endswith(".md")`); other files (e.g.
+example `.cpp`/`.hpp`) are emitted verbatim.
+
+**Sanitization (implemented).** The sole filename check is
+`os.path.split(name)[0] == ""`: `name` must have no directory part.  This
+rejects every path separator form — a leading `/` (absolute), any embedded
+`sub/x`, a `../` escape, and a trailing `foo/` — because `os.path.split` puts
+all of those in the head.  A bare `.` or `..` slips through the split check
+(head is `""`) but then `open()` hits the directory and raises `IsADirectoryError`,
+which is caught and reported as a clean "cannot read {kind} file" `DhHlError`.
+So directory traversal is impossible: reads are confined to a direct child of
+the fixed `detail/`/`examples/` directory.  A missing file is likewise a clean
+`DhHlError`, not a traceback.
+
+**Main/sub-agent specialization:** `prompt_common.md` content is
+COMMON unless wrapped in an audience *fence* — an HTML comment whose
+only word is `main`/`sub`, closed by `end main`/`end sub`.
+
+`parse_prompt(text, audience)` emits common lines plus
+matching-audience lines, dropping the other audience's fenced regions, fence
+lines, and all HTML comments (the format-contract comment included); it then
+collapses the blank runs so the output reads cleanly.
+
+The audience is **explicit only** — never inferred from the session — so the
+prompt can double-check the agent's role (e.g. catch a sub-agent that was handed
+a main session).  argparse makes `--main`/`--sub` a required mutually-exclusive
+pair.
+
+`parse_prompt` is the format guard: it raises `DhHlError` on nesting, an
+unmatched/dangling fence, or a fence-shaped comment naming a non-`main`/`sub`
+audience (single-word comments are reserved for fences, so a typo fails loudly
+rather than silently leaking a region into both prompts).  The rules are spelled
+out in a FORMAT CONTRACT comment atop `prompt_common.md`.  Like idea.md, the file
+sits above the package dir; if missing, `prompt` errors cleanly (no fallback —
+the prompt has no default content).  Covered by `tests/test_prompt.py`.
 
 
 ### Status Tool
@@ -568,8 +673,6 @@ and give basic information on the current catalog state.
 * On either inconsistent status, also prints a warning that the workspace
   may have been edited outside the harness (see Rationale below).
 
-NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
-
 **Rationale:**
 
 A workspace C++ file is in "consistent state"
@@ -592,6 +695,83 @@ parent the schedule to an idea that has nothing to do with what is actually bein
 This is particularly a risk of storing the private session state
 outside the git-tracked state. It's not impossible some heavy-handed
 git merging could cause the session private workspace to desync.
+
+**Search Implementation Details:**  <!-- deferred task: strip when creating prompt -->
+
+Hash the workspace C++ file and look for schedule nodes with matching hashes.
+
+If there is no workspace C++ file, the status is "no workspace C++ file".
+
+Otherwise, if no hash matches exist,
+the status is "workspace inconsistent, unknown schedule".
+
+Otherwise, if the current idea state is parsable and holds the "no current idea" state,
+and there exists a schedule node that
+(a) has a matching hash,
+(b) is a root node,
+(c) has a timestamp matching the timestamp embedded in the current idea state,
+*then* that schedule node is the **unambiguous schedule node**
+and the status is "workspace consistent".
+
+Otherwise, if the current idea state is parsable and holds the "some current idea" state,
+and there exists a schedule node that
+(a) has a matching hash,
+(b) has its parent idea node matching the one embedded in the current idea state,
+*then* that schedule node is the **unambiguous schedule node**
+and the status is "workspace consistent".
+
+Otherwise, the status is "workspace inconsistent, unexpected current idea state".
+
+**Output Implementation Details:**  <!-- deferred task: strip when creating prompt -->
+
+* The full IDs of the current session and its parent session (if any)
+
+* The is-delisted flag of the current session
+
+* The IDs of the session's seed idea node and output schedule node
+  (may be none for the latter)
+
+* Give the current idea state
+  (no current idea/some current idea/parse error/missing/etc.).
+  Try to print errors cleanly if something is wrong with the state on disk.
+  If the current idea node exists, print the status of its canonical schedule (none, or ID of it).
+  If the current idea state is syntactically correct but references a nonexistent idea node,
+  advise of that too (could happen due to a git checkout).
+
+* Gives the status as one of
+    - "no workspace C++ file"
+    - "workspace inconsistent, unknown schedule"
+    - "workspace inconsistent, unexpected current idea state"
+    - "workspace consistent"
+
+* If the workspace C++ file is not found, print one of the following:
+
+        # Session depth = 0 and session closed
+        The current session is closed. Start a new one with
+          dh_hl new_successor_session
+
+        # Session depth = 0 and session open
+        To start editing a C++ schedule, consider one of
+          dh_hl seed_schedule_short_id
+        to get the ID of a schedule to start editing, followed by
+          dh_hl restore_schedule {schedule ID}
+        to initialize the workspace
+
+        # Session depth != 0
+        AGENTS: the current session is a sub-agent session,
+        but was not initialized with a schedule for you to edit.
+        DO NOT PROCEED and report back to the main agent,
+        unless you have been advised to do otherwise.
+
+* If the workspace is consistent, print the ID of the unambiguous schedule node.
+
+* If the workspace is inconsistent, give the warning
+
+        AGENTS: If this is the first time editing this file this session,
+        this means the file was edited without correct harness tracking.
+        DO NOT PROCEED, unless you have been advised otherwise.
+        Likely causes include user action, git checkouts / merges.
+        or concurrent/interrupted agent sessions.
 
 
 ### Restore Schedule Tool
@@ -631,42 +811,68 @@ The warning includes
 
 ### Save Tool
 
-    dh_hl save -s ...
+    dh_hl init_build -s ...
 
 IMPL TASK: add this (replaces implied `build` functionality)
 
-Save the current workspace C++ and generator parameters file into
-a new schedule node in the catalog, or return existing schedule node.
-The harness (by design) can only build or profile schedules in the catalog.
-So this is the first step to building or profiling a new schedule.
+Prepare for an up-to-3-way comparison between Halide schedules,
+including possibly a new schedule node made from current workspace files.
 
-Prints the ID of the new or existing schedule node, which is:
+Takes optional arguments specifying the up to three schedule nodes.
+
+* `--target {schedule ID}` selects the target schedule node.
+  The special value `workspace` is the default, detailed below.
+
+* `--other {schedule ID}` selects the other schedule node.
+  The special value `none` disables the other schedule node,
+  and the special value `parent` (default) selects the parent
+  schedule of the target's parent idea node, if it exists,
+  otherwise the other schedule node is disabled.
+
+* `--anchor {schedule ID}` selects the anchor schedule node.
+  The special value `none` disables the anchor schedule node.
+  The special value `auto` selects the current session's
+  private anchor node if it exists,
+  otherwise the anchor schedule node is disabled.
+
+FUTURE: session anchor state doesn't exist yet. Leave an untested
+todo assert for the `--anchor auto` and `--anchor always` cases.
+
+`--target workspace` behavior:
 
 * If `dh_hl status` would give an unambiguous schedule node,
-  that schedule node is the one this tool returns.
+  the target schedule node is the one this tool returns.
 
 * Otherwise, if there is no current idea node for the session,
   give an error, and suggest the `set_idea` and `new_root` tools.
 
 * Otherwise, add a new child schedule node to the current idea node
-  holding a copy of the workspace files.
-  This becomes the new unambiguous schedule node for `dh_hl status`.
+  holding a copy of the workspace files. This is the target node.
+
+This is the main mechanism by which new schedules enter the catalog.
+The harness (by design) can only build or profile schedules in the catalog.
+So this is the first step to building or profiling a new schedule.
 
 
-### Build/Profile-once Tools
+### Build Tools
 
 IMPL TASK: remove `--verbose` flag from generator run
 
 IMPL TASK: `dh_hl: ` lines
 
-IMPL TASK: `profile` renamed to `profile_once`
+IMPL TASK: `profile` functionality merged into `build`
 
 IMPL TASK: explicit schedule ID *replaces* generator parameters file
 
-IMPL TASK: functionality moved to `dh_hl save`
+IMPL TASK: new schedule node functionality moved to `dh_hl init_build`
 
-    dh_hl build -s ... [schedule ID]
-    dh_hl profile_once -s ... [schedule ID]
+TODO update this for `init_build`
+
+    dh_hl build -s ...
+
+Builds the Halide binaries selected by the latest `dh_hl init_build`
+done with the current session (state stored in the session private workspace).
+Optionally profiles them, generating a new benchmark or benchmark set object.
 
 These tools
 
@@ -694,15 +900,6 @@ Important lines emitted by the harness itself are prefixed with
 `dh_hl: ` for grep-ability.
 
 NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
-
-
-### Profile Set Tool (Benchmark Set Creation)
-
-IMPL TASK: new tool
-
-    dh_hl profile_set -s ... [schedule ID]
-
-TODO
 
 
 ### Canon Tool (Make Canonical Tool)
@@ -949,6 +1146,15 @@ There are dividers between printed warnings.
 FUTURE: fix `max_warnings` limit in Halide profiler that silently drops warnings.
 
 
+### View Benchmark Stdout Tool
+
+    dh_hl view_benchmark_stdout {benchmark ID}
+
+IMPL TASK: implement this
+
+Print the `stdout` captured for the named benchmark.
+
+
 ### History Tool
 
     dh_hl history -C ... [schedule ID]
@@ -962,8 +1168,6 @@ For each schedule node, prints:
   marking the child idea node that is the parent of the previously printed schedule node.
 * For each commentary file, its timestamp on one line,
   and the first up-to-72 characters of the first line of the commentary text.
-
-NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
 
 
 ### List Schedules Tools
@@ -1077,13 +1281,14 @@ for a parent schedule that's exclusively its own.
 
 IMPL TASK: generator parameters init
 
-    dh_hl new_catalog -C ... {proposal name} {proposal file} {input C++ file}
+    dh_hl new_catalog -C ... {proposal name} {proposal file} {input C++ file} [input generator parameters]
 
 Creates a new catalog directory with the bare minimum state to get started:
 
 * Two schedule nodes, both holding a copy of the input C++ file and
-  a generator parameters file containing `[{}]`
-  ("benchmark once with no parameters")
+  input generator parameters file.
+  If the optional parameters aren't given, default to `[{}]`
+  ("benchmark once with no parameters").
 
 * One idea node connecting the two schedule nodes.
 
@@ -1216,6 +1421,18 @@ Find a certain schedule node (noun), and do something with it (verb):
 NB see also `schedule_full_id`, `schedule_short_id`, `restore_schedule` tools.
 
 
+### View Generator Parameters Tool
+
+    dh_hl view_generator_parameters [schedule ID]
+
+IMPL TASK: implement this
+
+Pretty-print the `generator_parameters.json` stored in the named schedule node.
+Each generator parameters object is printed as a single line
+
+    [0-based index] [JSON object as one line]
+
+
 ### Workspace Location Tools
 
 IMPL TASK: generator parameters
@@ -1324,7 +1541,6 @@ Prints the state of the referenced schedule node as a JSON object, with key/valu
     * `cancels`: full ID of `WarningToggle` object; null if not applicable
 
 
-
 ### JSON Idea Info Tool
 
     dh_hl json_idea_info -C ... {idea ID}
@@ -1372,9 +1588,34 @@ Prints the state of the current session as a JSON object, with key/value pairs
 * `depth`: number
 
 
+### JSON Benchmark Info Tool
+
+    dh_hl json_benchmark_info -C ... {benchmark ID}
+
+IMPL TASK: implement this
+
+Prints the identified benchmark in Benchmark JSON format
+
+
+### JSON Benchmark Set Info Tool
+
+    dh_hl json_benchmark_set_info -C ... {benchmark set ID}
+
+IMPL TASK: implement this
+
+Prints the state of the referenced benchmark set as a JSON object.
+This object is indexed as
+
+    [schedule full ID][generator parameters index]
+
+which gives a list of batch-size-many benchmark full IDs.
+
+
 ### JSON Export Tool
 
     dh_hl json_export -C ...
+
+IMPL TASK: benchmark sets
 
 Exports the entire catalog as a JSON object, with key/value pairs
 
@@ -1384,9 +1625,11 @@ Exports the entire catalog as a JSON object, with key/value pairs
 
 * `sessions`: session nodes
 
+* `benchmark_sets`: benchmark set objects
+
 Each value is itself an object, with keys being string full ID and values
 being JSON objects in the same format as `json_schedule_info`,
-`json_idea_info`, and `json_session_info`.
+`json_idea_info`, `json_session_info`, `json_benchmark_set_info`.
 
 FUTURE: holds the exclusive catalog lock despite being conceptually read-only.
 Optimize this if needed, but this shouldn't be in the agent hot loop.
@@ -1455,6 +1698,10 @@ Key value pairs:
 
 * `cpu_count`: number, CPU count of system used for profiling
 
+IMPL TASK: add this timestamp
+
+* `timestamp`
+
 * `parameters`: object, generator parameters used to generate the profiled Halide binary
 
 * `profiler`: the profiler JSON output should be a JSON object whose "pipelines"
@@ -1473,3 +1720,5 @@ The profiler was rewritten internally for this project.
 
 FUTURE: once profile tool accepts explicit input sizes etc.
 we need to embed that in here.
+
+
