@@ -18,7 +18,7 @@ from dendritic_hl_lib import build, safety, tools
 from conftest import make_catalog_session, open_catalog, ns, Sess, _PKG_ROOT
 
 _BRIGHTEN = os.path.join(_PKG_ROOT, "rungen_example", "brighten_generator.cpp")
-_HIST = os.path.join(_PKG_ROOT, "tests", "hist_opus_no_peeking.cpp")
+_HIST = os.path.join(_PKG_ROOT, "tests", "hist_opus_before_peeking.cpp")
 
 pytestmark = [
     pytest.mark.halide,
@@ -71,7 +71,7 @@ def test_build_and_profile_real_halide(brighten_session, run_tool, tmp_path,
 # ---------------------------------------------------------------------------
 # Profiler warnings, end-to-end through the real profiler.
 #
-# hist_opus_no_peeking.cpp reliably triggers, among others, the two warnings
+# hist_opus_before_peeking.cpp reliably triggers, among others, the two warnings
 # (no_vector_ops, hist_rows) and (could_compute_further_inside, equalize).
 # These assertions are allowed to rot if the profiler's rule set changes.
 # ---------------------------------------------------------------------------
