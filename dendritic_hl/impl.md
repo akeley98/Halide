@@ -237,7 +237,10 @@ Inside the `private/{session id}` sub-directory, there is
 
 IMPL TASK: add `init_build.json`, document it in source comments (as
 specified) rather than here, as its format is really not of general
-interest.
+interest. It must contain the path to the `generator.cpp` and
+`generator_parameters.json` of each schedule node to build.
+This way, the build tool can work without acquiring the catalog lock
+at first. `init_build` is literally a hack to make this locking easier.
 
 * `init_build.json`, left behind by `dh_hl init_build`.
   The format is documented in the tool source code.
@@ -374,89 +377,6 @@ This design is risky in light of Windows traditional `MAX_PATH=260` limit,
 which Python 3 is compiled to work around.
 But we are already not portable to Windows for other reasons anyway.
 Mac limit is `1024` characters; should be plenty.
-
-
-## Build/Profile Tools — Implementation Details
-
-    dh_hl build -s ... [schedule ID]
-    dh_hl profile_once -s ... [schedule ID]
-
-Remarks for each step:
-
-1. Compile Halide binaries
-
-TODO can't actually get the code without catalog lock.
-
-This must be done with only the (exclusive) session lock and
-(concurrent) machine locks held, no catalog lock. This ensures we
-don't block other agents while waiting for compilation.
-
-Compile the C++ generator from the file stored in the catalog to a
-file `bin/{schedule node full ID}_generator` (this is designed to
-avoid re-compilation when many schedules are being compiled).
-
-Bracket the C++ compilation with the lines
-
-    dh_hl: begin C++ compilation
-    dh_hl: end C++ compilation ({success or failed})
-
-If the generator built OK, then loop over the generator parameter objects.
-Skip all but the `N`-th iteration if `--only [N]` is given.
-`i`-th generator parameters object creates binary
-`bin/{schedule node full ID}_{i}` and stmt files `{i}[.conceptual].stmt`.
-
-Before the `i`-th generation, print
-
-    dh_hl: begin generation {i} {generator parameters in name=value form}
-
-After the `i`-th generation, print
-
-    dh_hl: {.stmt absolute path, only printed if successful generation}
-    dh_hl: {.conceptual.stmt absolute path, only printed if successful generation}
-    dh_hl: end generation {i} ({success or failed})
-
-After compilation and generation, acquire the catalog lock,
-and, only if profiling, re-acquire the machine lock exclusively.
-
-2. Profiling
-
-Loop over the Halide binaries generated and execute them with the profiler.
-(Skip failed ones not generated).
-Capture the `stdout` of the Halide binaries.
-
-Each successfully exited run adds a new benchmark sub-object to the
-schedule node, with the following printed:
-
-    dh_hl: profile generation {i} ({new benchmark ID})
-
-Otherwise,
-
-    dh_hl: profile generation {i} (failed) 
-
-3. Update result
-
-Only done if no `--only` argument.
-Update the schedule node's result to the better of its current value and:
-
-* `c++ error`, if the C++ build for the schedule node failed, otherwise,
-* `halide error`, if any generator for the schedule node failed, otherwise,
-* `runtime error`, if the tool is `build` or any benchmark failed, otherwise,
-* `success`
-
-IMPL TASK: update this "as implemented" block
-
-**As implemented** (`build.py`): the two commands share `_snapshot_session`
-(resolve `-s`, take the session lock, prepare the catalog-free `SessionWorkspace`
-+ `bin/` — no catalog lock yet) and `_open_locked_context` (acquire the catalog
-lock, construct the `Context`).  `build` runs its whole compile in
-`_compile_for_build`, which returns `(outcome, stmt_paths, ok, harness_msg)`;
-`_open_locked_context` then `_select_node` + record.  `profile` compiles the
-generator exe + `RunGenMain.o`, calls `locks.upgrade_machine_exclusive()`
-**before** `_open_locked_context`, then loops emit→link→benchmark under both
-locks.  Outcomes: a `c++ error` / `halide error` still creates + flushes a node;
-a harness error (generator-count / `RunGenMain.o` / link) leaves `outcome` as
-`None` so no result update is recorded.  The lock-order sequences are pinned by
-white-box `_trace` tests (see Tests).
 
 
 # Warning Delivery Hack — Assumptions (temporary)

@@ -809,7 +809,7 @@ The warning includes
 * A suggestion to use `restore_schedule` instead.
 
 
-### Save Tool
+### Init-Build Tool
 
     dh_hl init_build -s ...
 
@@ -854,7 +854,7 @@ The harness (by design) can only build or profile schedules in the catalog.
 So this is the first step to building or profiling a new schedule.
 
 
-### Build Tools
+### Build Tool
 
 IMPL TASK: remove `--verbose` flag from generator run
 
@@ -864,42 +864,155 @@ IMPL TASK: `profile` functionality merged into `build`
 
 IMPL TASK: explicit schedule ID *replaces* generator parameters file
 
-IMPL TASK: new schedule node functionality moved to `dh_hl init_build`
+IMPL TASK: "make schedule node" functionality moved to `dh_hl init_build`
 
 TODO update this for `init_build`
 
     dh_hl build -s ...
 
-Builds the Halide binaries selected by the latest `dh_hl init_build`
+Builds the schedule nodes selected by the latest `dh_hl init_build`
 done with the current session (state stored in the session private workspace).
-Optionally profiles them, generating a new benchmark or benchmark set object.
+Optionally profiles them, generating new benchmark or benchmark set objects.
 
-These tools
+By default, if a schedule has `N`-many generator parameters objects,
+then `N` binaries are built, one for each parameters object.
+It's an error if any schedule node being built has 0 parameters objects.
 
-1. Compile Halide binaries in the session private workspace `bin` directory,
-   along with `.stmt` and `.conceptual.stmt` files.
+The tool
+
+1. Compiles the schedules selected by `init_build` into Halide binaries
+   in the session private workspace `bin` directory, along with
+   `.stmt` and `.conceptual.stmt` files for the target schedule.
    Compiler and generator outputs get piped to harness `stdout`/`stderr`.
-2. For `profile_once` only, run the binaries with Andrew Adams's profiler,
+
+2. (`--profile` only) runs all generated binaries with Andrew Adams's profiler,
    with new benchmark objects added to the edited schedule node.
    The new objects' IDs are printed.
-3. Conditionally update the result state of the edited schedule node,
+
+3. Conditionally updates the result state of the edited schedule node,
    if no flags overriding the default generator parameters are given.
    The result state can only go from worse to better values.
 
-One binary is generated for each of the generator parameters objects
-in the schedule node's `generator_parameters.json`, unless the flags
-`--only [N]` are passed, specifying only the Nth parameters object is
-used (0-indexed).
+Flags:
 
-The tool fails if 0 generator parameters JSON objects exist.
+* `--profile [N]` (`N = 0` default, must be a non-negative integer).
+  This enables `N` batches of profiler runs.
+  Each batch runs all generated binaries in a random order ("interleaved")
+  Note, without profiling, `runtime error` is the best result possible.
+
+* `--only [N|target|all]`.
+  Limits the generators and Halide binaries built.
+  `all` (default) selects the target, anchor, and other schedules
+  (if they exist).
+  `target` selects only the target.
+  `N` (integer) selects only the target, and further generates
+  only one binary, for the `N`-th generator parameters object;
+  in this case `halide error` is the best result possible.
 
 This tool exits successfully iff no harness errors occurred
 and all subprocesses succeeded.
+A new benchmark set is generated, containing all benchmark objects
+made by this tool run, iff `--only all` is in effect
+and no subprocesses failed.
 
 Important lines emitted by the harness itself are prefixed with
 `dh_hl: ` for grep-ability.
 
-NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
+
+### Build Tool Implementation Details
+
+<!-- deferred task: strip when creating prompt -->
+
+It's crucial that the catalog lock is not acquired during the
+compilation phase. This prevents locking out other agents
+needlessly (despite they will be locked out soon by profiling).
+
+Pseudocode:
+
+    # 1a. C++ compilation: relies on state from init_build
+    acquire_concurrent(machine_lock)
+    acquire_exclusive(session_lock)
+    nodes = {target}
+    if --only all and other node exists:
+        nodes.add(other)
+    if --only all and anchor node exists:
+        nodes.add(anchor)
+    for node in nodes:
+        print "dh_hl: begin C++ compile: {node.short_id}"
+        # ... Compile C++
+        # Ninja file in session private workspace: bin/{node.full_id}.ninja
+        # Generator in session private workspace: bin/{node.full_id}_generator
+        # Full ID keying prevents redundant rebuilds
+        print "dh_hl: end C++ compile (success|fail)""
+
+    # 1b. Halide generators
+    for node in nodes:
+        for i, params in enumerate(node.generator_parameters):
+            if (--only i or --only all) and C++ compilation of node succeeded:
+                print "dh_hl: begin Halide generator {i}: {node.short_id}"
+                print "dh_hl: params={params}"
+                # ... Run Halide generator with given params
+                # Binary in session private workspace: bin/{node.full_id}_{i}
+                # Also, for target node only, if generation succeeds, generate
+                # bin/{i}.stmt, bin/{i}.conceptual_stmt
+                # and each path with "dh_hl: " lines
+                print "dh_hl: end Halide generator {i} (success|fail)"
+
+    # 2. Profiling
+    if --profile N with N == 0:
+        acquire_exclusive(catalog_lock)
+    else:
+        acquire_exclusive(machine_lock)  # Upgrade from concurrent
+        acquire_exclusive(catalog_lock)
+        binaries = []
+        for node in nodes:
+            for params in node.generator_parameters:
+                if Halide generator succeeded:
+                    binaries.append(...)
+        for batch in range(N):
+            shuffle(binaries)  # Shuffled each time
+            for bin in binaries:
+                profile(bin)
+                node, params_index = source_of(binary)
+                print "dh_hl: Profiled {node.short_id}, binary {params_index} (success|fail)"
+                if success:
+                    Add benchmark object to binary's source schedule node
+                    Timestamp could be taken before or after profiling, unimportant
+                    print "dh_hl: Benchmark ID: {benchmark id}"
+
+    # 3. Save results
+    for node in nodes:
+        if C++ build of node failed:
+            result = "c++ error"
+        elif any generator failed or --only [int] passed:
+            result = "halide error"
+        elif 0 profile batches or any Halide binary run failed:
+            result = "runtime error"
+        else:
+            result = "success"
+        node.result = best_of(node.result, result)
+
+    # Also save benchmark set object, if criteria passed.
+
+IMPL TASK: update the referenced file if it's outdated.
+
+See the [Reference Build Commands](reference_build_commands.md) file for the
+tested build/link recipe.
+
+IMPL TASK: update this "as implemented" block
+
+**As implemented** (`build.py`): the two commands share `_snapshot_session`
+(resolve `-s`, take the session lock, prepare the catalog-free `SessionWorkspace`
++ `bin/` — no catalog lock yet) and `_open_locked_context` (acquire the catalog
+lock, construct the `Context`).  `build` runs its whole compile in
+`_compile_for_build`, which returns `(outcome, stmt_paths, ok, harness_msg)`;
+`_open_locked_context` then `_select_node` + record.  `profile` compiles the
+generator exe + `RunGenMain.o`, calls `locks.upgrade_machine_exclusive()`
+**before** `_open_locked_context`, then loops emit→link→benchmark under both
+locks.  Outcomes: a `c++ error` / `halide error` still creates + flushes a node;
+a harness error (generator-count / `RunGenMain.o` / link) leaves `outcome` as
+`None` so no result update is recorded.  The lock-order sequences are pinned by
+white-box `_trace` tests (see Tests).
 
 
 ### Canon Tool (Make Canonical Tool)
@@ -1720,5 +1833,3 @@ The profiler was rewritten internally for this project.
 
 FUTURE: once profile tool accepts explicit input sizes etc.
 we need to embed that in here.
-
-
