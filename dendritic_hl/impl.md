@@ -3,6 +3,9 @@
 These are the implementation-side companion notes to [idea.md](idea.md) (the
 behavior contract).  Keep the two in sync when changing a tool.
 
+For now this tool is an early prototype and backwards compatibility is a non-goal.
+So do not worry when implementing changes that would break reading old catalogs.
+
 
 # Stable Hostname
 
@@ -78,11 +81,13 @@ IMPL TASK: hash considers `generator_parameters.json`
   which was helping the "git compatibility" goal (e.g. encode merge conflict resolution),
   but just raised too many tough cases for a prototype with questionable payoff.
 
-* **Result:** `result.txt`,
-  holding `c++ error`, `halide error`, `runtime error`, or `success`.
-  The default value is `c++ error`.
+IMPL TASK: gap 1 resolved: default is `unknown`
 
-* **Benchmark Result Files:** store in `bench/{hostname}_{timestamp of benchmark}.json`
+* **Result:** `result.txt`,
+  holding `unknown`, `c++ error`, `halide error`, `runtime error`, or `success`.
+  The default value is `unknown`.
+
+* **Benchmark Sub-objects:** store in `bench/{hostname}_{timestamp of benchmark}.json`
   (the `{hostname}` here is the *sanitized* stable hostname — see "Stable Hostname").
 
   The `{hostname}_{timestamp of benchmark}` part is the benchmark's *local ID*;
@@ -219,6 +224,20 @@ unambiguously (`_SESSION_ID_RE` in `ids.py`).
 * **Timestamp:** implied from the ID
 
 *Merge risk:* `output_schedule.txt`, no automatic fix provided.
+
+
+### Benchmark Sets on Disk
+
+IMPL TASK: gap 2
+
+Stored in `benchmark_sets/{full id}.json` in the same format as would
+be exposed to the end user by the `json_benchmark_set_info` tool.
+
+*Merge risk:* low: will never conflict for benchmark sets generated
+on different machines with different sanitized hostnames, and will not
+conflict on one machine as long as the timestamp minting is not
+circumvented (e.g. by intentionally copies the catalog to two
+different directories and brute forces a timestamp collision)
 
 
 ### Session Private Workspace

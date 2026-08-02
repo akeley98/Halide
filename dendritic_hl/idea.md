@@ -67,6 +67,18 @@ This tree contains pointers to the primary schedule/idea tree.
 Multiple agents can work on the same catalog in parallel,
 but each must have its own session.
 
+Finally, the `build` (profiler) tool creates **benchmark set objects**
+that group "batches" of benchmarks across different schedule nodes.
+This is for comparison tools, which only compare within batches to fight noise.
+
+IMPL TASK: gap 5
+
+FUTURE: comparison tool not yet specified. Ignore `three_way_bench.md`
+and other files not referenced transitively by `idea.md` (this file).
+
+
+### Schedule Node Terminology
+
 A schedule node is a **root node** if it has 0 parents.
 The "tree" is technically a forest as multiple roots are possible.
 
@@ -135,14 +147,14 @@ IMPL TASK: Result value has changed; `runtime error` and `unknown` are new
     generation, but not known *yet* that all binaries execute successfully.
   * `success`: All Halide binaries known to run successfully (best).
 
-* **Benchmark Result Files** JSON format, documented later.
-  Each has a **benchmark full ID** `{schedule node full ID}_{hostname}_{timestamp}`.
+* **Benchmark Sub-objects:** JSON format, documented later.
 
-* **Commentary:** remarks with possible opinionated review; documented later.
+* **Commentary Sub-objects:**
+  remarks with possible opinionated review; documented later.
 
 * **Review:** derived value from commentary; documented later.
 
-* **Warning Toggles:** list of `WarningToggle` objects, documented later.
+* **Warning Toggles:** list of `WarningToggle` sub-objects, documented later.
   These are used to suppress warnings from the profiler.
 
 
@@ -218,7 +230,7 @@ The session lock (see "Locking") will catch many such violations,
 but will not prevent observing a partial edit to the workspace C++ file.
 
 
-### Commentary State (Sub-object of Schedule Nodes)
+### Commentary Sub-object State
 
 * **Text of commentary**
 
@@ -247,7 +259,7 @@ commentary sub-objects:
 * Otherwise, `neutral`
 
 
-### WarningToggle State (Sub-object of Schedule Nodes)
+### WarningToggle Sub-object State
 
 * **WarningToggle Full ID:**
   `{parent schedule full ID}_{timestamp}`
@@ -275,6 +287,71 @@ The warning-is-blocked algorithm, for a given schedule node:
 This localizes the effect of a schedule node's `WarningToggle` -- both
 blocks and `WarningToggle` cancellations -- to the subtree of the
 schedule node.
+
+
+### Benchmark Sub-object State
+
+**Benchmark Full ID:** `{parent schedule node full ID}_{hostname}_{timestamp}`.
+
+JSON object with key value pairs:
+
+* `hostname`: string, not sanitized
+
+* `cpu_count`: number, CPU count of system used for profiling
+
+IMPL TASK: add this timestamp
+
+* `timestamp`
+
+* `parameters`: object, generator parameters used to generate the profiled Halide binary
+
+* `profiler`: the profiler JSON output should be a JSON object whose "pipelines"
+  value is a list of 1 object. This is that inner object.
+  (There will be more than 1 if we support multiple generators; just error for != 1 for now).
+
+* `warnings`: list of warning objects captured from profiler output,
+  stored in a temporary format (`HL_PROFILER_JSON_TEMPORARY_WARNINGS` output).
+
+IMPL TASK: capture this `stdout`
+
+* `stdout`: stdout captured from the profiled Halide binary
+
+Note this is not the profiler you'll find documented on the internet.
+The profiler was rewritten internally for this project.
+
+FUTURE: once profile tool accepts explicit input sizes etc.
+we need to embed that in here.
+
+
+### Benchmark Set State
+
+IMPL TASK: gap 2, store these on disk
+
+**Benchmark Set Full ID:** `{sanitized hostname}_{timestamp}`
+
+<!-- deferred task: strip when creating prompt -->
+Rationale: timestamp alone would be reasonable for one machine
+(would uniquify even on collisions due to minted timestamp behavior).
+Minting will fail if we parallelize across multiple machines.
+Using the computer name to unique-ify makes sense since it's unreasonable
+to expect comparing profiler runs on different machines to make sense.
+(I hope I don't live to eat these words -- but breaking changes are AOK for now).
+<!-- end strip -->
+
+3-level JSON object, created by `build` tool profiler feature.
+
+This `object` is indexed as
+
+    object[schedule full ID][generator parameters index][batch number]
+
+The set of top-level keys gives the set of schedule nodes profiled
+by the creator `build` tool usage.
+The list `object[schedule full ID][generator parameters index]` is of
+length batch-count.
+Each element is a string: benchmark sub-object full ID.
+
+So, the set of all IDs `object[*][*][i]` references the set of benchmarks
+created on the i-th batch of the tool usage.
 
 
 ### Current Idea State
@@ -834,6 +911,8 @@ Takes optional arguments specifying the up to three schedule nodes.
   The special value `auto` selects the current session's
   private anchor node if it exists,
   otherwise the anchor schedule node is disabled.
+  The special value `always` is like `auto` except it's
+  an error if the current session has no private anchor node.
 
 FUTURE: session anchor state doesn't exist yet. Leave an untested
 todo assert for the `--anchor auto` and `--anchor always` cases.
@@ -864,9 +943,10 @@ IMPL TASK: `profile` functionality merged into `build`
 
 IMPL TASK: explicit schedule ID *replaces* generator parameters file
 
-IMPL TASK: "make schedule node" functionality moved to `dh_hl init_build`
+IMPL TASK: gap 4: "make schedule node" functionality moved to `dh_hl init_build`;
+now build from C++ source stored in catalog files, not workspace.
 
-TODO update this for `init_build`
+IMPL TASK: gap 5: just make benchmark sets for now; comparison tool spec not ready
 
     dh_hl build -s ...
 
@@ -885,11 +965,13 @@ The tool
    `.stmt` and `.conceptual.stmt` files for the target schedule.
    Compiler and generator outputs get piped to harness `stdout`/`stderr`.
 
+IMPL TASK: gap 6 fixed, no more "edited schedule node"
+
 2. (`--profile` only) runs all generated binaries with Andrew Adams's profiler,
-   with new benchmark objects added to the edited schedule node.
+   with new benchmark objects added to the profiled code's source schedule node.
    The new objects' IDs are printed.
 
-3. Conditionally updates the result state of the edited schedule node,
+3. Conditionally updates the result state of the built/profiled schedule node,
    if no flags overriding the default generator parameters are given.
    The result state can only go from worse to better values.
 
@@ -939,9 +1021,10 @@ Pseudocode:
         nodes.add(anchor)
     for node in nodes:
         print "dh_hl: begin C++ compile: {node.short_id}"
-        # ... Compile C++
+        # ... Compile/Link C++
         # Ninja file in session private workspace: bin/{node.full_id}.ninja
         # Generator in session private workspace: bin/{node.full_id}_generator
+        # Use similar ID-based naming for intermediate .o files / registration etc.
         # Full ID keying prevents redundant rebuilds
         print "dh_hl: end C++ compile (success|fail)""
 
@@ -955,7 +1038,10 @@ Pseudocode:
                 # Binary in session private workspace: bin/{node.full_id}_{i}
                 # Also, for target node only, if generation succeeds, generate
                 # bin/{i}.stmt, bin/{i}.conceptual_stmt
-                # and each path with "dh_hl: " lines
+                # and print each path with "dh_hl: " lines
+                # NB skipping ID prefix for .stmt for my human taste,
+                # since no tool reads .stmt for me and I don't want to copy
+                # a huge session ID + schedule node ID path. Re-eval later.
                 print "dh_hl: end Halide generator {i} (success|fail)"
 
     # 2. Profiling
@@ -976,7 +1062,7 @@ Pseudocode:
                 node, params_index = source_of(binary)
                 print "dh_hl: Profiled {node.short_id}, binary {params_index} (success|fail)"
                 if success:
-                    Add benchmark object to binary's source schedule node
+                    Add benchmark sub-object to binary's source schedule node
                     Timestamp could be taken before or after profiling, unimportant
                     print "dh_hl: Benchmark ID: {benchmark id}"
 
@@ -994,10 +1080,16 @@ Pseudocode:
 
     # Also save benchmark set object, if criteria passed.
 
-IMPL TASK: update the referenced file if it's outdated.
-
 See the [Reference Build Commands](reference_build_commands.md) file for the
 tested build/link recipe.
+Note, this is to teach Halide building, not specific catalog dir organization.
+Name as above, uniquely for different schedules and generator params.
+
+IMPL TASK: gap 3, update the referenced build recipe file if it's outdated.
+I'd prefer though NOT to keep the referenced file's filenames in sync.
+(Single source of truth for workspace bin filenames).
+If you think a future agent will still get confused, please improve the wording
+above clarifying the purpose / non-purpose of this crufty old file.
 
 IMPL TASK: update this "as implemented" block
 
@@ -1235,7 +1327,7 @@ This command takes further arguments:
 
     dh_hl view_benchmark_warnings {benchmark ID}
 
-Pretty-print the warnings embedded in the referenced benchmark object.
+Pretty-print the warnings embedded in the referenced benchmark sub-object.
 Takes an optional `--always-show-message` flag.
 
 For each warning, the tool prints:
@@ -1623,8 +1715,7 @@ Prints the state of the referenced schedule node as a JSON object, with key/valu
 
 * `result`: string, `result.txt` result
 
-* `benchmark`: list of objects,
-  each benchmark file becomes one benchmark JSON object (described later)
+* `benchmark`: list of child benchmark sub-objects
 
 * `review`: string value derived from commentary
 
@@ -1717,11 +1808,6 @@ Prints the identified benchmark in Benchmark JSON format
 IMPL TASK: implement this
 
 Prints the state of the referenced benchmark set as a JSON object.
-This object is indexed as
-
-    [schedule full ID][generator parameters index]
-
-which gives a list of batch-size-many benchmark full IDs.
 
 
 ### JSON Export Tool
@@ -1801,35 +1887,3 @@ If none of these cases (e.g. multiple termini),
 then the user needs to provide more specific intentions.
 The user may not be familiar with the harness.
 Try to advise of the implications of various actions.
-
-
-## Benchmark JSON Format
-
-Key value pairs:
-
-* `hostname`: string, not sanitized
-
-* `cpu_count`: number, CPU count of system used for profiling
-
-IMPL TASK: add this timestamp
-
-* `timestamp`
-
-* `parameters`: object, generator parameters used to generate the profiled Halide binary
-
-* `profiler`: the profiler JSON output should be a JSON object whose "pipelines"
-  value is a list of 1 object. This is that inner object.
-  (There will be more than 1 if we support multiple generators; just error for != 1 for now).
-
-* `warnings`: list of warning objects captured from profiler output,
-  stored in a temporary format (`HL_PROFILER_JSON_TEMPORARY_WARNINGS` output).
-
-IMPL TASK: capture this `stdout`
-
-* `stdout`: stdout captured from the profiled Halide binary
-
-Note this is not the profiler you'll find documented on the internet.
-The profiler was rewritten internally for this project.
-
-FUTURE: once profile tool accepts explicit input sizes etc.
-we need to embed that in here.
