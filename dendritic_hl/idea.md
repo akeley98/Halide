@@ -221,7 +221,7 @@ All pairs go to the Halide generator as `key=value`.
   current anchor schedule,
   a session private idea list,
   a session private benchmark set list,
-  a workspace C++ schedule (`generator.cpp`) and `generator_parameters.json`,
+  workspace source code files (`generator.cpp` and `generator_parameters.json`),
   and a `bin` directory.
 
 Most harness tools require a "current session",
@@ -751,7 +751,7 @@ but the safety this provided got replaced with init_workspace. -->
 
 If there was no current session given, the tool errors.
 Otherwise, the tool tries to find a schedule node that already holds
-a copy of the workspace `generator.cpp` and `generator_parameters.json` files,
+a copy of the workspace source code files,
 and give basic information on the current catalog state.
 
 **Outputs:**
@@ -778,7 +778,9 @@ IMPL TASK: binary open/closed replaces seed idea / output schedule.
       its parent is the current idea node.
 
 IMPL TASK: implement cases below,
-enforce `generator_parameters.json` exists in `has_workspace`
+enforce `generator_parameters.json` exists in `has_workspace`.
+Consider renaming `has_workspace` based on new "source code files" terminology.
+
 
 * The status as one of
     - `missing workspace generator.cpp`
@@ -809,9 +811,12 @@ This is why the command is robust to nonexistent current idea node IDs.
 
 **Search Implementation Details:**  <!-- deferred task: strip when creating prompt -->
 
-Hash the workspace C++ file and look for schedule nodes with matching hashes.
+IMPL TASK: gap 1, I decided to use "source code files" as umbrella term.
+Advise if a more clear term is possible.
 
-If there is no workspace C++ file, the status is "no workspace C++ file".
+Hash the workspace source code files and look for schedule nodes with matching hashes.
+
+If some source code files, the status is "missing workspace [missing files]".
 
 Otherwise, if no hash matches exist,
 the status is "workspace inconsistent, unknown schedule".
@@ -853,7 +858,7 @@ Otherwise, the status is "workspace inconsistent, unexpected current idea state"
 
 IMPL TASK: soften the message below and handle missing `generator_parameters.json`
 
-* If the workspace C++ file or `generator_parameters.json` is not found, print
+* If some workspace source code files are not found, print
 
         AGENTS: run `dh_hl init_workspace` to get files to edit
 
@@ -926,6 +931,11 @@ Takes optional arguments specifying the up to three schedule nodes.
 IMPL TASK: `--anchor auto`, `--anchor always`
 
 `--target workspace` behavior:
+
+IMPL TASK: the specification now inherits the `dh_hl status` behavior
+of not being happy if `generator_parameters.json` is missing;
+the code needs to be updated to match (if not already automagically fixed).
+Also add a test for this case (`generator.cpp` present, `generator_parameters.json` missing)
 
 * If `dh_hl status` would give an unambiguous schedule node,
   the target schedule node is the one this tool returns.
@@ -1269,7 +1279,9 @@ Prints the referenced idea node's
 
 * list of child schedule IDs, one line each
 
-* idea side links, in the same format as `list_ideas`
+* idea side links, in the same format as `list_child_ideas`
+
+IMPL TASK: gap 4 fixed
 
 
 ### Add Idea Side Link Tool
@@ -1301,7 +1313,9 @@ This command takes further arguments:
 Exactly one of `--block` / `--cancel` must be given, since a `WarningToggle`'s
 value is a tagged union (see "WarningToggle State").
 
-The schedule given by `dh_hl session_root_node` is a reasonable
+IMPL TASK: gap 2, eliminate `session_root_node`
+
+The schedule given by `dh_hl session_root_of` is a reasonable
 default for the `{schedule ID}` argument.
 This scopes the "lesson" that the warning is to be ignored mostly to
 schedules worked on in this session, but not to those from other
@@ -1391,8 +1405,10 @@ Walks the branch of the tree from the referenced schedule node
 up toward a root node.
 For each schedule node, prints:
 
+IMPL TASK: gap 4 fixed
+
 * Its ID
-* Its child idea nodes in the same format as `dh_hl list_ideas`,
+* Its child idea nodes in the same format as `dh_hl list_child_ideas`,
   marking the child idea node that is the parent of the previously printed schedule node.
 * For each commentary file, its timestamp on one line,
   and the first up-to-72 characters of the first line of the commentary text.
@@ -1617,6 +1633,10 @@ The default anchor is the current anchor of the current session
 
     dh_hl new_successor_session -s ... {proposal name} {prompt file}
 
+IMPL TASK: gap 3, or lack thereof.
+This uses all output schedules as parent schedules,
+not giving special treatment for the primary output schedule.
+
 The current session must be self-closed and have depth 0.
 
 Create a new successor session (depth = 0) with
@@ -1680,9 +1700,11 @@ the tool gives an error and reminds of the `dh_hl comment` tool.
 **Output Benchmark Sets:**
 Same as the current session's private benchmark set list.
 
+IMPL TASK: gap 2, eliminate `session_root_node`
+
 **Added superseded-by Links:**
 For each output schedule `O`, find the schedule node `R`
-that would be found by `dh_hl session_root_node O`.
+that would be found by `dh_hl session_root_of O`.
 Add a superseded-by idea side link from `R`'s parent to `O`'s parent.
 This step is silently skipped for output schedules
 where `session_root_of` would fail.
@@ -1851,14 +1873,23 @@ Find a certain schedule node (noun), and do something with it (verb):
 
 * `schedule`: the schedule node id'd by `[schedule ID]`.
 
-* `terminus_schedule`: the output schedule of the unique terminus.
+IMPL TASK: gap 3, explicit primary output schedule
+
+* `terminus_schedule`:
+  the primary output schedule of the unique terminus.
   Error if there is not exactly one session node that is a terminus
   or the terminus has no output schedule.
 
-* `seed_schedule`: the canonical schedule of the current session's seed idea.
+IMPL TASK: gap 3, explicit 0th seed idea
 
-* `session_output`: the output schedule of the current session;
-  error if there is no output schedule yet.
+* `seed_schedule`:
+  the canonical schedule of the current session's 0th seed idea.
+
+IMPL TASK: gap 3, explicit primary output schedule
+
+* `session_output`:
+  the primary output schedule of the current session;
+  error if there is no output has been defined yet.
 
 **Verbs:**
 
@@ -1896,8 +1927,12 @@ Initialize the session private workspace state to defaults:
   initialized from the current session's default anchor schedule;
   no current anchor if no default anchor schedule.
 
+IMPL TASK: gap 5 fixed; may reconsider when I gain practical experience.
+
 * **Private Idea List:** initialized from the current session's seed ideas,
   each with pool tag `default`.
+  This is intentionally different from the parent session's pool tags;
+  the new agent can make their own decisions what to prioritize.
 
 * **Private Benchmark Set List:** empty.
 
