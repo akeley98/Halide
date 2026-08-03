@@ -945,9 +945,12 @@ The tool
    The new objects' IDs are printed.
 
 3. Updates the result state of each built/profiled schedule node,
-   monotonically (worse to better only; see the pseudocode below).
+   monotonically (worse to better only).
    A `--only [int]` build caps the achievable result at `halide error`,
-   since only one binary is verified.
+   since not all possible generator parameters are verified.
+  <!-- Note: see separate pseudocode (stripped from dh_hl help) -->
+  <!-- Note: --only 0 when only 1 parameters object exists breaks the
+  above rationale, but we don't bother with this special case. -->
 
 Flags:
 
@@ -996,6 +999,10 @@ Pseudocode:
     for node in nodes:
         print "dh_hl: begin C++ compile: {node.short_id}"
         # ... Compile/Link C++
+        # NB the generator's -f basename is baked into C identifiers in the
+        # emitted registration.cpp, so any full_id used there is first sanitized
+        # (non-alphanumerics -> '_', prefixed with a letter) to a valid, still-
+        # unique C identifier; plain bin/ file names can keep the raw full_id.
         # Ninja file in session private workspace: bin/{node.full_id}.ninja
         # Generator in session private workspace: bin/{node.full_id}_generator
         # Use similar ID-based naming for intermediate .o files / registration etc.
