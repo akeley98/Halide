@@ -114,20 +114,33 @@ def queue_overwrite(path, data):
     _pending_overwrites.append((path, data))
 
 
-def write_allowed(path, data):
+def write_allowed(path, data, *, allow=True):
     """Write one of the allowed-to-change files.  If it doesn't exist yet we
     create it with new_file (recorded, so rollback removes it and the dir it
     lives in can be rmdir'd).  If it exists we defer an overwrite that is NOT
-    rolled back.  Existence is checked once; we assume no concurrent changes."""
-    if os.path.exists(path):
+    rolled back.  Existence is checked once; we assume no concurrent changes.
+
+    *allow* (default True) permits overwriting an existing file.  When False,
+    an existing target falls through to new_file, whose O_EXCL create raises
+    FileExistsError -- this is how `init_workspace` (without --force) refuses to
+    clobber existing session workspace state."""
+    if allow and os.path.exists(path):
         queue_overwrite(path, data)
     else:
         new_file(path, data)
 
 
-def commit():
+def commit(*, assert_no_writes=False):
     """Finalize a successful tool run: apply deferred overwrites (as the very
-    last mutating step), then disarm rollback so nothing gets deleted."""
+    last mutating step), then disarm rollback so nothing gets deleted.
+
+    *assert_no_writes* (used by `join_session --dry-run`) asserts the run
+    recorded no new files and queued no overwrites -- a self-check that a
+    read-only/dry-run path really mutated nothing.  Locking is deliberately
+    exempt: lock files are created outside this registry (see locks.py)."""
+    if assert_no_writes:
+        assert not _new_entries and not _pending_overwrites, \
+            "commit(assert_no_writes=True) but the run mutated the catalog"
     # Apply overwrites while rollback is still armed: if one throws, the tool
     # is considered failed and new files still roll back.
     for path, data in _pending_overwrites:

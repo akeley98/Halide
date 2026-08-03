@@ -794,26 +794,39 @@ class IdeaNode:
 # ---------------------------------------------------------------------------
 
 class SessionNode:
-    """One agent session.  On disk: session/{id}/ with seed_idea.txt (required),
-    parent.txt (optional), output_schedule.txt (optional), delisted.txt
-    (presence flag).  Depth/timestamp are derived from the ID.  The gitignored
-    private workspace (generator.cpp, current_idea_state.txt, bin/) lives
-    separately under private/{id}/ and is NOT owned by this node."""
+    """One agent session.  On disk: session/{id}/ with:
 
-    def __init__(self, catalog, full_id, is_new=False,
-                 seed_idea_id=None, parent_id=None):
+    * ``prompt.txt`` (required): the session's prompt (plain text).
+    * ``seed_ideas.json`` (required): JSON list of seed idea full IDs (>= 1).
+    * ``parent.txt`` (optional): parent session full ID.
+    * ``default_anchor_schedule.txt`` (optional): a schedule full ID.
+    * ``outputs.json`` (optional): the session outputs, absent until closed.
+      Shape: ``{"schedules": [{"id": <full id>, "pool_tag": <str>}, ...],
+      "benchmark_sets": [<full id>, ...]}``.  The first schedule is the
+      *primary* output (idea.md "Session Node State" / "Close Session Tool").
+    * ``delisted.txt`` (presence flag).
+
+    Depth/timestamp are derived from the ID.  The gitignored private workspace
+    lives under private/{id}/ and is NOT owned by this node."""
+
+    def __init__(self, catalog, full_id, is_new=False, seed_idea_ids=None,
+                 prompt=None, parent_id=None, default_anchor_schedule_id=None):
         self.catalog = catalog
         self.full_id = full_id
         self.is_new = is_new
-        self._seed_idea_id = seed_idea_id if seed_idea_id is not None else _UNLOADED
+        self._seed_idea_ids = (list(seed_idea_ids)
+                               if seed_idea_ids is not None else _UNLOADED)
+        self._prompt = prompt if prompt is not None else _UNLOADED
         # parent tri-state: _UNLOADED / None (=no parent) / id str.  For a new
         # node we know it directly (parent_id or None).
         self._parent_id = parent_id if is_new else _UNLOADED
-        self._output_schedule_id = _UNLOADED   # _UNLOADED / None / id str
-        self._output_dirty = False
-        self._delisted = _UNLOADED             # _UNLOADED / bool
+        # default anchor tri-state; for a new node it's the passed value (or None).
+        self._default_anchor = default_anchor_schedule_id if is_new else _UNLOADED
+        self._outputs = _UNLOADED               # _UNLOADED / None / dict
+        self._outputs_dirty = False
+        self._delisted = _UNLOADED              # _UNLOADED / bool
         self._delisted_dirty = False
-        # Derived child sessions (filled by Catalog session linking; Phase 4).
+        # Derived child sessions (filled by Catalog session linking).
         self.child_session_ids = None
         if is_new:
             self.catalog._mark_dirty(self)
@@ -835,14 +848,28 @@ class SessionNode:
     def private_dir(self):
         return self.catalog.session_private_dir(self.full_id)
 
-    # -- seed idea (required) -------------------------------------------
+    # -- prompt (required) ----------------------------------------------
+    @property
+    def prompt(self):
+        if self._prompt is _UNLOADED:
+            with open(os.path.join(self.dir, "prompt.txt"), "r",
+                      encoding="utf-8") as f:
+                self._prompt = f.read()
+        return self._prompt
+
+    # -- seed ideas (required, >= 1) ------------------------------------
+    @property
+    def seed_idea_ids(self):
+        if self._seed_idea_ids is _UNLOADED:
+            with open(os.path.join(self.dir, "seed_ideas.json"), "r",
+                      encoding="utf-8") as f:
+                self._seed_idea_ids = json.load(f)
+        return self._seed_idea_ids
+
     @property
     def seed_idea_id(self):
-        if self._seed_idea_id is _UNLOADED:
-            with open(os.path.join(self.dir, "seed_idea.txt"), "r",
-                      encoding="utf-8") as f:
-                self._seed_idea_id = f.read().strip()
-        return self._seed_idea_id
+        """Back-compat convenience: the 0th seed idea (idea.md 0th-seed rule)."""
+        return self.seed_idea_ids[0]
 
     # -- parent session (optional) --------------------------------------
     @property
@@ -856,24 +883,75 @@ class SessionNode:
                 self._parent_id = None
         return self._parent_id
 
-    # -- output schedule (optional) -------------------------------------
+    # -- default anchor schedule (optional) -----------------------------
     @property
-    def output_schedule_id(self):
-        if self._output_schedule_id is _UNLOADED:
-            p = os.path.join(self.dir, "output_schedule.txt")
+    def default_anchor_schedule_id(self):
+        if self._default_anchor is _UNLOADED:
+            p = os.path.join(self.dir, "default_anchor_schedule.txt")
             if os.path.exists(p):
                 with open(p, "r", encoding="utf-8") as f:
-                    self._output_schedule_id = f.read().strip()
+                    self._default_anchor = f.read().strip()
             else:
-                self._output_schedule_id = None
-        return self._output_schedule_id
+                self._default_anchor = None
+        return self._default_anchor
+
+    # -- outputs (optional; absent until closed) ------------------------
+    @property
+    def _outputs_obj(self):
+        if self._outputs is _UNLOADED:
+            p = os.path.join(self.dir, "outputs.json")
+            if os.path.exists(p):
+                with open(p, "r", encoding="utf-8") as f:
+                    self._outputs = json.load(f)
+            else:
+                self._outputs = None
+        return self._outputs
+
+    def has_outputs(self):
+        return self._outputs_obj is not None
+
+    @property
+    def output_schedule_ids(self):
+        """Output schedule full IDs, primary first (empty if none)."""
+        o = self._outputs_obj
+        return [s["id"] for s in o["schedules"]] if o else []
+
+    def output_schedule_pool_tags(self):
+        """Map output schedule full ID -> its pool tag."""
+        o = self._outputs_obj
+        return {s["id"]: s["pool_tag"] for s in o["schedules"]} if o else {}
+
+    @property
+    def primary_output_schedule_id(self):
+        oids = self.output_schedule_ids
+        return oids[0] if oids else None
+
+    @property
+    def output_benchmark_set_ids(self):
+        o = self._outputs_obj
+        return list(o.get("benchmark_sets", [])) if o else []
+
+    @property
+    def output_schedule_id(self):
+        """Back-compat convenience: the primary output schedule (or None)."""
+        return self.primary_output_schedule_id
+
+    def set_outputs(self, schedule_pool_pairs, benchmark_set_ids):
+        """Set the session outputs (self-closing it).  *schedule_pool_pairs* is
+        an ordered list of (schedule full ID, pool tag); the first is primary."""
+        if self.has_outputs():
+            raise DhHlError("session already has outputs")
+        self._outputs = {
+            "schedules": [{"id": sid, "pool_tag": tag}
+                          for sid, tag in schedule_pool_pairs],
+            "benchmark_sets": list(benchmark_set_ids),
+        }
+        self._outputs_dirty = True
+        self.catalog._mark_dirty(self)
 
     def set_output_schedule(self, schedule_id):
-        if self.output_schedule_id is not None:
-            raise DhHlError("session already has an output schedule")
-        self._output_schedule_id = schedule_id
-        self._output_dirty = True
-        self.catalog._mark_dirty(self)
+        """Back-compat single-output setter (pool tag 'default', no bench sets)."""
+        self.set_outputs([(schedule_id, "default")], [])
 
     # -- delisted flag (presence) ---------------------------------------
     @property
@@ -890,23 +968,28 @@ class SessionNode:
 
     # -- derived: self-closed -------------------------------------------
     def is_self_closed(self):
-        return self.output_schedule_id is not None or self.delisted
+        return self.has_outputs() or self.delisted
 
     # -- flush -----------------------------------------------------------
     def flush(self):
         if self.is_new:
             safety.makedirs_tracked(self.dir)
-            safety.new_file(os.path.join(self.dir, "seed_idea.txt"),
-                            self.seed_idea_id + "\n")
+            safety.new_file(os.path.join(self.dir, "prompt.txt"), self.prompt)
+            safety.new_file(os.path.join(self.dir, "seed_ideas.json"),
+                            json.dumps(self.seed_idea_ids, indent=1) + "\n")
             if self._parent_id is not None:
                 safety.new_file(os.path.join(self.dir, "parent.txt"),
                                 self._parent_id + "\n")
-        # output_schedule.txt / delisted.txt are presence/pointer files added
-        # once and never modified -- created new whether the session node is new
-        # or pre-existing (close_session / delist on an existing session).
-        if self._output_dirty and self._output_schedule_id is not None:
-            safety.new_file(os.path.join(self.dir, "output_schedule.txt"),
-                            self._output_schedule_id + "\n")
+            if self._default_anchor is not None:
+                safety.new_file(
+                    os.path.join(self.dir, "default_anchor_schedule.txt"),
+                    self._default_anchor + "\n")
+        # outputs.json / delisted.txt are presence/pointer files added once and
+        # never modified -- created whether the node is new or pre-existing
+        # (close_session / delist on an existing session).
+        if self._outputs_dirty and self._outputs is not None:
+            safety.new_file(os.path.join(self.dir, "outputs.json"),
+                            json.dumps(self._outputs, indent=1) + "\n")
         if self._delisted_dirty and self._delisted:
             safety.new_file(os.path.join(self.dir, "delisted.txt"), "")
 
@@ -1428,11 +1511,16 @@ class Catalog:
                 ids.make_session_id(depth, t, username, hostname)))
         return ids.make_session_id(depth, ts, username, hostname)
 
-    def create_session(self, seed_idea, parent_session, depth, session_id=None):
-        """Create a new session node seeded with *seed_idea* at *depth* (0 for
+    def create_session(self, seed_ideas, parent_session, depth, *, prompt="",
+                       default_anchor_schedule_id=None, session_id=None):
+        """Create a new session node seeded with *seed_ideas* at *depth* (0 for
         top-level).  Model-level primitive; the CLI session-creation tools wrap
         this and also initialize the private workspace.  *session_id* may be a
         pre-minted ID (mint_session_id); otherwise one is minted here.
+
+        *seed_ideas* is a single IdeaNode or a list of IdeaNodes/full-ID strings
+        (>= 1).  *prompt* is the session prompt text.  *default_anchor_schedule_id*
+        is an optional schedule full ID.
 
         Enforces the session timestamp invariant when there is a parent: the
         parent session must be strictly older than the child."""
@@ -1447,8 +1535,12 @@ class Catalog:
                         parent_session.timestamp,
                         ids.session_timestamp(session_id)))
             parent_id = parent_session.full_id
-        node = SessionNode(self, session_id, is_new=True,
-                           seed_idea_id=seed_idea.full_id, parent_id=parent_id)
+        if not isinstance(seed_ideas, (list, tuple)):
+            seed_ideas = [seed_ideas]
+        seed_ids = [s.full_id if hasattr(s, "full_id") else s for s in seed_ideas]
+        node = SessionNode(self, session_id, is_new=True, seed_idea_ids=seed_ids,
+                           prompt=prompt, parent_id=parent_id,
+                           default_anchor_schedule_id=default_anchor_schedule_id)
         self.sessions[session_id] = node
         if self._session_linked:
             node.child_session_ids = []
