@@ -155,7 +155,7 @@ def test_json_export_includes_review_and_links(tmp_path, run_tool, capsys):
 
     run_tool(tools.cmd_json_export, ns(catalog=cat_dir))
     obj = json.loads(capsys.readouterr().out)
-    assert set(obj) == {"ideas", "schedules", "sessions"}
+    assert set(obj) == {"ideas", "schedules", "sessions", "benchmark_sets"}
     # Schedule review + commentary shape present in the export.
     c1 = obj["schedules"][t["C1"]]
     assert c1["review"] == "positive"

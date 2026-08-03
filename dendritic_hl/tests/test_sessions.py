@@ -211,7 +211,7 @@ def test_view_commentary(session, run_tool, capsys, tmp_path):
 def test_json_export_has_all_categories(session, run_tool, capsys):
     obj = json.loads(_out(run_tool, capsys, tools.cmd_json_export,
                           ns(catalog=session.catalog_dir)))
-    assert set(obj) == {"ideas", "schedules", "sessions"}
+    assert set(obj) == {"ideas", "schedules", "sessions", "benchmark_sets"}
     assert session.session_id in obj["sessions"]
     assert len(obj["schedules"]) == 2  # root + canonical dup
     assert len(obj["ideas"]) == 1

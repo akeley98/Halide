@@ -71,8 +71,6 @@ Finally, the `build` (profiler) tool creates **benchmark set objects**
 that group "batches" of benchmarks across different schedule nodes.
 This is for comparison tools, which only compare within batches to fight noise.
 
-IMPL TASK: gap 5
-
 FUTURE: comparison tool not yet specified. Ignore `three_way_bench.md`
 and other files not referenced transitively by `idea.md` (this file).
 
@@ -135,8 +133,6 @@ sha256, lowercase hex digits.
 * **Schedule Node Full ID:** `{timestamp}_{hash}`; exactly 90 characters.
 
 * **Edges:** 0 or 1 parent idea nodes, 0 or more child idea nodes.
-
-IMPL TASK: Result value has changed; `runtime error` and `unknown` are new
 
 * **Result:** one of:
   * `unknown`: Did not attempt any compilation (worst).
@@ -299,8 +295,6 @@ JSON object with key value pairs:
 
 * `cpu_count`: number, CPU count of system used for profiling
 
-IMPL TASK: add this timestamp
-
 * `timestamp`
 
 * `parameters`: object, generator parameters used to generate the profiled Halide binary
@@ -312,8 +306,6 @@ IMPL TASK: add this timestamp
 * `warnings`: list of warning objects captured from profiler output,
   stored in a temporary format (`HL_PROFILER_JSON_TEMPORARY_WARNINGS` output).
 
-IMPL TASK: capture this `stdout`
-
 * `stdout`: stdout captured from the profiled Halide binary
 
 Note this is not the profiler you'll find documented on the internet.
@@ -324,8 +316,6 @@ we need to embed that in here.
 
 
 ### Benchmark Set State
-
-IMPL TASK: gap 2, store these on disk
 
 **Benchmark Set Full ID:** `{sanitized hostname}_{timestamp}`
 
@@ -890,8 +880,6 @@ The warning includes
 
     dh_hl init_build -s ...
 
-IMPL TASK: add this (replaces implied `build` functionality)
-
 Prepare for an up-to-3-way comparison between Halide schedules,
 including possibly a new schedule node made from current workspace files.
 
@@ -935,19 +923,6 @@ So this is the first step to building or profiling a new schedule.
 
 ### Build Tool
 
-IMPL TASK: remove `--verbose` flag from generator run
-
-IMPL TASK: `dh_hl: ` lines
-
-IMPL TASK: `profile` functionality merged into `build`
-
-IMPL TASK: explicit schedule ID *replaces* generator parameters file
-
-IMPL TASK: gap 4: "make schedule node" functionality moved to `dh_hl init_build`;
-now build from C++ source stored in catalog files, not workspace.
-
-IMPL TASK: gap 5: just make benchmark sets for now; comparison tool spec not ready
-
     dh_hl build -s ...
 
 Builds the schedule nodes selected by the latest `dh_hl init_build`
@@ -965,15 +940,14 @@ The tool
    `.stmt` and `.conceptual.stmt` files for the target schedule.
    Compiler and generator outputs get piped to harness `stdout`/`stderr`.
 
-IMPL TASK: gap 6 fixed, no more "edited schedule node"
-
 2. (`--profile` only) runs all generated binaries with Andrew Adams's profiler,
    with new benchmark objects added to the profiled code's source schedule node.
    The new objects' IDs are printed.
 
-3. Conditionally updates the result state of the built/profiled schedule node,
-   if no flags overriding the default generator parameters are given.
-   The result state can only go from worse to better values.
+3. Updates the result state of each built/profiled schedule node,
+   monotonically (worse to better only; see the pseudocode below).
+   A `--only [int]` build caps the achievable result at `halide error`,
+   since only one binary is verified.
 
 Flags:
 
@@ -1081,30 +1055,28 @@ Pseudocode:
     # Also save benchmark set object, if criteria passed.
 
 See the [Reference Build Commands](reference_build_commands.md) file for the
-tested build/link recipe.
-Note, this is to teach Halide building, not specific catalog dir organization.
-Name as above, uniquely for different schedules and generator params.
+tested build/link recipe.  That file teaches the **Halide toolchain** (which
+compiler/generator/link commands to run, and their gotchas) using its own
+example file names.  It is deliberately NOT the source of truth for the
+catalog-specific `bin/` file names — those are named as in the pseudocode above
+(keyed by schedule full ID + parameters index), and `build.py` owns them.
+Don't try to keep the two in sync.
 
-IMPL TASK: gap 3, update the referenced build recipe file if it's outdated.
-I'd prefer though NOT to keep the referenced file's filenames in sync.
-(Single source of truth for workspace bin filenames).
-If you think a future agent will still get confused, please improve the wording
-above clarifying the purpose / non-purpose of this crufty old file.
-
-IMPL TASK: update this "as implemented" block
-
-**As implemented** (`build.py`): the two commands share `_snapshot_session`
-(resolve `-s`, take the session lock, prepare the catalog-free `SessionWorkspace`
-+ `bin/` — no catalog lock yet) and `_open_locked_context` (acquire the catalog
-lock, construct the `Context`).  `build` runs its whole compile in
-`_compile_for_build`, which returns `(outcome, stmt_paths, ok, harness_msg)`;
-`_open_locked_context` then `_select_node` + record.  `profile` compiles the
-generator exe + `RunGenMain.o`, calls `locks.upgrade_machine_exclusive()`
-**before** `_open_locked_context`, then loops emit→link→benchmark under both
-locks.  Outcomes: a `c++ error` / `halide error` still creates + flushes a node;
-a harness error (generator-count / `RunGenMain.o` / link) leaves `outcome` as
-`None` so no result update is recorded.  The lock-order sequences are pinned by
-white-box `_trace` tests (see Tests).
+**As implemented** (`build.py`): `init_build` (`cmd_init_build`) resolves
+target/other/anchor (`_resolve_target`/`_resolve_other`/`_resolve_anchor`, the
+target possibly a freshly created child schedule) under the session + catalog
+locks, then writes `init_build.json` (catalog-relative paths) to the private
+workspace.  `build` (`cmd_build`) reads that file lock-free, then
+`_compile_phase` runs phase 1a (per-node `_write_ninja` → generator exe +
+shared `RunGenMain.o`) and phase 1b (per-(node, params-index) `_emit` → `_link`,
+with the target also publishing `bin/{i}.stmt`).  Only when profiling does it
+`locks.upgrade_machine_exclusive()` **before** acquiring the catalog lock; then
+`_profile_phase` runs the shuffled batches, attaching a benchmark sub-object to
+each binary's source node and filling the dense benchmark-set index.
+`_compute_result` derives each node's monotone result state.  A `c++ error` /
+`halide error` outcome still persists the node (the result update is monotone,
+never a rollback); the generator-count harness error skips the node's compile
+without updating its result.
 
 
 ### Canon Tool (Make Canonical Tool)
@@ -1355,8 +1327,6 @@ FUTURE: fix `max_warnings` limit in Halide profiler that silently drops warnings
 
     dh_hl view_benchmark_stdout {benchmark ID}
 
-IMPL TASK: implement this
-
 Print the `stdout` captured for the named benchmark.
 
 
@@ -1483,8 +1453,6 @@ for a parent schedule that's exclusively its own.
 
 
 ### New Catalog Tool
-
-IMPL TASK: generator parameters init
 
     dh_hl new_catalog -C ... {proposal name} {proposal file} {input C++ file} [input generator parameters]
 
@@ -1630,8 +1598,6 @@ NB see also `schedule_full_id`, `schedule_short_id`, `restore_schedule` tools.
 
     dh_hl view_generator_parameters [schedule ID]
 
-IMPL TASK: implement this
-
 Pretty-print the `generator_parameters.json` stored in the named schedule node.
 Each generator parameters object is printed as a single line
 
@@ -1639,8 +1605,6 @@ Each generator parameters object is printed as a single line
 
 
 ### Workspace Location Tools
-
-IMPL TASK: generator parameters
 
     dh_hl workspace_schedule -s ...
     dh_hl workspace_parameters -s ...
@@ -1694,8 +1658,6 @@ this is load bearing for correctness, since it encodes more than a session full 
 ### JSON Schedule Info Tool
 
     dh_hl json_schedule_info -C ... [schedule ID]
-
-IMPL TASK: generator parameters
 
 Prints the state of the referenced schedule node as a JSON object, with key/value pairs
 
@@ -1796,8 +1758,6 @@ Prints the state of the current session as a JSON object, with key/value pairs
 
     dh_hl json_benchmark_info -C ... {benchmark ID}
 
-IMPL TASK: implement this
-
 Prints the identified benchmark in Benchmark JSON format
 
 
@@ -1805,16 +1765,12 @@ Prints the identified benchmark in Benchmark JSON format
 
     dh_hl json_benchmark_set_info -C ... {benchmark set ID}
 
-IMPL TASK: implement this
-
 Prints the state of the referenced benchmark set as a JSON object.
 
 
 ### JSON Export Tool
 
     dh_hl json_export -C ...
-
-IMPL TASK: benchmark sets
 
 Exports the entire catalog as a JSON object, with key/value pairs
 

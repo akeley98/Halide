@@ -38,31 +38,36 @@ def brighten_session(tmp_path, reset_safety):
     return Sess(catalog_dir, session_id)
 
 
-def test_build_and_profile_real_halide(brighten_session, run_tool, tmp_path,
-                                       capsys):
+def _stmt_line(path):
+    return path
+
+
+def test_build_and_profile_real_halide(brighten_session, run_tool, capsys):
     S = brighten_session
+    # Give the target two parameters objects, then init_build --target workspace
+    # (workspace now inconsistent -> a new child node with those params).
+    S.write_params('[{"offset": 5}, {"offset": 30}]')
+    run_tool(build.cmd_init_build,
+             S.ns(target="workspace", other="none", anchor="none"))
+    capsys.readouterr()
+
     with pytest.raises(SystemExit) as e:
-        run_tool(build.cmd_build, S.ns())
+        run_tool(build.cmd_build, S.ns(profile=1, only="all"))
     assert e.value.code == 0
-    # build prints both emitted stmt paths; both should really exist on disk.
+    # build announces both emitted stmt paths for the target; both exist on disk.
     printed = capsys.readouterr().out.splitlines()
-    stmt_lines = [ln for ln in printed if ln.endswith(".stmt")]
-    plain = [ln for ln in stmt_lines if not ln.endswith(".conceptual.stmt")]
-    conceptual = [ln for ln in stmt_lines if ln.endswith(".conceptual.stmt")]
-    assert len(plain) == 1 and os.path.isfile(plain[0])
-    assert len(conceptual) == 1 and os.path.isfile(conceptual[0])
+    stmt_lines = [ln.split("dh_hl: stmt: ", 1)[1]
+                  for ln in printed if ln.startswith("dh_hl: stmt: ")]
+    plain = [p for p in stmt_lines if not p.endswith(".conceptual.stmt")]
+    conceptual = [p for p in stmt_lines if p.endswith(".conceptual.stmt")]
+    assert len(plain) == 2 and all(os.path.isfile(p) for p in plain)
+    assert len(conceptual) == 2 and all(os.path.isfile(p) for p in conceptual)
 
-    params = tmp_path / "p.json"
-    params.write_text('[{"offset": 5}, {"offset": 30}]')
-    with pytest.raises(SystemExit) as e:
-        run_tool(build.cmd_profile, S.ns(parameters=str(params)))
-    assert e.value.code == 0
-
-    capsys.readouterr()  # discard profile output before reading the JSON
-    run_tool(tools.cmd_json_schedule_info, S.ns())
+    run_tool(tools.cmd_json_schedule_info, S.ns(schedule=None))
     obj = json.loads(capsys.readouterr().out)
     assert obj["result"] == "success"
     assert len(obj["benchmark"]) == 2
+    assert sorted(b["parameters"]["offset"] for b in obj["benchmark"]) == [5, 30]
     # profiler payload made it through
     assert obj["benchmark"][0]["profiler"]["name"]
     assert obj["benchmark"][0]["cpu_count"] >= 1
@@ -87,13 +92,16 @@ def hist_session(tmp_path, reset_safety):
 @pytest.mark.skipif(not os.path.isfile(_HIST), reason="hist generator missing")
 def test_view_benchmark_warnings_real_halide(hist_session, run_tool, capsys):
     S = hist_session
+    run_tool(build.cmd_init_build,
+             S.ns(target="workspace", other="none", anchor="none"))
+    capsys.readouterr()
     with pytest.raises(SystemExit) as e:
-        run_tool(build.cmd_profile, S.ns())
+        run_tool(build.cmd_build, S.ns(profile=1, only="all"))
     assert e.value.code == 0
-    # profile prints "Benchmark ID: <id>" for each saved benchmark.
+    # build prints "dh_hl: Benchmark ID: <id>" for each saved benchmark.
     bench_ids = [ln.split("Benchmark ID: ", 1)[1]
                  for ln in capsys.readouterr().out.splitlines()
-                 if ln.startswith("Benchmark ID: ")]
+                 if "Benchmark ID: " in ln]
     assert len(bench_ids) == 1
     bench_id = bench_ids[0]
 

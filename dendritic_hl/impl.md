@@ -21,7 +21,7 @@ the platform path fails (so profiling never crashes on a name lookup).  The RAW
 string is returned; every use as an ID or filename runs it through
 `ids.sanitize_component` first (session IDs via `make_session_id`, the benchmark
 `bench/{hostname}_{ts}.json` file name in `build.py`).  Only the benchmark JSON
-`hostname` field keeps the raw value (idea.md "Benchmark JSON Format").
+`hostname` field keeps the raw value (idea.md "Benchmark Sub-object State").
 
 The Mac path is tested; the Linux path is best-effort and David will verify it
 on the mantissa machine.  A machine-specific reminder test
@@ -63,11 +63,11 @@ This contains files and directories holding state:
 
 * **Generator Parameters:** `generator_parameters.json`
 
-IMPL TASK: hash considers `generator_parameters.json`
-
 * **Hash:** computed from the UTF-8 encoding of `generator.cpp` and
   `generator_parameters.json`, concatenated.
   Forms part of the full ID.
+  Implemented as `ids.schedule_content_hash`, shared by `Catalog.create_schedule`
+  and `SessionWorkspace.workspace_hash` so node and workspace never disagree.
 
 * **UTC wall time timestamp:** forms part of the full ID.
 
@@ -81,11 +81,11 @@ IMPL TASK: hash considers `generator_parameters.json`
   which was helping the "git compatibility" goal (e.g. encode merge conflict resolution),
   but just raised too many tough cases for a prototype with questionable payoff.
 
-IMPL TASK: gap 1 resolved: default is `unknown`
-
 * **Result:** `result.txt`,
   holding `unknown`, `c++ error`, `halide error`, `runtime error`, or `success`.
   The default value is `unknown`.
+  Ranked worst-to-best by `catalog.RESULT_RANK`; `build` only ever moves a node
+  to a better value (`catalog.best_result`).
 
 * **Benchmark Sub-objects:** store in `bench/{hostname}_{timestamp of benchmark}.json`
   (the `{hostname}` here is the *sanitized* stable hostname — see "Stable Hostname").
@@ -100,7 +100,7 @@ IMPL TASK: gap 1 resolved: default is `unknown`
   the `Benchmark` class in `catalog.py`; resolution/formatting are the
   `_resolve_benchmark` / `_format_benchmark_short` free functions (exposed via
   `Catalog.resolve_benchmark` / `Catalog.format_benchmark_id`).  The benchmark
-  JSON gains a `warnings` list (see "Benchmark JSON Format" and the
+  JSON gains a `warnings` list (see idea.md "Benchmark Sub-object State" and the
   `HL_PROFILER_JSON_TEMPORARY_WARNINGS` note in `reference_build_commands.md`).
 
 * **WarningToggle Files:** store in `warning_toggle/{timestamp}.json` with
@@ -228,16 +228,17 @@ unambiguously (`_SESSION_ID_RE` in `ids.py`).
 
 ### Benchmark Sets on Disk
 
-IMPL TASK: gap 2
-
 Stored in `benchmark_sets/{full id}.json` in the same format as would
 be exposed to the end user by the `json_benchmark_set_info` tool.
+Implemented as the `BenchmarkSet` class in `catalog.py`, created by
+`Catalog.create_benchmark_set` (mints the `{host}_{ts}` full ID) and resolved
+by exact full-ID match (`Catalog.resolve_benchmark_set`; no short IDs).
 
 *Merge risk:* low: will never conflict for benchmark sets generated
 on different machines with different sanitized hostnames, and will not
 conflict on one machine as long as the timestamp minting is not
 circumvented (e.g. by intentionally copying the catalog to two
-different directories and brute forces a timestamp collision)
+different directories and brute forcing a timestamp collision)
 
 
 ### Session Private Workspace
@@ -254,15 +255,12 @@ Inside the `private/{session id}` sub-directory, there is
 
 * `private_ideas.txt`, the session private idea list
 
-IMPL TASK: add `init_build.json`, document it in source comments (as
-specified) rather than here, as its format is really not of general
-interest. It must contain the path to the `generator.cpp` and
-`generator_parameters.json` of each schedule node to build.
-This way, the build tool can work without acquiring the catalog lock
-at first. `init_build` is literally a hack to make this locking easier.
-
-* `init_build.json`, left behind by `dh_hl init_build`.
-  The format is documented in the tool source code.
+* `init_build.json`, left behind by `dh_hl init_build`: the catalog-relative
+  `generator.cpp` + `generator_parameters.json` paths of each schedule node to
+  build (target/other/anchor).  This lets `build` compile without first
+  acquiring the catalog lock -- `init_build` is a hack to make that locking
+  easier.  Its format is documented in `build.py` (`_INIT_BUILD_FILE`), not
+  here, as it's not of general interest.
 
 Any command accessing `private/` or giving paths to it (`dh_hl bin` etc.)
 must initialize `private/{session id}` and its contents lazily,
@@ -583,9 +581,9 @@ pre-flight validation error, an environment problem — i.e. cases where the
 in-memory changes are incomplete or untrustworthy and must be undone. It is
 **not** triggered by a subprocess reporting a bad *build outcome*. Recording a
 schedule node whose C++ failed to compile (`c++ error`) or whose Halide
-generator failed (`halide error`) is the build/profile tool **succeeding at
+generator failed (`halide error`) is the build tool **succeeding at
 its cataloguing job** (recall the goal: "all C++ source code ever compiled
-will be catalogued"). Concretely, for `build`/`profile`:
+will be catalogued"). Concretely, for `build`:
 
 * Pre-flight validation problems (e.g. no current idea node, unresolved ID)
   are raised **before** any node is created, so rollback has nothing to undo.
@@ -763,8 +761,9 @@ name another process already committed).
 **Minting scheme for concurrency (implemented):** resolve uniqueness at
 *mint time*, under the catalog lock, **uniformly for every timestamped catalog
 name** — schedule dirs (`sch/{ts}_{hash}`), session dirs (`session/{id}`),
-commentary (`comment/{ts}_{hash}.json`), benchmarks (`bench/{host}_{ts}.json`), and
-warning toggles (`warning_toggle/{ts}.json`). To
+commentary (`comment/{ts}_{hash}.json`), benchmarks (`bench/{host}_{ts}.json`),
+warning toggles (`warning_toggle/{ts}.json`), and benchmark sets
+(`benchmark_sets/{host}_{ts}.json`). To
 mint a name: busy-wait `fresh_timestamp()` for process-local monotonicity, then
 `os.path.exists` the full candidate path; on a hit, re-mint and retry. Both
 guards are needed and neither alone suffices: the busy-wait separates names
@@ -779,7 +778,8 @@ This is implemented as `Catalog.mint_timestamped_name(build_path)` in
 whose uniqueness must hold. Its callers: `Catalog.create_schedule` (mints over
 `sch/{id}`), `ScheduleNode.add_commentary` (over the `comment/{ts}_{hash}.json`
 file), `ScheduleNode.add_benchmark` (over `bench/{host}_{ts}`), and
-`ScheduleNode.add_warning_toggle` (over `warning_toggle/{ts}.json`).
+`ScheduleNode.add_warning_toggle` (over `warning_toggle/{ts}.json`), and
+`Catalog.create_benchmark_set` (over `benchmark_sets/{host}_{ts}.json`).
 `add_benchmark` now mints internally and no longer takes an explicit timestamp
 argument — `build.py`'s profile loop just calls
 `node.add_benchmark(file_hostname, bench_obj)` (sanitized hostname for the file
@@ -844,8 +844,8 @@ still the idea-node collision check, so it does not use the mint helper.)
   handles `-` and turns a missing file into a clean `DhHlError`.
 * `tools.py` — every non-build `cmd_*` (catalog/idea/session queries + session
   lifecycle) plus shared print/JSON helpers.
-* `build.py` — `cmd_build` / `cmd_profile` (see Build/Profile Implementation
-  Details), with the toolchain steps behind the monkeypatch seams `_write_ninja`,
+* `build.py` — `cmd_init_build` / `cmd_build` (see the Build Tool in idea.md),
+  with the toolchain steps behind the monkeypatch seams `_write_ninja`,
   `_ninja_build`, `_discover_generator_name`, `_emit`, `_link`, `_run_benchmark`
   (see Tests).
 
@@ -955,8 +955,8 @@ solely so a subprocess test can prove the `atexit` rollback restores a partial
 mutation end-to-end (the real rollback path only fires at true interpreter
 exit). It is the one concession to testability in otherwise test-agnostic code.
 
-**Monkeypatch seams (build/profile).** `tests/test_build_fake.py` exercises the
-`build`/`profile` orchestration without a real Halide toolchain by using
+**Monkeypatch seams (init_build/build).** `tests/test_build_fake.py` exercises
+the `init_build`/`build` orchestration without a real Halide toolchain by using
 `pytest`'s `monkeypatch` to replace, *by name*, the `build.py` helpers that
 shell out: `_write_ninja`, `_ninja_build`, `_discover_generator_name`, `_emit`,
 `_link`, `_run_benchmark`. A test also calls `_emit` directly and inspects the
@@ -981,7 +981,7 @@ constructed while its catalog lock is held (see "Tool Safety: Lock Hierarchy" �
 Catalog lock invariant), so a test that constructs one at lock level NONE hits an
 `AssertionError`. Do **not** disable the assert. Instead:
 
-* Driving a **tool** (`cmd_*`, `build`/`profile`) in-process? Call it through the
+* Driving a **tool** (`cmd_*`, `init_build`/`build`) in-process? Call it through the
   `run_tool` fixture: `run_tool(tools.cmd_new_idea, sess.ns(...))`. It models one
   process invocation (reset lock state → take the shared machine lock → run), so
   the tool's own `Context.for_*` acquires the catalog/session locks normally.
@@ -1015,9 +1015,9 @@ failure, it means one of the above was skipped.
 when a test sets it to a list (a no-op otherwise). Under `fake_locks`, each
 `acquire_*` records `("machine","shared")`, `("session","exclusive")`,
 `("machine","exclusive")`, `("catalog","exclusive")` in order, so a test can
-assert the exact per-command lock sequence — e.g. that `profile` upgrades the
-machine lock to exclusive before taking the catalog lock and `build` does not,
-or that a read-only tool skips the session lock. This is white-box coverage the
+assert the exact per-command lock sequence — e.g. that `build --profile`
+upgrades the machine lock to exclusive before taking the catalog lock and a
+non-profiling `build` does not, or that a read-only tool skips the session lock. This is white-box coverage the
 subprocess tier cannot observe; real cross-process mutual exclusion is instead
 covered by the subprocess timing test (`test_locks.py`). (`run_tool` resets the
 sink per call, so `locks._trace_sink` reflects the most recent command.)

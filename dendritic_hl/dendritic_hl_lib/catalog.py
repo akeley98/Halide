@@ -56,6 +56,66 @@ COMMENTARY_REVIEWS = ("neutral", "negative", "positive", "lost_interest")
 # The two directional idea-side-link types (idea.md "Idea Node State").
 IDEA_SIDE_LINK_TYPES = ("borrows_from", "superseded_by")
 
+# Schedule node result states, worst -> best (idea.md "Schedule Node State").
+# The absence of result.txt reads as the worst value, "unknown".
+RESULT_STATES = ("unknown", "c++ error", "halide error", "runtime error",
+                 "success")
+RESULT_RANK = {state: i for i, state in enumerate(RESULT_STATES)}
+
+
+def best_result(a, b):
+    """The better (higher-ranked) of two result states."""
+    return a if RESULT_RANK[a] >= RESULT_RANK[b] else b
+
+
+# A schedule node's generator parameters are a JSON *list* of parameter objects
+# (idea.md "Schedule Node State" / "Generator Parameters JSON Object Format"),
+# stored verbatim in generator_parameters.json and hashed (with generator.cpp)
+# into the node's ID.  The default when none is supplied is a single empty
+# object: "benchmark once with no parameters".
+DEFAULT_PARAMETERS = [{}]
+
+
+def dump_parameters(params):
+    """Canonical serialization of a generator-parameters list to file text.
+
+    Used for programmatically created nodes (defaults, session duplicates) so
+    identical logical parameters yield identical bytes -- and therefore an
+    identical content hash -- everywhere.  Agent-authored workspace files are
+    instead copied verbatim, so their exact bytes are what get hashed."""
+    return json.dumps(params, indent=1) + "\n"
+
+
+def validate_parameters(params):
+    """Validate a parsed generator-parameters value: a JSON list of objects,
+    each mapping names to bool/number/string (idea.md "Generator Parameters JSON
+    Object Format").  Raises DhHlError on any violation; returns *params*."""
+    if not isinstance(params, list):
+        raise DhHlError("generator parameters must be a JSON list of objects")
+    for obj in params:
+        if not isinstance(obj, dict):
+            raise DhHlError(
+                "each generator parameters entry must be a JSON object")
+        for k, v in obj.items():
+            # bool is a subclass of int, so it is allowed implicitly.
+            if not isinstance(v, (bool, int, float, str)):
+                raise DhHlError(
+                    "generator parameter {!r} must be bool/number/string, got "
+                    "{}".format(k, type(v).__name__))
+    return params
+
+
+def load_parameters_text(text):
+    """Parse+validate generator-parameters file *text*, returning it verbatim
+    (so the exact bytes are what get hashed).  Raises DhHlError on bad JSON or
+    a shape violation."""
+    try:
+        params = json.loads(text)
+    except ValueError as e:
+        raise DhHlError("invalid generator parameters JSON: {}".format(e))
+    validate_parameters(params)
+    return text
+
 
 class Commentary:
     """One commentary file: comment/{ts}_{hash}.json (see idea.md "Commentary
@@ -132,7 +192,7 @@ class Commentary:
 
 class Benchmark:
     """One benchmark file: bench/{hostname}_{ts}.json holding a benchmark JSON
-    object (see idea.md "Benchmark JSON Format").
+    object (see idea.md "Benchmark Sub-object State").
 
     The file-name stem "{hostname}_{ts}" is the benchmark's *local ID* (hostname
     is the SANITIZED stable hostname).  Its *full ID* prepends the parent schedule
@@ -259,17 +319,61 @@ class WarningToggle:
 
 
 # ---------------------------------------------------------------------------
+# Benchmark set (top-level catalog object, not a schedule sub-object)
+# ---------------------------------------------------------------------------
+
+class BenchmarkSet:
+    """One benchmark_sets/{id}.json file (see idea.md "Benchmark Set State").
+
+    Full ID is "{sanitized hostname}_{timestamp}" (no short-ID form).  The JSON
+    payload is a 3-level structure, `data[schedule full ID][params index][batch]`
+    -> benchmark sub-object full ID.  It groups the benchmarks produced by one
+    `build --only all --profile N` run so comparison tools can compare only
+    within a batch (fighting profiler noise)."""
+
+    def __init__(self, catalog, full_id, data=_UNLOADED, is_new=False):
+        self.catalog = catalog
+        self.full_id = full_id
+        self._data = data
+        if is_new:
+            self.catalog._mark_dirty(self)
+
+    @property
+    def filename(self):
+        return self.full_id + ".json"
+
+    @property
+    def path(self):
+        return os.path.join(self.catalog.benchmark_sets_dir, self.filename)
+
+    @property
+    def data(self):
+        if self._data is _UNLOADED:
+            with open(self.path, "r", encoding="utf-8") as f:
+                self._data = json.load(f)
+        return self._data
+
+    def flush(self):
+        safety.makedirs_tracked(self.catalog.benchmark_sets_dir)
+        safety.new_file(self.path, json.dumps(self.data, indent=1) + "\n")
+
+
+# ---------------------------------------------------------------------------
 # Schedule node
 # ---------------------------------------------------------------------------
 
 class ScheduleNode:
-    def __init__(self, catalog, full_id, is_new=False, source=None):
+    def __init__(self, catalog, full_id, is_new=False, source=None,
+                 params_text=None):
         self.catalog = catalog
         self.full_id = full_id
         self.is_new = is_new
         self._source = source if source is not None else _UNLOADED
+        # Raw text of generator_parameters.json (hashed verbatim into the ID);
+        # `parameters` parses it into the JSON list on demand.
+        self._params_text = params_text if params_text is not None else _UNLOADED
         self._parent_id = _UNLOADED       # _UNLOADED / None (=root) / parent id str
-        self._result = _UNLOADED          # _UNLOADED / result str (absent file => "c++ error")
+        self._result = _UNLOADED          # _UNLOADED / result str (absent file => "unknown")
         self._result_dirty = False
         self._commentary = _UNLOADED      # list[Commentary]
         self._benchmarks = _UNLOADED      # list[Benchmark]
@@ -313,6 +417,26 @@ class ScheduleNode:
                 self._source = f.read().decode("utf-8")
         return self._source
 
+    # -- generator parameters --------------------------------------------
+    @property
+    def params_text(self):
+        """Raw text of generator_parameters.json (the bytes that were hashed)."""
+        if self._params_text is _UNLOADED:
+            with open(os.path.join(self.dir, "generator_parameters.json"),
+                      "rb") as f:
+                self._params_text = f.read().decode("utf-8")
+        return self._params_text
+
+    @property
+    def parameters(self):
+        """The generator-parameters list (parsed from params_text)."""
+        params = json.loads(self.params_text)
+        if not isinstance(params, list):
+            raise DhHlError(
+                "generator_parameters.json must hold a JSON list in "
+                + self.full_id)
+        return params
+
     # -- parent ----------------------------------------------------------
     @property
     def parent_id(self):
@@ -351,11 +475,11 @@ class ScheduleNode:
                 with open(p, "r", encoding="utf-8") as f:
                     self._result = f.read().strip()
             else:
-                self._result = "c++ error"  # default (worst)
+                self._result = "unknown"  # default (worst): no compile attempted
         return self._result
 
     def set_result(self, value):
-        assert value in ("c++ error", "halide error", "success")
+        assert value in RESULT_STATES
         self._result = value
         self._result_dirty = True
         self.catalog._mark_dirty(self)
@@ -488,6 +612,9 @@ class ScheduleNode:
         if self.is_new:
             safety.makedirs_tracked(self.dir)
             safety.new_file(os.path.join(self.dir, "generator.cpp"), self.source)
+            safety.new_file(
+                os.path.join(self.dir, "generator_parameters.json"),
+                self.params_text)
             if self.parent_id is not None:
                 safety.new_file(os.path.join(self.dir, "parent.txt"),
                                 self.parent_id + "\n")
@@ -934,10 +1061,12 @@ class Catalog:
         self.sch_dir = os.path.join(self.catalog_dir, "sch")
         self.idea_dir = os.path.join(self.catalog_dir, "idea")
         self.session_dir = os.path.join(self.catalog_dir, "session")
+        self.benchmark_sets_dir = os.path.join(self.catalog_dir, "benchmark_sets")
         self.private_dir = os.path.join(self.catalog_dir, "private")
         self._schedules = None
         self._ideas = None
         self._sessions = None
+        self._benchmark_sets = None
         self._linked = False
         self._session_linked = False
         self._dirty = {}            # id(obj) -> obj
@@ -1017,6 +1146,37 @@ class Catalog:
                     if ids.is_session_id(name):
                         self._sessions[name] = SessionNode(self, name)
         return self._sessions
+
+    @property
+    def benchmark_sets(self):
+        if self._benchmark_sets is None:
+            self._benchmark_sets = {}
+            if os.path.isdir(self.benchmark_sets_dir):
+                for name in os.listdir(self.benchmark_sets_dir):
+                    if name.endswith(".json"):
+                        stem = name[:-len(".json")]
+                        if ids.is_benchmark_set_id(stem):
+                            self._benchmark_sets[stem] = BenchmarkSet(self, stem)
+        return self._benchmark_sets
+
+    def create_benchmark_set(self, data):
+        """Create a new benchmark set holding *data* (the 3-level index).  The
+        full ID is "{sanitized hostname}_{timestamp}", minted under the catalog
+        lock like every other timestamped catalog name."""
+        host = ids.sanitize_component(ids.stable_hostname())
+        ts = self.mint_timestamped_name(
+            lambda t: os.path.join(self.benchmark_sets_dir,
+                                   ids.make_benchmark_set_id(host, t) + ".json"))
+        full_id = ids.make_benchmark_set_id(host, ts)
+        bs = BenchmarkSet(self, full_id, data=data, is_new=True)
+        self.benchmark_sets[full_id] = bs
+        return bs
+
+    def get_benchmark_set(self, full_id):
+        bs = self.benchmark_sets.get(full_id)
+        if bs is None:
+            raise DhHlError("no such benchmark set: " + full_id)
+        return bs
 
     def get_schedule(self, full_id):
         node = self.schedules.get(full_id)
@@ -1187,14 +1347,22 @@ class Catalog:
             schedule.child_idea_ids = schedule.child_idea_ids or []
             idea.child_schedule_ids.append(schedule.full_id)
 
-    def create_schedule(self, source, parent_idea=None):
-        """Create a brand-new schedule node holding *source* (a str).  If
-        parent_idea is given, link it (checking invariants); else it's a root."""
-        h = ids.sha256_hex(source)
+    def create_schedule(self, source, parent_idea=None, params_text=None):
+        """Create a brand-new schedule node holding *source* (a str) and
+        *params_text* (the generator_parameters.json text; defaults to the
+        canonical "[{}]" -- benchmark once with no parameters).  If parent_idea
+        is given, link it (checking invariants); else it's a root.
+
+        The node's content hash covers BOTH files (idea.md "Hash Format"), so
+        two schedules differing only in generator parameters are distinct nodes."""
+        if params_text is None:
+            params_text = dump_parameters(DEFAULT_PARAMETERS)
+        h = ids.schedule_content_hash(source, params_text)
         ts = self.mint_timestamped_name(
             lambda t: os.path.join(self.sch_dir, ids.make_schedule_id(t, h)))
         full_id = ids.make_schedule_id(ts, h)
-        node = ScheduleNode(self, full_id, is_new=True, source=source)
+        node = ScheduleNode(self, full_id, is_new=True, source=source,
+                            params_text=params_text)
         node._parent_id = None
         node._result_dirty = False
         self.schedules[full_id] = node
@@ -1297,6 +1465,7 @@ class Catalog:
         safety.makedirs_tracked(self.sch_dir)
         safety.makedirs_tracked(self.idea_dir)
         safety.makedirs_tracked(self.session_dir)
+        safety.makedirs_tracked(self.benchmark_sets_dir)
         gi = os.path.join(self.catalog_dir, ".gitignore")
         if not os.path.exists(gi):
             # The whole per-session private workspace tree is gitignored; only
@@ -1347,6 +1516,13 @@ class Catalog:
 
     def resolve_benchmark(self, s):
         return _resolve_benchmark(self, s)
+
+    def resolve_benchmark_set(self, s):
+        """Benchmark sets have no short-ID form (idea.md), so resolution is an
+        exact full-ID match against benchmark_sets/."""
+        if not ids.is_benchmark_set_id(s):
+            raise DhHlError("not a valid benchmark set ID: " + s)
+        return self.get_benchmark_set(s)
 
 
 # ---------------------------------------------------------------------------

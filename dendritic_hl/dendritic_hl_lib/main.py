@@ -105,8 +105,8 @@ COMMAND_HELP = {
     "status": "Report whether the workspace matches a tracked schedule node.",
     "restore_schedule": "Copy a schedule node's C++ into the workspace + set current idea.",
     "restore_idea": "Load an idea's parent schedule into the workspace to implement it.",
-    "build": "Compile the workspace and add/update its schedule node.",
-    "profile": "Like build, but benchmark with the profiler over parameter sets.",
+    "init_build": "Select up to 3 schedule nodes (target/other/anchor) for the next build.",
+    "build": "Compile (and optionally profile) the init_build selection.",
     "canon": "Make the current schedule the canonical schedule of the current idea.",
     "comment": "Attach commentary (with a review and optional cancels) to a schedule node.",
     "new_root": "Create a new root schedule node from the workspace.",
@@ -123,8 +123,12 @@ COMMAND_HELP = {
     "view_idea": "Show an idea node's proposal and child schedules.",
     "add_idea_side_link": "Add a borrows_from/superseded_by link between two idea nodes.",
     "force_parent_idea": "Parent a root schedule to an idea as its canonical (rare).",
+    "view_generator_parameters": "Pretty-print a schedule node's generator parameters.",
     "json_schedule_info": "Dump a schedule node's full state as JSON.",
     "json_idea_info": "Dump an idea node's full state as JSON.",
+    "json_benchmark_info": "Dump a benchmark sub-object as JSON.",
+    "json_benchmark_set_info": "Dump a benchmark set as JSON.",
+    "view_benchmark_stdout": "Print the stdout captured for a benchmark.",
     "add_warning_toggle": "Add a WarningToggle (block a warning or cancel another) to a schedule.",
     "debug_warning_toggle": "List the WarningToggles in effect for a schedule node.",
     "view_benchmark_warnings": "Pretty-print a benchmark's profiler warnings (with block info).",
@@ -152,6 +156,7 @@ COMMAND_HELP = {
     "session_output_full_id": "Print the current session's output schedule full ID.",
     "session_output_short_id": "Print the current session's output schedule short ID.",
     "workspace_schedule": "Print the path of the session's workspace C++ file.",
+    "workspace_parameters": "Print the path of the session's workspace generator parameters file.",
     "workspace_bin": "Print the path of the session's bin directory.",
     "schedule_full_id": "Print a schedule node's full ID.",
     "schedule_short_id": "Print a schedule node's short ID.",
@@ -194,13 +199,19 @@ def _build_parser():
     sp = add("restore_idea")
     sp.add_argument("idea", help="idea ID")
 
-    sp = add("build")
-    sp.add_argument("parameters", nargs="?",
-                    help="generator parameters JSON file ('-' for stdin)")
+    sp = add("init_build")
+    sp.add_argument("--target", default="workspace",
+                    help="target schedule ID, or 'workspace' (default)")
+    sp.add_argument("--other", default="parent",
+                    help="other schedule ID, 'parent' (default), or 'none'")
+    sp.add_argument("--anchor", default="auto",
+                    help="anchor schedule ID, 'auto' (default), 'always', or 'none'")
 
-    sp = add("profile")
-    sp.add_argument("parameters", nargs="?",
-                    help="generator parameters JSON file ('-' for stdin)")
+    sp = add("build")
+    sp.add_argument("--profile", nargs="?", type=int, const=1, default=0,
+                    metavar="N", help="profiler batches to run (default 0)")
+    sp.add_argument("--only", default="all", metavar="N|target|all",
+                    help="limit built binaries: 'all' (default), 'target', or index N")
 
     add("canon")
 
@@ -256,11 +267,23 @@ def _build_parser():
     sp.add_argument("idea", help="idea ID")
     sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
 
+    sp = add("view_generator_parameters")
+    sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
+
     sp = add("json_schedule_info")
     sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
 
     sp = add("json_idea_info")
     sp.add_argument("idea", help="idea ID")
+
+    sp = add("json_benchmark_info")
+    sp.add_argument("benchmark", help="benchmark ID")
+
+    sp = add("json_benchmark_set_info")
+    sp.add_argument("benchmark_set", help="benchmark set ID")
+
+    sp = add("view_benchmark_stdout")
+    sp.add_argument("benchmark", help="benchmark ID")
 
     sp = add("add_warning_toggle")
     sp.add_argument("schedule", help="schedule ID")
@@ -293,6 +316,9 @@ def _build_parser():
     sp.add_argument("proposal_name", help="seed idea proposal name [A-Za-z0-9_]{1,72}")
     sp.add_argument("proposal", help="seed idea proposal text file ('-' for stdin)")
     sp.add_argument("input_cpp", help="initial C++ generator file ('-' for stdin)")
+    sp.add_argument("input_parameters", nargs="?",
+                    help="generator parameters JSON list file ('-' for stdin; "
+                         "default [{}])")
 
     sp = add("new_sub_session")
     sp.add_argument("proposal_name", help="proposal name [A-Za-z0-9_]{1,72}")
@@ -332,6 +358,7 @@ def _build_parser():
     add("session_output_full_id")
     add("session_output_short_id")
     add("workspace_schedule")
+    add("workspace_parameters")
     add("workspace_bin")
 
     sp = add("schedule_full_id")
@@ -382,8 +409,8 @@ _DISPATCH = {
     "status": tools.cmd_status,
     "restore_schedule": tools.cmd_restore_schedule,
     "restore_idea": tools.cmd_restore_idea,
+    "init_build": build_mod.cmd_init_build,
     "build": build_mod.cmd_build,
-    "profile": build_mod.cmd_profile,
     "canon": tools.cmd_canon,
     "comment": tools.cmd_comment,
     "new_root": tools.cmd_new_root,
@@ -400,8 +427,12 @@ _DISPATCH = {
     "view_idea": tools.cmd_view_idea,
     "add_idea_side_link": tools.cmd_add_idea_side_link,
     "force_parent_idea": tools.cmd_force_parent_idea,
+    "view_generator_parameters": tools.cmd_view_generator_parameters,
     "json_schedule_info": tools.cmd_json_schedule_info,
     "json_idea_info": tools.cmd_json_idea_info,
+    "json_benchmark_info": tools.cmd_json_benchmark_info,
+    "json_benchmark_set_info": tools.cmd_json_benchmark_set_info,
+    "view_benchmark_stdout": tools.cmd_view_benchmark_stdout,
     "add_warning_toggle": tools.cmd_add_warning_toggle,
     "debug_warning_toggle": tools.cmd_debug_warning_toggle,
     "view_benchmark_warnings": tools.cmd_view_benchmark_warnings,
@@ -427,6 +458,7 @@ _DISPATCH = {
     "session_output_full_id": tools.cmd_session_output_full_id,
     "session_output_short_id": tools.cmd_session_output_short_id,
     "workspace_schedule": tools.cmd_workspace_schedule,
+    "workspace_parameters": tools.cmd_workspace_parameters,
     "workspace_bin": tools.cmd_workspace_bin,
     "schedule_full_id": tools.cmd_schedule_full_id,
     "schedule_short_id": tools.cmd_schedule_short_id,

@@ -72,42 +72,65 @@ def _recorded_params(run_cli, S):
     return [b["parameters"] for b in _schedule_json(run_cli, S)["benchmark"]]
 
 
-# ---- profile: the three parameters-file shapes ----------------------------
+def _set_params(S, text):
+    """Write the workspace generator_parameters.json (a JSON *list*)."""
+    S.write_params(text)
 
-def test_profile_no_parameters_file(run_cli, tiled_session):
-    """Omitted parameters file => a single profile with empty parameters."""
-    assert run_cli("profile", *_cli(tiled_session)).returncode == 0
+
+def _init_and_build(run_cli, S, profile=1):
+    """init_build the (perturbed) workspace as target-only, then build."""
+    r = run_cli("init_build", *_cli(S), "--other", "none", "--anchor", "none")
+    assert r.returncode == 0, r.stderr
+    args = ["build", *_cli(S)]
+    if profile:
+        args += ["--profile", str(profile)]
+    r = run_cli(*args)
+    assert r.returncode == 0, r.stderr
+
+
+# ---- generator parameters now live in the schedule node -------------------
+
+def test_default_parameters(run_cli, tiled_session):
+    """The seed workspace defaults to `[{}]` => one profile, empty parameters."""
+    _init_and_build(run_cli, tiled_session)
     assert _recorded_params(run_cli, tiled_session) == [{}]
 
 
-def test_profile_single_object_file(run_cli, tiled_session, tmp_path):
-    """A file holding a single JSON object => one profile with those params."""
-    pf = tmp_path / "p.json"
-    pf.write_text('{"split_factor": 16}')
-    assert run_cli("profile", *_cli(tiled_session), str(pf)).returncode == 0
+def test_single_parameters_object(run_cli, tiled_session):
+    """A one-element list => one profile with those params."""
+    _set_params(tiled_session, '[{"split_factor": 16}]')
+    _init_and_build(run_cli, tiled_session)
     assert _recorded_params(run_cli, tiled_session) == [{"split_factor": 16}]
 
 
-def test_profile_list_file(run_cli, tiled_session, tmp_path):
-    """A file holding a JSON list => one profile per element, in order."""
-    pf = tmp_path / "p.json"
-    pf.write_text('[{"split_factor": 8}, {"split_factor": 16}, {"split_factor": 32}]')
-    assert run_cli("profile", *_cli(tiled_session), str(pf)).returncode == 0
-    assert _recorded_params(run_cli, tiled_session) == [
-        {"split_factor": 8}, {"split_factor": 16}, {"split_factor": 32}]
+def test_parameters_list(run_cli, tiled_session):
+    """A multi-element list => one profile per element (order-independent, since
+    profiling interleaves the binaries in a shuffled order each batch)."""
+    _set_params(tiled_session,
+                '[{"split_factor": 8}, {"split_factor": 16}, {"split_factor": 32}]')
+    _init_and_build(run_cli, tiled_session)
+    recorded = _recorded_params(run_cli, tiled_session)
+    assert sorted(p["split_factor"] for p in recorded) == [8, 16, 32]
 
 
-def test_profile_object_via_stdin(run_cli, tiled_session):
-    """`-` reads the parameters JSON from stdin (the universal stdin path)."""
-    r = run_cli("profile", *_cli(tiled_session), "-", input='{"split_factor": 32}')
+def test_view_generator_parameters(run_cli, tiled_session):
+    """view_generator_parameters prints one line per params object."""
+    _set_params(tiled_session, '[{"split_factor": 8}, {"split_factor": 16}]')
+    r = run_cli("init_build", *_cli(tiled_session), "--other", "none",
+                "--anchor", "none")
     assert r.returncode == 0, r.stderr
-    assert _recorded_params(run_cli, tiled_session) == [{"split_factor": 32}]
+    r = run_cli("view_generator_parameters", *_cli(tiled_session))
+    assert r.returncode == 0, r.stderr
+    lines = r.stdout.splitlines()
+    assert lines[0].startswith("0 ") and '"split_factor": 8' in lines[0]
+    assert lines[1].startswith("1 ") and '"split_factor": 16' in lines[1]
 
 
 # ---- build: parameter leaves a signature in the emitted .stmt -------------
 
-def test_build_parameter_changes_stmt_loop_bound(run_cli, tiled_session, tmp_path):
-    stmt = os.path.join(tiled_session.private_dir, "bin", "dh_hl_gen.stmt")
+def test_build_parameter_changes_stmt_loop_bound(run_cli, tiled_session):
+    # The target's stmt for params index 0 is published to bin/0.stmt.
+    stmt = os.path.join(tiled_session.private_dir, "bin", "0.stmt")
 
     # NOTE: the `x.xi, 0, N)` fragments below encode what I observed of this
     # Halide build's .stmt syntax (empirically, not from a spec):
@@ -120,21 +143,20 @@ def test_build_parameter_changes_stmt_loop_bound(run_cli, tiled_session, tmp_pat
     # If a Halide upgrade changes either convention, update these fragments.
 
     # Default GeneratorParam (split_factor=8): inner split loop bound is 7.
-    assert run_cli("build", *_cli(tiled_session)).returncode == 0
+    _init_and_build(run_cli, tiled_session, profile=0)
     text = open(stmt).read()
     assert "x.xi, 0, 7)" in text
     assert "x.xi, 0, 15)" not in text
 
     # split_factor=16: the inner loop bound tracks the parameter (now 15).
-    pf16 = tmp_path / "p16.json"
-    pf16.write_text('{"split_factor": 16}')
-    assert run_cli("build", *_cli(tiled_session), str(pf16)).returncode == 0
+    _set_params(tiled_session, '[{"split_factor": 16}]')
+    _init_and_build(run_cli, tiled_session, profile=0)
     text = open(stmt).read()
     assert "x.xi, 0, 15)" in text
     assert "x.xi, 0, 7)" not in text
 
-    # split_factor=32 via stdin: bound becomes 31.
-    r = run_cli("build", *_cli(tiled_session), "-", input='{"split_factor": 32}')
-    assert r.returncode == 0, r.stderr
+    # split_factor=32: bound becomes 31.
+    _set_params(tiled_session, '[{"split_factor": 32}]')
+    _init_and_build(run_cli, tiled_session, profile=0)
     text = open(stmt).read()
     assert "x.xi, 0, 31)" in text

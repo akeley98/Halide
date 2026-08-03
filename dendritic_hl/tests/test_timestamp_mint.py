@@ -61,7 +61,9 @@ def test_create_schedule_remints_on_dir_collision(tmp_path, monkeypatch):
     monkeypatch.setattr(cat, "fresh_timestamp", lambda: next(seq))
 
     source = "some source"
-    h = ids.sha256_hex(source)
+    from dendritic_hl_lib.catalog import DEFAULT_PARAMETERS, dump_parameters
+    # The content hash covers generator.cpp AND generator_parameters.json.
+    h = ids.schedule_content_hash(source, dump_parameters(DEFAULT_PARAMETERS))
     taken = ids.make_schedule_id("2026-01-01T000000_000001Z", h)
     os.mkdir(os.path.join(cat.sch_dir, taken))  # squat the first candidate
 

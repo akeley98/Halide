@@ -18,7 +18,8 @@ import sys
 from . import ids
 from . import locks
 from . import safety
-from .catalog import Catalog, CurrentIdeaState
+from .catalog import (Catalog, CurrentIdeaState, DEFAULT_PARAMETERS,
+                      dump_parameters)
 from .errors import DhHlError
 
 
@@ -38,8 +39,11 @@ class SessionWorkspace:
         self.catalog_dir = os.path.abspath(catalog_dir)
         self.private_dir = os.path.join(self.catalog_dir, "private", session_id)
         self.workspace_path = os.path.join(self.private_dir, "generator.cpp")
+        self.params_path = os.path.join(self.private_dir,
+                                        "generator_parameters.json")
         self.bin_dir = os.path.join(self.private_dir, "bin")
         self._workspace_bytes = None
+        self._params_text = None
         self._current_idea = None
 
     @property
@@ -82,18 +86,40 @@ class SessionWorkspace:
         return self.workspace_bytes.decode("utf-8")
 
     @property
-    def workspace_hash(self):
-        return ids.sha256_hex(self.workspace_bytes)
+    def workspace_params_text(self):
+        """Text of the workspace generator_parameters.json.  A missing file
+        defaults to the canonical "[{}]" so the workspace always has parameters
+        to build/hash (matching a node created with the same default)."""
+        if self._params_text is None:
+            try:
+                with open(self.params_path, "rb") as f:
+                    self._params_text = f.read().decode("utf-8")
+            except FileNotFoundError:
+                self._params_text = dump_parameters(DEFAULT_PARAMETERS)
+        return self._params_text
 
-    def initialize(self, source, idea_state):
-        """Initialize a fresh private workspace: write generator.cpp (deferred
-        overwrite, never rolled back -- honoring 'never delete the workspace
-        file') and set the current idea state.  *idea_state* is ('idea', id) or
-        ('no_idea', timestamp)."""
+    @property
+    def workspace_hash(self):
+        # Content hash covers BOTH workspace files, identical to how a schedule
+        # node's ID hash is computed (idea.md "Hash Format"), so `status` /
+        # `new_root` node matching stays exact.
+        return ids.schedule_content_hash(self.workspace_bytes,
+                                         self.workspace_params_text)
+
+    def initialize(self, source, idea_state, params_text=None):
+        """Initialize a fresh private workspace: write generator.cpp and
+        generator_parameters.json (deferred overwrites, never rolled back --
+        honoring 'never delete the workspace file') and set the current idea
+        state.  *idea_state* is ('idea', id) or ('no_idea', timestamp).
+        *params_text* defaults to the canonical "[{}]"."""
         self.ensure_private_dir()
+        if params_text is None:
+            params_text = dump_parameters(DEFAULT_PARAMETERS)
         safety.queue_overwrite(self.workspace_path, source)
+        safety.queue_overwrite(self.params_path, params_text)
         self._workspace_bytes = (source.encode("utf-8")
                                  if isinstance(source, str) else source)
+        self._params_text = params_text
         kind, val = idea_state
         if kind == "idea":
             self.current_idea_state.set_idea(val)

@@ -44,6 +44,19 @@ def sha256_hex(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def schedule_content_hash(source, params_text):
+    """The content hash forming part of a schedule node's ID: sha256 over the
+    UTF-8 encoding of generator.cpp concatenated with generator_parameters.json
+    (idea.md "Hash Format" / impl.md "Schedule Nodes on Disk").
+
+    Both arguments may be str or bytes; str is encoded as UTF-8.  This is the
+    single definition of the hash, shared by node creation and the workspace's
+    matching-node lookup, so the two can never disagree."""
+    def to_bytes(x):
+        return x.encode("utf-8") if isinstance(x, str) else x
+    return sha256_hex(to_bytes(source) + to_bytes(params_text))
+
+
 def is_timestamp(s):
     return bool(_TIMESTAMP_RE.match(s))
 
@@ -185,6 +198,31 @@ def benchmark_hostname(local):
 
 def benchmark_timestamp(local):
     return local[-TIMESTAMP_LEN:]
+
+
+# ---- Benchmark set full IDs -------------------------------------------------
+#
+# Benchmark set full ID = "{sanitized hostname}_{timestamp}" (idea.md "Benchmark
+# Set State").  There is no schedule prefix (a set spans schedule nodes) and no
+# short-ID form.  The hostname uniquifies across machines; the minted timestamp
+# uniquifies on one machine.  Same shape as a benchmark *local* ID, but the two
+# resolve in different namespaces (sets are top-level, matched against
+# benchmark_sets/ file names), so there is no ambiguity.
+
+def make_benchmark_set_id(hostname, timestamp):
+    return "{}_{}".format(hostname, timestamp)
+
+
+def is_benchmark_set_id(full_id):
+    # "{hostname}_{timestamp}": strip the fixed-width timestamp tail; the char
+    # before it must be '_', and the hostname must match the sanitized alphabet.
+    if len(full_id) < 1 + 1 + TIMESTAMP_LEN:
+        return False
+    ts = full_id[-TIMESTAMP_LEN:]
+    sep = full_id[-TIMESTAMP_LEN - 1]
+    host = full_id[:-TIMESTAMP_LEN - 1]
+    return (sep == "_" and is_timestamp(ts) and bool(host)
+            and re.match(r"[A-Za-z0-9_-]+\Z", host) is not None)
 
 
 # ---- Session node full IDs -------------------------------------------------

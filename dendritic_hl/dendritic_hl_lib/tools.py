@@ -14,7 +14,9 @@ from . import locks
 from . import profiler_warnings
 from . import prompts
 from . import safety
-from .catalog import Catalog, COMMENTARY_REVIEWS, IDEA_SIDE_LINK_TYPES
+from .catalog import (Catalog, COMMENTARY_REVIEWS, DEFAULT_PARAMETERS,
+                      IDEA_SIDE_LINK_TYPES, dump_parameters,
+                      load_parameters_text)
 from .context import (Context, SessionWorkspace, resolve_target,
                       _validate_catalog_dir, read_text_or_stdin)
 from .errors import DhHlError
@@ -196,9 +198,11 @@ def cmd_restore_schedule(args):
         cis.set_no_idea(node.timestamp)
     else:
         cis.set_idea(node.parent_id)
-    # Overwrite workspace file last (deferred; never rolled back).
+    # Overwrite workspace files last (deferred; never rolled back).  Copy the
+    # parameters verbatim too, so the workspace round-trips to the same hash.
     from . import safety
     safety.queue_overwrite(ws.workspace_path, node.source)
+    safety.queue_overwrite(ws.params_path, node.params_text)
     ctx.finish()
     print("Restored workspace from " + ctx.catalog.format_schedule_id(node))
 
@@ -215,9 +219,10 @@ def cmd_restore_idea(args):
     ws = ctx.workspace
     ws.ensure_private_dir()
     ws.current_idea_state.set_idea(idea.full_id)
-    # Overwrite workspace file last (deferred; never rolled back).
+    # Overwrite workspace files last (deferred; never rolled back).
     from . import safety
     safety.queue_overwrite(ws.workspace_path, parent.source)
+    safety.queue_overwrite(ws.params_path, parent.params_text)
     ctx.finish()
     print("Restored workspace from idea {}'s parent schedule {}".format(
         catalog.format_idea_id(idea), catalog.format_schedule_id(parent)))
@@ -286,7 +291,8 @@ def cmd_new_root(args):
     cis = ws.current_idea_state
     conflict_lines = list(cis.parsed_lines) if cis.kind == "conflict" else []
 
-    node = catalog.create_schedule(ws.workspace_source, parent_idea=None)
+    node = catalog.create_schedule(ws.workspace_source, parent_idea=None,
+                                   params_text=ws.workspace_params_text)
     cis.set_no_idea(node.timestamp)
 
     if conflict_lines:
@@ -574,6 +580,7 @@ def _schedule_json(catalog, node):
         "parent": node.parent_id,
         "children": [i.full_id for i in catalog.child_ideas(node)],
         "source": node.source,
+        "parameters": node.parameters,
         "timestamp": node.timestamp,
         "hash": node.hash,
         "result": node.result,
@@ -626,10 +633,37 @@ def _session_json(catalog, session):
     }
 
 
+def cmd_view_generator_parameters(args):
+    ctx = Context.for_catalog(args)
+    node = ctx.resolve_schedule_arg(args.schedule)
+    # One line per parameters object: "{index} {JSON object as one line}".
+    for i, obj in enumerate(node.parameters):
+        print("{} {}".format(i, json.dumps(obj, sort_keys=True)))
+
+
 def cmd_json_schedule_info(args):
     ctx = Context.for_catalog(args)
     node = ctx.resolve_schedule_arg(args.schedule)
     print(json.dumps(_schedule_json(ctx.catalog, node), indent=1))
+
+
+def cmd_json_benchmark_info(args):
+    ctx = Context.for_catalog(args)
+    bench = ctx.catalog.resolve_benchmark(args.benchmark)
+    print(json.dumps(bench.data, indent=1))
+
+
+def cmd_json_benchmark_set_info(args):
+    ctx = Context.for_catalog(args)
+    bs = ctx.catalog.resolve_benchmark_set(args.benchmark_set)
+    print(json.dumps(bs.data, indent=1))
+
+
+def cmd_view_benchmark_stdout(args):
+    ctx = Context.for_catalog(args)
+    bench = ctx.catalog.resolve_benchmark(args.benchmark)
+    # Pre-stdout benchmarks default to "" (idea.md "Benchmark Sub-object State").
+    sys.stdout.write(bench.data.get("stdout", ""))
 
 
 def cmd_json_idea_info(args):
@@ -654,6 +688,8 @@ def cmd_json_export(args):
                       for s in catalog.schedules.values()},
         "sessions": {s.full_id: _session_json(catalog, s)
                      for s in catalog.sessions.values()},
+        "benchmark_sets": {b.full_id: b.data
+                           for b in catalog.benchmark_sets.values()},
     }
     print(json.dumps(obj, indent=1))
 
@@ -733,8 +769,10 @@ def _create_session_and_idea(catalog, parent_schedule, proposal_name,
     session = catalog.create_session(idea, parent_session, depth,
                                      session_id=session_id)
     ws = SessionWorkspace(catalog.catalog_dir, session_id, catalog=catalog)
-    ws.initialize(parent_schedule.source, ("idea", idea.full_id))
-    dup = catalog.create_schedule(parent_schedule.source, parent_idea=idea)
+    ws.initialize(parent_schedule.source, ("idea", idea.full_id),
+                  params_text=parent_schedule.params_text)
+    dup = catalog.create_schedule(parent_schedule.source, parent_idea=idea,
+                                  params_text=parent_schedule.params_text)
     idea.set_canonical(dup.full_id)
     handle = locks.allocate_handle(catalog.catalog_dir, session_id)
     return session, handle
@@ -749,12 +787,18 @@ def cmd_new_catalog(args):
                         + repr(args.proposal_name))
     input_source = read_text_or_stdin(args.input_cpp)
     proposal_text = read_text_or_stdin(args.proposal)
+    # Optional generator parameters; default is "[{}]" (benchmark once, no params).
+    if getattr(args, "input_parameters", None) is not None:
+        params_text = load_parameters_text(read_text_or_stdin(args.input_parameters))
+    else:
+        params_text = dump_parameters(DEFAULT_PARAMETERS)
 
     safety.makedirs_tracked(catalog_dir)
     locks.acquire_catalog(catalog_dir)
     catalog = Catalog(catalog_dir)
     catalog.ensure_created()
-    root = catalog.create_schedule(input_source, parent_idea=None)
+    root = catalog.create_schedule(input_source, parent_idea=None,
+                                   params_text=params_text)
     session, handle = _create_session_and_idea(
         catalog, root, args.proposal_name, proposal_text,
         parent_session=None, depth=0)
@@ -1002,6 +1046,12 @@ def cmd_workspace_schedule(args):
     ctx = Context.for_session(args, session_lock=False)
     ctx.session  # validate the session exists
     print(ctx.workspace.workspace_path)
+
+
+def cmd_workspace_parameters(args):
+    ctx = Context.for_session(args, session_lock=False)
+    ctx.session  # validate the session exists
+    print(ctx.workspace.params_path)
 
 
 def cmd_workspace_bin(args):

@@ -144,6 +144,16 @@ class Sess:
         with open(self.workspace_path, "w", encoding="utf-8") as f:
             f.write(text)
 
+    def write_params(self, text):
+        """Overwrite the workspace generator_parameters.json (str or JSON-able)."""
+        import json as _json
+        os.makedirs(self.private_dir, exist_ok=True)
+        if not isinstance(text, str):
+            text = _json.dumps(text)
+        with open(os.path.join(self.private_dir, "generator_parameters.json"),
+                  "w", encoding="utf-8") as f:
+            f.write(text)
+
     def set_no_idea(self, timestamp):
         """Force the current idea state to 'no_idea' (for root-oriented flows)."""
         p = os.path.join(self.private_dir, "current_idea_state.txt")
