@@ -994,8 +994,8 @@ Flags:
 This tool exits successfully iff no harness errors occurred
 and all subprocesses succeeded.
 A new benchmark set is generated, containing all benchmark objects
-made by this tool run, iff `--only all` is in effect
-and no subprocesses failed.
+made by this tool run, iff `--only all` is in effect,
+profiler batch count is at least 1, and no subprocesses failed.
 
 Important lines emitted by the harness itself are prefixed with
 `dh_hl: ` for grep-ability.

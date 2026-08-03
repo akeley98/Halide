@@ -46,7 +46,7 @@ The top-level catalog directory contains sub-directories for each node type:
 * `idea`
 * `sch`
 * `session`
-* `benchmark_set`
+* `benchmark_sets`
 
 as well as
 
@@ -236,7 +236,7 @@ be exposed to the end user by the `json_benchmark_set_info` tool.
 *Merge risk:* low: will never conflict for benchmark sets generated
 on different machines with different sanitized hostnames, and will not
 conflict on one machine as long as the timestamp minting is not
-circumvented (e.g. by intentionally copies the catalog to two
+circumvented (e.g. by intentionally copying the catalog to two
 different directories and brute forces a timestamp collision)
 
 
