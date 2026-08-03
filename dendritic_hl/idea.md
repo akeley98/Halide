@@ -188,12 +188,15 @@ All pairs go to the Halide generator as `key=value`.
 
 ### Session Node State
 
-* **Seed Idea:** Mandatory reference to an idea node.
-  For sub-agents, the proposal of the idea is meant to be the prompt.
+* **Session Node Full ID:** `{depth}_{timestamp}_{username}@{hostname}`.
+  This is, for now, intentionally de-anonymizing.
+  The `username` and `hostname` are sanitized in the filename.
+  The `hostname` is the *stable* hostname (see impl.md "Stable Hostname"),
+  which on a Mac may contain spaces/punctuation before sanitization.
 
-* **Output Schedule:** Optional reference to a schedule node.
-  This is the "final result" of the session,
-  and the commentary should be used to summarize the session findings.
+* **Prompt:** Plain text.
+
+* **Seed Ideas:** References to ideas to start at.
 
 * **Is-delisted Flag:** Initially false.
 
@@ -201,17 +204,21 @@ All pairs go to the Halide generator as `key=value`.
 
 * **Parent Session:** Optional, reference to another session node.
 
-* **Session Node Full ID:** `{depth}_{timestamp}_{username}@{hostname}`.
-  This is, for now, intentionally de-anonymizing.
-  The `username` and `hostname` are sanitized in the filename.
-  The `hostname` is the *stable* hostname (see impl.md "Stable Hostname"),
-  which on a Mac may contain spaces/punctuation before sanitization.
+* **Outputs:** Optional, added when a session is closed.
+  This is the "final result" of the session.
+  It consists of an ordered list of output schedule nodes
+  (each mapped to a string "pool tag")
+  and output benchmark sets.
+  Output schedule commentary should be used to summarize the session findings.
+  The first output schedule is the "primary output schedule"
+  which usually should be the best found.
 
 * **Session Private Workspace** state: gitignore'd per-session-node state.
   This contains a session lock,
   current idea state,
+  current anchor schedule,
   a session private ideas list,
-  a workspace C++ schedule,
+  a workspace C++ schedule and `generator_parameters.json`,
   and a `bin` directory.
 
 Most harness tools require a "current session",
@@ -355,6 +362,23 @@ The "current idea state" stored in the current session is a tagged union of
 * **Some current idea state**: contains full ID of an idea node.
 
 
+### Current Anchor Schedule
+
+Each session may reference a single "anchor schedule", or none at all,
+as part of its session private workspace state.
+Wall time costs are based on relative comparison to the anchor schedule,
+except for direct 2-way comparisons.
+
+
+### Private Idea List
+
+List of idea nodes stored in session private workspace state.
+Each is associated with a string "pool tag" and a cost.
+
+FUTURE: This is used to build a "frontier" of ideas for the
+session's agent to explore (`list_private_ideas` tool).
+
+
 ## Session Tree Concepts
 
 The tools only construct two kinds of parent-session-to-child-session edges:
@@ -377,12 +401,14 @@ From this there's two derived states:
 
 ### Terminus Schedule ("Final Result")
 
+IMPL TASK: now defined as primary output schedule
+
 The catalog is a tree of schedules,
 so it's not necessarily clear which one is the "final" schedule.
 
 The convention is this: there usually should be only one terminus,
 it should be closed,
-and its output schedule is the "final result" of LLM-guided scheduling so far.
+and its primary output schedule is the "final result" of LLM-guided scheduling so far.
 
 Advice: there should be only one top-level (main) agent,
 working on a level 0 session.
@@ -1536,19 +1562,13 @@ Useful to get rid of old abandoned sessions in the open sessions or termini list
 
 ### List Session Private Ideas Tool
 
-    dh_hl list_private_ideas -s ... [N]
-    dh_hl list_private_ideas_todo -s ... [N]
-    dh_hl list_private_ideas_done -s ... [N]
+IMPL TASK: remove `list_private_ideas*` tools.  Will be revamped as a
+future task.  For now, session private idea list can be tested with
+`get_pool_tag` including the error case.  Please write tests that have
+multiple session nodes as a guard against future accidental mixing of
+different sessions' states.
 
-List the session private ideas, in the same format as `list_ideas`.
-The list is sorted by the time the idea was added to the private idea list,
-most recent first.
-
-`list_private_ideas_todo` excludes idea nodes with canonical schedules.
-`list_private_ideas_done` exclused idea nodes without canonical schedules.
-
-If `[N]` (integer) is provided, list only the first up-to-`N` ideas.
-Excluded ideas don't count against the limit.
+FUTURE: add tool.
 
 
 ### Forget Session Private Idea Tool

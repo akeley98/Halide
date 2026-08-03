@@ -207,13 +207,24 @@ unambiguously (`_SESSION_ID_RE` in `ids.py`).
 
 * **ID:** directory name.
 
+* **Prompt:** `prompt.txt`
+
 * **Parent:** `parent.txt` holds a session node full ID plus a newline,
   unless there is no parent, in which case this file doesn't exist.
 
-* **Seed Idea:** `seed_idea.txt` holds an idea node full ID plus a newline.
+IMPL TASK: new seed ideas, multiple and not just one.
 
-* **Output Schedule:** `output_schedule.txt` holds a schedule node full ID plus a newline,
-  unless there is no output schedule, in which case this file doesn't exist.
+* **Seed Idea:** `seed_ideas.json` holds a list of idea node full IDs.
+
+IMPL TASK: default anchor schedule
+
+* **Default Anchor Schedule:** if it exists, its full ID plus a newline is in
+  `default_anchor_schedule.txt`
+
+IMPL TASK: come up with your own reasonable outputs JSON internal format
+and document in a `###` sub-section right under this.
+
+* **Outputs:** `outputs.json`, doesn't exist if no outputs yet.
 
 * **Delisted Flag:** Delisted iff `delisted.txt` exists; contents are ignored.
 
@@ -223,7 +234,7 @@ unambiguously (`_SESSION_ID_RE` in `ids.py`).
 
 * **Timestamp:** implied from the ID
 
-*Merge risk:* `output_schedule.txt`, no automatic fix provided.
+*Merge risk:* `outputs.json`, no automatic fix provided.
 
 
 ### Benchmark Sets on Disk
@@ -249,11 +260,24 @@ Inside the `private/{session id}` sub-directory, there is
 
 * `generator.cpp`, workspace C++ file
 
+* `generator_parameters.json`, workspace generator parameters file
+
 * `current_idea_state.txt`, current idea state
 
 * `bin/` directory
 
-* `private_ideas.txt`, the session private idea list
+* `current_anchor_schedule.txt`, full ID of schedule node and newline.
+  No file if there's no current anchor schedule.
+
+IMPL TASK: replace .txt with .json and remove all documentation references
+to the ordering of the stored ideas list.  The changes this turn are
+to prepare for a future tool that shows current ideas ranked by pool
+and cost. The cost is not to be implemented yet.
+
+* `private_ideas.json`, the session private idea list (actually JSON object).
+  The keys are the set of idea node full IDs comprising the list.
+  The values are the pool tags (strings).
+  The cost is not stored here; it's derived when needed.
 
 * `init_build.json`, left behind by `dh_hl init_build`: the catalog-relative
   `generator.cpp` + `generator_parameters.json` paths of each schedule node to
