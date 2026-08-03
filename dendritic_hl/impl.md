@@ -6,6 +6,18 @@ behavior contract).  Keep the two in sync when changing a tool.
 For now this tool is an early prototype and backwards compatibility is a non-goal.
 So do not worry when implementing changes that would break reading old catalogs.
 
+IMPL TASK: paragraphs like these highlight where the doc describes features
+not yet implemented in the actual code (that's the agent's job).
+When you're reasonably confident the task is done, delete the IMPL TASK paragraph.
+Leave them in if there's significant doubt,
+or clarification is required from the user.
+
+NOTE: I got tired of the split of per-tool information between
+`idea.md` and `impl.md`, so now the tool-specific implementation information
+is in `idea.md` only.
+At some time I'll figure out how to strip this from the prompt to avoid
+wasting tokens for agents using the harness (not implementing it).
+
 
 # Stable Hostname
 
@@ -207,6 +219,8 @@ unambiguously (`_SESSION_ID_RE` in `ids.py`).
 
 * **ID:** directory name.
 
+IMPL TASK: prompt
+
 * **Prompt:** `prompt.txt`
 
 * **Parent:** `parent.txt` holds a session node full ID plus a newline,
@@ -221,7 +235,7 @@ IMPL TASK: default anchor schedule
 * **Default Anchor Schedule:** if it exists, its full ID plus a newline is in
   `default_anchor_schedule.txt`
 
-IMPL TASK: come up with your own reasonable outputs JSON internal format
+IMPL TASK: implement your own reasonable outputs JSON internal format
 and document in a `###` sub-section right under this.
 
 * **Outputs:** `outputs.json`, doesn't exist if no outputs yet.
@@ -278,6 +292,18 @@ and cost. The cost is not to be implemented yet.
   The keys are the set of idea node full IDs comprising the list.
   The values are the pool tags (strings).
   The cost is not stored here; it's derived when needed.
+
+IMPL TASK: private benchmark set list.  The values will become
+non-trivial once cost is implemented.  Please implement a separate
+object with an allow-overwrite flush to store the private benchmark
+set list.  In the future, the value will be initialized when a new
+benchmark set is added to the list, so a centralized "add benchmark
+set" helper will be prudent.
+Discuss with me if the "new flushable object" plan is questionable.
+
+* `private_benchmark_sets.json`, the session private benchmark set list.
+  The keys are the set of benchmark set full IDs comprising the list.
+  The values are currently empty objects `{}`.
 
 * `init_build.json`, left behind by `dh_hl init_build`: the catalog-relative
   `generator.cpp` + `generator_parameters.json` paths of each schedule node to

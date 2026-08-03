@@ -13,6 +13,9 @@
 
 <!--
 
+TODO all of this is outdated and needs to be rewritten for new
+init_session and 3-way profiling workflow.
+
 dh_hl prompt:
 
 Task + harness intro

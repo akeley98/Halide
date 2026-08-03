@@ -204,6 +204,8 @@ All pairs go to the Halide generator as `key=value`.
 
 * **Parent Session:** Optional, reference to another session node.
 
+* **Default Anchor Schedule:** Optional reference to schedule node.
+
 * **Outputs:** Optional, added when a session is closed.
   This is the "final result" of the session.
   It consists of an ordered list of output schedule nodes
@@ -217,8 +219,9 @@ All pairs go to the Halide generator as `key=value`.
   This contains a session lock,
   current idea state,
   current anchor schedule,
-  a session private ideas list,
-  a workspace C++ schedule and `generator_parameters.json`,
+  a session private idea list,
+  a session private benchmark set list,
+  a workspace C++ schedule (`generator.cpp`) and `generator_parameters.json`,
   and a `bin` directory.
 
 Most harness tools require a "current session",
@@ -377,6 +380,17 @@ Each is associated with a string "pool tag" and a cost.
 
 FUTURE: This is used to build a "frontier" of ideas for the
 session's agent to explore (`list_private_ideas` tool).
+
+
+### Private Benchmark Set List
+
+List of benchmark sets stored in session private workspace state.
+These are the benchmarks considered for schedule cost and comparison.
+
+FUTURE: actually use this, but for now this state already has to
+be implemented because of `dh_hl join_session`.
+
+FUTURE: explicit manipulation of the list.
 
 
 ## Session Tree Concepts
@@ -598,6 +612,9 @@ and otherwise the idea node referenced by the "some current idea" state.
 Commands that explicitly edit the current idea state must not error out
 due to errors in the existing `current_idea_state.txt`.
 
+Tools that print an ID or such with no other output still
+include a trailing newline, as customary for Unix tools.
+
 
 ### Help Tool
 
@@ -729,10 +746,12 @@ the prompt has no default content).  Covered by `tests/test_prompt.py`.
     dh_hl status -s ...
 
 This is a purely read-only command.
-Agents MUST run this on startup, before first editing the workspace C++ file.
+<!-- Agents used to have to run this on startup,
+but the safety this provided got replaced with init_workspace. -->
 
 If there was no current session given, the tool errors.
-Otherwise, the tool tries to find a schedule node that already holds the workspace C++ file
+Otherwise, the tool tries to find a schedule node that already holds
+a copy of the workspace `generator.cpp` and `generator_parameters.json` files,
 and give basic information on the current catalog state.
 
 **Outputs:**
@@ -741,34 +760,40 @@ and give basic information on the current catalog state.
 
 * The is-delisted flag of the current session
 
-* The IDs of the session's seed idea node and output schedule node
-  (may be none for the latter)
+IMPL TASK: binary open/closed replaces seed idea / output schedule.
+
+* Whether the current session is `open` or `closed`.
 
 * The current idea state,
   whether the current idea node exists,
   and the canonical schedule for it, if any.
 
 * The ID of the **unambiguous schedule node**, if it exists.
-  This is the schedule node that holds a copy of the workspace C++ file (matched by hash)
+  This is the schedule node that holds a copy of the
+  workspace files (matched by hash)
   and has a parenting status matching the current idea state:
-    - **no current idea:** is a root node whose timestamp matches the current idea state
-    - **some current idea:** its parent is the current idea node.
+    - **no current idea:**
+      is a root node whose timestamp matches the current idea state
+    - **some current idea:**
+      its parent is the current idea node.
+
+IMPL TASK: implement cases below,
+enforce `generator_parameters.json` exists in `has_workspace`
 
 * The status as one of
-    - "no workspace C++ file"
-    - "workspace inconsistent, unknown schedule"
-      (could not find any stored schedule matching the current workspace C++ file)
-    - "workspace inconsistent, unexpected current idea state"
+    - `missing workspace generator.cpp`
+    - `missing workspace generator_parameters.json`
+    - `missing workspace generator.cpp and generator_parameters.json`
+    - `workspace inconsistent, unknown schedule`
+      (could not find any stored schedule matching the current workspace files)
+    - `workspace inconsistent, unexpected current idea state`
       (found stored schedule in catalog, but none were unambiguous)
-    - "workspace consistent"
+    - `workspace consistent`
       (unambiguous schedule node found)
-
-* On either inconsistent status, also prints a warning that the workspace
-  may have been edited outside the harness (see Rationale below).
 
 **Rationale:**
 
-A workspace C++ file is in "consistent state"
+A workspace is in "consistent state"
 when it unambiguously corresponds to a schedule node whose
 parent idea is what we expected.
 Essentially, this was "where we left off" when we last stopped searching.
@@ -777,17 +802,10 @@ As soon as we start editing the file, it'll be in inconsistent state.
 We need the current idea state to remember what idea we were working on,
 since we have no idea otherwise as soon as the schedule hash changes.
 
-Regarding the warning, as soon as the workspace C++ file is edited,
-it'll be in inconsistent state, which is fine if done on purpose.
-(it'll soon be added to the catalog once the agent starts the build).
-But if this was the case before the agent started editing at all,
-something is wrong: the file may have been edited in an undisciplined
-way outside the harness, and we should not blindly proceed and potentially
-parent the schedule to an idea that has nothing to do with what is actually being explored.
-
-This is particularly a risk of storing the private session state
-outside the git-tracked state. It's not impossible some heavy-handed
-git merging could cause the session private workspace to desync.
+*Merge risk:* since the private current idea state is not git tracked,
+it's possible heavy-handed git actions could cause the current idea
+state to desync from the real catalog.
+This is why the command is robust to nonexistent current idea node IDs.
 
 **Search Implementation Details:**  <!-- deferred task: strip when creating prompt -->
 
@@ -831,40 +849,17 @@ Otherwise, the status is "workspace inconsistent, unexpected current idea state"
   If the current idea state is syntactically correct but references a nonexistent idea node,
   advise of that too (could happen due to a git checkout).
 
-* Gives the status as one of
-    - "no workspace C++ file"
-    - "workspace inconsistent, unknown schedule"
-    - "workspace inconsistent, unexpected current idea state"
-    - "workspace consistent"
+* Gives the status as documented previously
 
-* If the workspace C++ file is not found, print one of the following:
+IMPL TASK: soften the message below and handle missing `generator_parameters.json`
 
-        # Session depth = 0 and session closed
-        The current session is closed. Start a new one with
-          dh_hl new_successor_session
+* If the workspace C++ file or `generator_parameters.json` is not found, print
 
-        # Session depth = 0 and session open
-        To start editing a C++ schedule, consider one of
-          dh_hl seed_schedule_short_id
-        to get the ID of a schedule to start editing, followed by
-          dh_hl restore_schedule {schedule ID}
-        to initialize the workspace
-
-        # Session depth != 0
-        AGENTS: the current session is a sub-agent session,
-        but was not initialized with a schedule for you to edit.
-        DO NOT PROCEED and report back to the main agent,
-        unless you have been advised to do otherwise.
+        AGENTS: run `dh_hl init_workspace` to get files to edit
 
 * If the workspace is consistent, print the ID of the unambiguous schedule node.
 
-* If the workspace is inconsistent, give the warning
-
-        AGENTS: If this is the first time editing this file this session,
-        this means the file was edited without correct harness tracking.
-        DO NOT PROCEED, unless you have been advised otherwise.
-        Likely causes include user action, git checkouts / merges.
-        or concurrent/interrupted agent sessions.
+IMPL TASK: remove the dramatic "workspace inconsistent" warning.
 
 
 ### Restore Schedule Tool
@@ -923,13 +918,12 @@ Takes optional arguments specifying the up to three schedule nodes.
 * `--anchor {schedule ID}` selects the anchor schedule node.
   The special value `none` disables the anchor schedule node.
   The special value `auto` selects the current session's
-  private anchor node if it exists,
+  current anchor if it exists,
   otherwise the anchor schedule node is disabled.
   The special value `always` is like `auto` except it's
-  an error if the current session has no private anchor node.
+  an error if the current session has no current anchor.
 
-FUTURE: session anchor state doesn't exist yet. Leave an untested
-todo assert for the `--anchor auto` and `--anchor always` cases.
+IMPL TASK: `--anchor auto`, `--anchor always`
 
 `--target workspace` behavior:
 
@@ -951,9 +945,12 @@ So this is the first step to building or profiling a new schedule.
 
     dh_hl build -s ...
 
+IMPL TASK: private benchmark set list
+
 Builds the schedule nodes selected by the latest `dh_hl init_build`
 done with the current session (state stored in the session private workspace).
 Optionally profiles them, generating new benchmark or benchmark set objects.
+Generated benchmark sets are added to the private benchmark set list.
 
 By default, if a schedule has `N`-many generator parameters objects,
 then `N` binaries are built, one for each parameters object.
@@ -975,8 +972,8 @@ The tool
    A `--only [int]` build caps the achievable result at `halide error`,
    since not all possible generator parameters are verified.
   <!-- Note: see separate pseudocode (stripped from dh_hl help) -->
-  <!-- Note: --only 0 when only 1 parameters object exists breaks the
-  above rationale, but we don't bother with this special case. -->
+  <!-- Note: --only 0 when only 1 parameters object exists breaks the -->
+  <!-- above rationale, but we don't bother with this special case. -->
 
 Flags:
 
@@ -1085,7 +1082,7 @@ Pseudocode:
             result = "success"
         node.result = best_of(node.result, result)
 
-    # Also save benchmark set object, if criteria passed.
+    # Also save benchmark set object and add to session, if criteria passed.
 
 See the [Reference Build Commands](reference_build_commands.md) file for the
 tested build/link recipe.  That file teaches the **Halide toolchain** (which
@@ -1188,8 +1185,8 @@ Updates the current idea state to "some current idea",
 embedding the given idea node ID.
 It is an error if the ID doesn't resolve to a single existing idea node.
 
-This leaves the workspace C++ file alone.
-To reset both the workspace C++ file and the current idea state,
+This leaves the workspace C++ file and generator parameters alone.
+To reset both the workspace files and the current idea state,
 consider `restore_schedule` or `restore_idea`.
 
 
@@ -1197,12 +1194,21 @@ consider `restore_schedule` or `restore_idea`.
 
     dh_hl new_idea -s ... {proposal name} {proposal file} [schedule ID]
 
+IMPL TASK: pool tag, tests for two `--pool-tag`-required failure cases.
+
 Adds a new child idea node to the referenced schedule node,
 which must be a major schedule.
 Furthermore, the idea node is added to the current session's
-private idea list.
+private idea list, with pool tag:
 
-It is an error if this would cause an ID collision (i.e. the proposal name is already used).
+* given by `--pool-tag {pool tag}` if this argument is given
+
+* otherwise, the pool tag of the referenced schedule node's parent.
+  This fails (`--pool-tag` required) if either the referenced schedule node
+  is a root node, or if its parent idea node is not in the private idea list.
+
+It is an error if this would cause an ID collision
+(i.e. the proposal name is already used).
 
 Gives back the ID of the new idea node.
 
@@ -1215,23 +1221,31 @@ If the schedule node is a minor schedule, the tool advises:
 * (no other cases: minor schedules are not root nodes by definition)
 
 
-### List Ideas Tool
+### List Ideas Tools
 
-    dh_hl list_ideas -C ... [schedule ID]
+    dh_hl list_child_ideas -C ... [schedule ID]
+    dh_hl list_seed_ideas -s ...
 
-It is an error if the referenced schedule node is not a major schedule.
+IMPL TASK: `list_ideas` split into two above commands
 
-For each child idea node of the referenced schedule node, prints 4 or more lines:
+`list_child_ideas` prints a summary of each child idea node of
+the referenced *major schedule* node; error if passed a minor schedule.
 
-* The ID of the idea node (indent all lines except this by 2)
+`list_seed_ideas` prints a summary of each seed idea of the current session.
+
+Prints these lines for each idea node:
+
+* The ID of the idea node (all lines except this one indented by 2)
 
 * The proposal name
 
 * ID of canonical schedule, or `(none)`
 
-* The first up-to 72 characters of the first line of the proposal text
+* For `list_child_ideas` only,
+  the first up-to 72 characters of the first line of the proposal text.
 
-* If the last non-empty line of the proposal text starts with
+* For `list_child_ideas` only,
+  if the last non-empty line of the proposal text starts with
   `Created for session:`, print that line.
   (See "Session Creation Tools: Common Information").
 
@@ -1244,7 +1258,8 @@ For each child idea node of the referenced schedule node, prints 4 or more lines
 
     # All commands do not acquire session lock
     dh_hl view_idea -C ... {idea ID}
-    dh_hl view_session_idea -s ...
+
+IMPL TASK: no more `view_session_idea`
 
 Prints the referenced idea node's
 
@@ -1256,10 +1271,8 @@ Prints the referenced idea node's
 
 * idea side links, in the same format as `list_ideas`
 
-`view_session_idea` references the current session's seed idea.
 
-
-### Idea Side Link Tool
+### Add Idea Side Link Tool
 
     # Reads like a sentence, e.g. abcdef.foo borrows_from 123456.bar
     dh_hl add_idea_side_link -C ... {idea ID lhs} {type} {idea ID rhs}
@@ -1287,6 +1300,13 @@ This command takes further arguments:
 
 Exactly one of `--block` / `--cancel` must be given, since a `WarningToggle`'s
 value is a tagged union (see "WarningToggle State").
+
+The schedule given by `dh_hl session_root_node` is a reasonable
+default for the `{schedule ID}` argument.
+This scopes the "lesson" that the warning is to be ignored mostly to
+schedules worked on in this session, but not to those from other
+sessions, which may be working on schedules completely different from
+this one.
 
 FUTURE: warning for unknown warning rule name or func name.
 
@@ -1380,24 +1400,34 @@ For each schedule node, prints:
 
 ### List Schedules Tools
 
+    # Does not acquire session lock
+    dh_hl list_output_schedules -s ...
     dh_hl list_sibling_schedules -C ... [schedule ID]
     dh_hl list_child_schedules -C ... {idea ID}
     dh_hl list_equal_schedules -C ... [schedule ID]
 
 Lists all schedule nodes matching some criterion:
 
-* `list_sibling_schedules`: list all schedule nodes that have the same parent as the given schedule.
+* `list_output_schedules`:
+  list all output schedules of the current session.
+  Error if the current session has no outputs yet.
+
+* `list_sibling_schedules`:
+  list all schedule nodes that have the same parent as the given schedule.
   Error if a root node is given.
 
-* `list_child_schedules`: list all children of the given idea node.
+* `list_child_schedules`:
+  list all children of the given idea node.
   (This partially overlaps the `view_idea` tool, with different verbosity).
 
-* `list_equal_schedules`: list all schedule nodes with the same hash as the given schedule.
+* `list_equal_schedules`:
+  list all schedule nodes with the same hash as the given schedule.
 
 Each schedule is printed in the same manner as `dh_hl history`
 (ignoring the "marking the child idea node" part),
 with a clear separator between each.
-There is no predefined order of the schedules.
+There is no predefined order of the schedules,
+except for `list_output_schedules` (ordered as stored in session output).
 
 
 ### View Commentary Tool
@@ -1430,12 +1460,45 @@ Each commentary is printed as
     # Does not acquire session lock
     dh_hl view_session_commentary -s ...
 
-Similar to `view_all_commentary`, except
+IMPL TASK: add this
 
-* The referenced schedule node is the output schedule node of the
-  current session (error if not yet set).
+Takes an optional `--brief` argument.
 
-* TODO will change when sessions are updated to have multiple outputs
+For each output schedule node of the current session, prints:
+
+* A prominent banner with the schedule node's ID.
+
+* The outputs of `view_all_commentary` for the schedule node,
+  inheriting the `--brief` behavior.
+
+Error if the current session has no output yet.
+
+
+### Root Query Tools
+
+    # Does not acquire session lock
+    dh_hl root_of -C ... [schedule ID]
+    dh_hl session_root_of -s ... [schedule ID]
+
+IMPL TASK: add this, including testing of `session_root_of` failure,
+and weird case where two seed ideas have an indirect parent/child
+relationship (should return the indirect child's child schedule,
+if found first). Also the timestamp failure needs testing.
+
+IMPL TASK: remember this tool satisfies the conditions for a
+timestamp check to be included (infinite loops possible).
+
+Starts at the referenced schedule node and starts walking the tree
+towards the root.
+For each schedule node,
+
+* for `root_of`, print the ID of the node and exit if it's a root node.
+
+* for `session_root_of`, print the ID of the node and exit if its parent
+  idea exists and is a child of a seed idea of the current session.
+
+The `session_root_of` search may fail.
+The `root_of` search won't fail for a non-corrupt catalog.
 
 
 ### Force Parent Idea Tool
@@ -1455,26 +1518,45 @@ Rarely needed, mostly for when a new root node was created and you regret it.
 
 ### Session Creation Tools: Common Information
 
-The following session-creation tools create session nodes and idea nodes in pairs.
-The process starts with a given parent schedule node:
+IMPL TASK: no more private workspace initialization.
+
+IMPL TASK: inform me if there's a potential contradiction with
+the private workspace not being initialized, but somehow the
+session lock still has to exist.
+My POV for now is the `private/...` *directory* can exist,
+but the files within it won't be created.
+The "actual files exist" checks are the failure criteria
+for `init_workspace` without `--force`.
+
+IMPL TASK: prompt and multiple seed ideas
+
+IMPL TASK: per-tool default anchor node
+
+Each session creation tool requires (or implies) an input proposal name,
+prompt file, and list of parent schedule nodes.
+
+The tools perform the steps:
 
 * A new session ID is allocated.
 
-* A new idea node is created from the proposal name and proposal file,
-  in the same manner as `dh_hl new_idea {proposal name} {proposal file} {parent schedule ID}`,
+* For each parent schedule node,
+  a new idea node is created from the proposal name and prompt file,
+  in the same manner as
+  `dh_hl new_idea {proposal name} {prompt file} {parent schedule ID}`,
   except that,
-  (a) the `new_catalog` tool doesn't result in adding an idea to the private idea list
+  (a) the pool tag of the new idea is `session.{proposal name}`
   (b) the proposal text has the line `Created for session: {session_id}` appended.
 
-* Create a new session seeded with the new idea node.
-  The session private workspace is initialized with the parent schedule node's C++ file,
-  and with "some current idea" state pointing to the new idea node.
-  The private idea list is empty.
+* Create a new session seeded with the new idea nodes created above,
+  and with the prompt from the prompt file.
+  The session private workspace is not initialized.
+  The new session's parent session and default anchor node is defined per-tool.
 
-* A new schedule node is created, holding a copy of the parent schedule node's C++ file.
+* For each seed idea, a new schedule node is created,
+  holding a copy of the seed idea's parent's C++ and parameters files.
   This is immediately set as the canonical schedule of the new idea node.
 
-* Allocate a session handle for the new session, and print it for the user.
+* Allocate a session handle for the new session, and print it.
 
 The duplicate schedule node is somewhat hacky,
 but ensures that a new session can immediately assume it's given
@@ -1487,7 +1569,7 @@ for a parent schedule that's exclusively its own.
 
 ### New Catalog Tool
 
-    dh_hl new_catalog -C ... {proposal name} {proposal file} {input C++ file} [input generator parameters]
+    dh_hl new_catalog -C ... {proposal name} {prompt file} {input C++ file} [input generator parameters]
 
 Creates a new catalog directory with the bare minimum state to get started:
 
@@ -1505,24 +1587,47 @@ The requirement for `-C` is *opposite* all other commands:
 it is an error if the named directory *does* exist.
 
 The behavior is as-if a single schedule node were created,
-and then a new session/idea pair created with that schedule as the parent schedule.
-The new session node has no parent session.
+then a new session is created with that schedule as the only parent schedule.
+The new session node has no parent session and has no default anchor node.
+This is because the user-provided schedule may be very poor,
+so it's not a reasonable default as an anchor (profiling may never terminate)
 
 
 ### New Sub Session Tool
 
-    dh_hl new_sub_session -s ... {proposal name} {proposal file} [schedule ID]
+    dh_hl new_sub_session -s ... {proposal name} {prompt file} [schedule IDs...]
 
-Create a new session/idea pair, with the given parent schedule.
-The new session is a child of the current session with 1 greater depth.
+IMPL TASK: test the default anchor behavior
+
+IMPL TASK: test multiple parent schedules, and empty list behavior.
+
+Create a new sub-session,
+which is a child of the current session with 1 greater depth.
+
+The `[schedule IDs...]` is a list of schedule node IDs
+(each ID is a separate `argv` argument);
+these are the parent schedules for new session creation.
+An empty list behaves like the default `[schedule ID]` argument.
+
+The default anchor is the current anchor of the current session
+(which could be none).
 
 
 ### New Successor Session Tool
 
-    dh_hl new_successor_session -s ... {proposal name} {proposal file}
+    dh_hl new_successor_session -s ... {proposal name} {prompt file}
 
 The current session must be self-closed and have depth 0.
-Create a new session/idea pair, with the output schedule of the current session as the parent schedule.
+
+Create a new successor session (depth = 0) with
+
+* the current session as its parent.
+
+* the output schedules of the current session as
+  the parent schedules for session creation.
+
+* the primary output of the current session as
+  its default anchor.
 
 
 ### Catalog Location Tool
@@ -1544,12 +1649,96 @@ Give both full session IDs and session handles.
 
 ### Close Session Tool
 
-    dh_hl close_session -s ... [schedule ID]
+    dh_hl close_session -s ... [schedule IDs...]
 
-Set the given schedule node to be the current session's output schedule node.
-Error if the current session already has an output schedule node,
-or if the given schedule node has no commentary sub-objects.
-In the latter case, remind the caller of the `comment` tool.
+IMPL TASK: basically needs a rewrite for new functionality
+
+IMPL TASK: tests for failed pool tag (2 reasons, as with `new_idea`,
+although "not in private idea list" may be very hard to construct.
+If it's too hard, it's acceptable to keep `_forget_private_idea` internally)
+
+Add outputs to the current session, making it self-closed.
+This promotes a fair amount of private (not git tracked)
+session state to public (git tracked) session node state.
+
+**Output Schedules:**
+The `[schedule IDs...]` is a list of schedule node IDs
+(each ID is a separate `argv` argument);
+these are added as the output schedules of the current session.
+An empty list behaves like the default `[schedule ID]` argument.
+Recall the first one given becomes the primary output schedule.
+
+Each output schedule's pool tag is the pool tag of its parent idea,
+as defined by the current session's private idea list.
+It's an error if any root nodes are given,
+or if the parent idea is not in the private idea list
+(fix with `dh_hl set_pool_tag`).
+
+If any schedule node given has no commentary,
+the tool gives an error and reminds of the `dh_hl comment` tool.
+
+**Output Benchmark Sets:**
+Same as the current session's private benchmark set list.
+
+**Added superseded-by Links:**
+For each output schedule `O`, find the schedule node `R`
+that would be found by `dh_hl session_root_node O`.
+Add a superseded-by idea side link from `R`'s parent to `O`'s parent.
+This step is silently skipped for output schedules
+where `session_root_of` would fail.
+
+
+### Join Session Tool
+
+    # Acquires session lock of the current session only.
+    dh_hl join_session -s {current session handle/ID} {joined session handle/ID}
+
+IMPL TASK: this is the only tool that has to reference two sessions.
+Advise me if this causes any serious complications for existing CLI helpers
+or otherwise breaks (possibly unstated) implementation assumptions.
+Note, the locking discipline doesn't require locking the joined session
+since this tool doesn't access any of its private workspace state.
+
+Adds joined session outputs to the current session's private idea list
+and private benchmark sets; error if the joined session lacks outputs.
+Accepts `--dry-run` and `--pool-prefix {pool prefix}` arguments.
+The default `pool prefix` is an empty string.
+
+If `--dry-run` is not given,
+
+* Add all benchmark sets from the joined session's output to the
+  current session's private benchmark set list.
+
+* For each joined session's output schedule node,
+  add its parent idea node to the current idea list,
+  with the assigned pool tag being:
+  
+  * the existing pool tag unchanged, if the idea was already in the list
+  
+  * the output schedule node's pool tag otherwise,
+    prefixed with `{pool prefix}.` if the pool prefix is non-empty.
+
+IMPL TASK: an unfriendly raw Python exception is acceptable for the
+root schedule case since this shouldn't happen without manually
+corrupting the catalog files.
+
+Whether or not `--dry-run` was given, this prints out
+
+* The benchmark sets (that would be) added,
+  each on a line of the form `dh_hl: add benchmark set {id}`
+
+* The idea nodes (that would be) added, as two lines of the form
+  `dh_hl: add idea {id}`, `dh_hl: pool tag {pool tag}`.
+  The pool tag given includes the added prefix.
+
+IMPL TASK: add a flag to `safety.commit` that enables asserting that
+no files were added (`not _new_entries`) and no overwrites queued.
+Use this flag to self-check that `--dry-run` did nothing.
+NB locking intentionally bypasses this so that won't mess anything up.
+
+IMPL TASK: test prioritization of existing pool tag.
+
+IMPL TASK: test missing joined session outputs failure.
 
 
 ### Delist Session Tool
@@ -1560,23 +1749,84 @@ Set the is-delisted flag of the current session to true.
 Useful to get rid of old abandoned sessions in the open sessions or termini list.
 
 
+### View Session Prompt Tool
+
+    # Does not acquire session lock
+    dh_hl view_session_prompt -s ...
+
+IMPL TASK: add this
+
+Prints the plain text prompt of the current session,
+followed by `=== Seed Ideas ===`,
+followed by the output of the `list_seed_ideas` tool.
+
+
 ### List Session Private Ideas Tool
 
-IMPL TASK: remove `list_private_ideas*` tools.  Will be revamped as a
-future task.  For now, session private idea list can be tested with
+    dh_hl list_private_ideas -s ... [N]
+    dh_hl list_private_ideas_todo -s ... [N]
+    dh_hl list_private_ideas_done -s ... [N]
+
+IMPL TASK: pytest skip `list_private_ideas*` and ignore for now
+that the tool won't work well with new unordered current ideas state.
+Printing in cost-ordered way will be left to a future batch of tasks.
+For now, session private idea list can be tested with
 `get_pool_tag` including the error case.  Please write tests that have
 multiple session nodes as a guard against future accidental mixing of
 different sessions' states.
 
-FUTURE: add tool.
+FUTURE: add tool, nonfunctional for now.
 
 
-### Forget Session Private Idea Tool
+### Session Current Anchor Tools
 
-    dh_hl forget_private_idea -s ... {idea ID}
+    dh_hl get_current_anchor -s ...
+    dh_hl set_current_anchor -s ... [schedule ID]
 
-Remove the referenced idea node from the current session's private idea list.
-This reports an error if the idea already wasn't in the list.
+IMPL TASK: add this
+
+Get or set the ID of the current session's current anchor node.
+The special value `none` is used for "no anchor node"
+(both for get and set commands).
+
+
+### Session Idea Node Pool Tag Tools
+
+    dh_hl get_pool_tag -s ... {idea ID}
+    dh_hl set_pool_tag -s ... {idea ID} {pool tag}
+    dh_hl hide_private_idea -s ... {idea ID}
+
+IMPL TASK: add this
+
+IMPL TASK: remove `forget_private_idea`
+
+Gets or sets the pool tag assigned for the given idea node,
+as stored in the private idea list.
+`set_pool_tag` implicitly adds to the list if necessary.
+`hide_private_idea` simply prepends a `.` to the idea node's pool tag.
+
+`get_pool_tag` and `hide_private_idea` error out if the idea node
+is not in the private idea list.
+
+The purpose of the pool tag is to allow the agent to enforce some
+diversity in the frontier of "best ideas" shown in `list_private_ideas`.
+Ideas are ranked only within their pools.
+
+FUTURE: actually implement the last paragraph in a later turn.
+Also the `.` prefix won't make sense until then.
+
+
+### Rename Pool Tag Tool
+
+    dh_hl rename_pool_tag -s ... {pool tag before} {pool tag after}
+
+IMPL TASK: add this, test results with `get_pool_tag`
+
+Iterates over all entries in the current session's private idea list.
+Each idea that has `{pool tag before}` as its pool tag
+gets its pool tag updated to `{pool tag after}`.
+
+Prints `{count} idea nodes updated`.
 
 
 ### Copy Schedule, ID-of Schedule Tools
@@ -1631,6 +1881,80 @@ Each generator parameters object is printed as a single line
     [0-based index] [JSON object as one line]
 
 
+### Init Workspace Tools
+
+    dh_hl init_workspace -s ...
+
+Takes an optional `--force` flag.
+
+Initialize the session private workspace state to defaults:
+
+* **Generator, Generator Parameters, Current Idea State:**
+  initialized as if by `dh_hl restore_idea` done on the 0th seed idea.
+
+* **Current Anchor Schedule:**
+  initialized from the current session's default anchor schedule;
+  no current anchor if no default anchor schedule.
+
+* **Private Idea List:** initialized from the current session's seed ideas,
+  each with pool tag `default`.
+
+* **Private Benchmark Set List:** empty.
+
+The session lock is low-level state that is not exclusive to this tool;
+it is implicitly created without any user action.
+
+Unless `--force` is given, the tool fails if any existing state would
+be overwritten.
+
+IMPL TASK: the `--force` behavior should be easy to implement
+by using the `safety.write_allowed` feature updated to something similar to
+
+    def write_allowed(path, data, *, allow=True):
+        """Write one of the allowed-to-change files.  If it doesn't exist yet we
+        create it with new_file (recorded, so rollback removes it and the dir it
+        lives in can be rmdir'd).  If it exists we defer an overwrite that is NOT
+        rolled back.  Existence is checked once; we assume no concurrent changes."""
+        if allow and os.path.exists(path):
+            queue_overwrite(path, data)
+        else:
+            new_file(path, data)
+
+and piping the `--force` flag to `allow`.
+Correct me if I'm being naive.
+
+IMPL TASK: try to replace direct reads to session private files with
+helpers that give a notice to use `init_workspace` in case the file is
+not found, rather than the default Python file not found error.
+But still show the path of the missing file.
+
+IMPL TASK: In case the tool fails due to `safety.new_file`,
+give one of the following AGENTS warnings:
+
+    # Session depth == 0
+    AGENTS: the session seems to already be initialized,
+    as if in use by (or previously used by) another agent.
+    Things will fail badly if this session is used concurrently.
+    If you can speak with the user interactively, ask for a decision:
+
+    1. the user finds the conversation that was for this session
+    and asks that agent to close the session (preferred)
+
+    2. inspect the current session workspace and try to pick up
+    where the previous agent left off.
+
+    3. restart the session from scratch (re-run this tool with --force)
+
+    If you can't ask (e.g. automated workflow),
+    don't continue, unless other prompting provides an expected fix.
+
+    # Session depth != 0
+    AGENTS: the session seems to already be initialized,
+    as if it's in use by (or previously used by) another agent.
+    STOP IMMEDIATELY and report to the main agent or user what happened.
+    You can do so normally, not via `dh_hl close_session`.
+
+
 ### Workspace Location Tools
 
     dh_hl workspace_schedule -s ...
@@ -1644,6 +1968,11 @@ Respectively, get the filename of the
 * workspace generator parameters JSON file
 
 * bin directory
+
+AGENTS: use `init_workspace` and not these tools to create the
+new generator and parameters files.
+Nevertheless, these tools do not enforce this in case extenuating
+circumstances require a deviation.
 
 
 ### Locked Execution Tools
@@ -1764,6 +2093,8 @@ Prints the state of the referenced idea node as a JSON object, with key/value pa
     # Does not acquire session lock
     dh_hl json_session_info -s ...
 
+IMPL TASK: `prompt`, `default_anchor_schedule`, `seed_ideas`, `output_*`
+
 Prints the state of the current session as a JSON object, with key/value pairs
 
 * `id`: full ID of node
@@ -1772,9 +2103,18 @@ Prints the state of the current session as a JSON object, with key/value pairs
 
 * `children`: list of strings, each a full ID of a session node
 
-* `seed_idea`: string, full ID of seed idea node
+* `prompt`: string
 
-* `output_schedule`: string or null, full ID of output schedule node
+* `default_anchor_schedule`: string or null,
+  full ID of default anchor schedule node
+
+* `seed_ideas`: list of strings, full ID of seed idea nodes
+
+* `output_schedules`: list of strings or null,
+  full ID of output schedule nodes
+
+* `output_benchmark_sets`: list of strings or null,
+  full IDs of output benchmark sets
 
 * `delisted`: bool
 
@@ -1852,19 +2192,15 @@ inspect it with the `list_termini` tool.
 If there's exactly one terminus, adopt it as your current session
 and inspect it with `dh_hl status`.
 
-* If there's an output schedule node (closed),
-  use the `new_successor_session` tool,
-  and adopt the successor as your current session.
+* If the terminus is closed, use the `new_successor_session` tool,
+  and adopt the successor as your current session with `init_workspace`.
   Add a reasonable proposal (prompt for yourself) if you have more specific
   goals for the session, or just write a generic description if not.
 
-* Otherwise, advise the user that there may be another session
-  already running. Advise them to close that session explicitly if possible,
-  but that you can start anyway if that session is not running concurrently.
-  If the user wants you to start anyway, follow the `dh_hl status` advice.
-
-Unless advised otherwise, obey any warnings given by `dh_hl status`
-and advise the user of it.
+* Otherwise, use the `init_workspace` tool and start work on the 
+  existing terminus.
+  Unless advised otherwise, don't use `--force`,
+  and do follow any warnings given by the `init_workspace` tool.
 
 If none of these cases (e.g. multiple termini),
 then the user needs to provide more specific intentions.
