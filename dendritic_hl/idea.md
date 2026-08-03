@@ -1007,7 +1007,7 @@ Pseudocode:
         # Generator in session private workspace: bin/{node.full_id}_generator
         # Use similar ID-based naming for intermediate .o files / registration etc.
         # Full ID keying prevents redundant rebuilds
-        print "dh_hl: end C++ compile (success|fail)""
+        print "dh_hl: end C++ compile (success|fail)"
 
     # 1b. Halide generators
     for node in nodes:
