@@ -236,13 +236,7 @@ unambiguously (`_SESSION_ID_RE` in `ids.py`).
 * **Default Anchor Schedule:** if it exists, its full ID plus a newline is in
   `default_anchor_schedule.txt`
 
-* **Outputs:** `outputs.json`, doesn't exist if no outputs yet.  A JSON object
-  `{"schedules": [{"id": <schedule full ID>, "pool_tag": <str>}, ...],
-  "benchmark_sets": [<benchmark set full ID>, ...]}`.  The schedules are ordered
-  (the first is the *primary* output); the pool tags are those the outputs' parent
-  ideas had in the closing session's private idea list.  Owned by `SessionNode`
-  in `catalog.py` (`set_outputs`, `output_schedule_ids`,
-  `output_schedule_pool_tags`, `output_benchmark_set_ids`).
+* **Outputs:** `outputs.json`, doesn't exist if no outputs yet; see next section
 
 * **Delisted Flag:** Delisted iff `delisted.txt` exists; contents are ignored.
 
@@ -253,6 +247,20 @@ unambiguously (`_SESSION_ID_RE` in `ids.py`).
 * **Timestamp:** implied from the ID
 
 *Merge risk:* `outputs.json`, no automatic fix provided.
+
+
+### Session Outputs on Disk (outputs.json)
+
+A JSON object:
+
+    {"schedules": [{"id": <schedule full ID>, "pool_tag": <str>}, ...],
+    "benchmark_sets": [<benchmark set full ID>, ...]}.
+
+The schedules are ordered (the first is the *primary* output).
+
+Owned by `SessionNode` in `catalog.py` (`set_outputs`,
+`output_schedule_ids`, `output_schedule_pool_tags`,
+`output_benchmark_set_ids`).
 
 
 ### Benchmark Sets on Disk
@@ -298,7 +306,7 @@ Inside the `private/{session id}` sub-directory, there is
   The keys are the set of benchmark set full IDs comprising the list.
   The values are currently empty objects `{}` (they become cached statistics
   once cost lands).  `SessionWorkspace.add_private_benchmark_set` is the
-  centralized add helper so that future value-init can hook there.
+  centralized add helper so that value-init can hook there.
 
 * `init_build.json`, left behind by `dh_hl init_build`: the catalog-relative
   `generator.cpp` + `generator_parameters.json` paths of each schedule node to

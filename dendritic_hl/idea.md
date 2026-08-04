@@ -391,6 +391,7 @@ session's agent to explore (`list_private_ideas` tool).
 
 List of benchmark sets stored in session private workspace state.
 These are the benchmarks considered for schedule cost and comparison.
+This is technically a set: duplicate benchmark sets are eliminated.
 
 FUTURE: actually use this, but for now this state already has to
 be implemented because of `dh_hl join_session`.
@@ -1060,10 +1061,12 @@ Flags:
   only one binary, for the `N`-th generator parameters object;
   in this case `halide error` is the best result possible.
 
+IMPL TASK: `--only target` also produces benchmark sets now.
+
 This tool exits successfully iff no harness errors occurred
 and all subprocesses succeeded.
 A new benchmark set is generated, containing all benchmark objects
-made by this tool run, iff `--only all` is in effect,
+made by this tool run, iff `--only all` or `--only target` are in effect,
 profiler batch count is at least 1, and no subprocesses failed.
 
 Important lines emitted by the harness itself are prefixed with
@@ -1800,13 +1803,13 @@ followed by the output of the `list_seed_ideas` tool.
 FUTURE: add tool, nonfunctional for now.
 
 
-### Session Current Anchor Tools
+### Session Current Anchor Schedule Tools
 
     dh_hl get_current_anchor -s ...
     dh_hl set_current_anchor -s ... [schedule ID]
 
 
-Get or set the ID of the current session's current anchor node.
+Get or set the ID of the current session's current anchor schedule node.
 The special value `none` is used for "no anchor node"
 (both for get and set commands).
 
@@ -2052,6 +2055,170 @@ this is load bearing for correctness, since it encodes more than a session full 
 (namely, the catalog directory location).
 
 
+### JSON Ranking Cost Query Tool
+
+    dh_hl json_ranking_cost -s ... [schedule ID]
+
+IMPL TASK: add this.
+
+Report the cost for the given schedule, based on "Cost Ranking" methodology.
+This relies only on batches reachable from
+the current session's private benchmark set list,
+filtered as specified for the methodology.
+
+The output is a JSON object with key/value pairs on separate lines:
+
+* `batch_count`: number of batches found
+
+* `cost`: number or null (null if no batches found)
+
+* `anchor`: string or null (schedule node full ID)
+
+* `representative`: number,
+  index of generator parameters object used by the representative.
+
+Uses either the "Cost Ranking With Anchor Schedule" methodology
+or "Cost Ranking Without Anchor Schedule" methodology,
+depending on the optional `--anchor {schedule ID}` argument:
+
+* `--anchor none`: without anchor schedule.
+
+* `--anchor {schedule ID}`: using the given anchor schedule.
+
+* `--anchor always`: using the session's current anchor schedule
+  (error if no current anchor schedule).
+
+* `--anchor auto`: (default behavior)
+  using the session's current anchor schedule if it exists,
+  otherwise without anchor schedule.
+
+
+### JSON Compare Cost Tool
+
+    dh_hl json_compare_cost [LHS schedule ID] [RHS schedule ID]
+
+IMPL TASK: add this
+
+IMPL TASK: test all LHS/RHS argument behavior.
+
+Do a head-to-head cost comparison between the LHS and RHS schedules,
+using the "2-way Cost Comparison" methodology.
+This relies only on batches reachable from
+the current session's private benchmark set list,
+filtered as specified for the methodology.
+
+The LHS schedule, if not explicitly given, has default `[schedule ID]` behavior.
+
+The RHS schedule, if not explicitly given,
+is the parent of the LHS's parent idea.
+(Error if the parent idea doesn't exist).
+Note, if you override this, you will in most cases have to run `dh_hl build`
+with an explicit `--other`, as the default parent won't suffice.
+
+The optional `--confidence {number}` argument overrides the default
+confidence (0.95) for the confidence interval.
+
+The output is a JSON object with key/value pairs on separate lines:
+
+* `batch_count`: number of batches found
+
+* `result`: string, "regression" if the LHS is worse,
+  "improvement" if the RHS is better,
+  "unknown" if inconclusive.
+
+* `lhs_raw_cost`: number, median raw cost of LHS representative
+
+* `lhs_representative`: number,
+  index of generator parameters object used by the LHS representative.
+
+* `rhs_raw_cost`: number, median raw cost of RHS representative
+
+* `rhs_representative`: number,
+  index of generator parameters object used by the RHS representative.
+
+
+### JSON Profiler Statistics Tool
+
+    dh_hl json_profiler_stats [schedule ID]
+
+IMPL TASK: add this
+
+TODO
+
+Aggregate profiler statistics for the referenced schedule,
+considering only benchmarks reachable from the private benchmark set list.
+The list of stats to include is given by command line arguments:
+
+* `-f {name}`, include a per-function statistic (e.g. `-f recompute_ratio`)
+
+* `-p {name}`, include a pipeline-global statistic (e.g. `wall_time_mean`);
+  note some names are valid for both `-f` and `-p` (e.g. `memory_peak`).
+
+* `--parameters {n}`, consider only statistics for pipelines
+  built from the n-th generator parameters object of the schedule node.
+  Mandatory if there's more than one generator parameters objects included
+  in the schedule node.
+
+With `obj` being a benchmark sub-object, each `-p` pipeline-global
+statistic name is the key name of a number value of `obj["profiler"]`,
+or one of the special values:
+
+* `active_threads`: `active_threads_numerator/active_threads_denominator`
+
+* `allocs_per_run`: `num_allocs/runs`
+
+Each `-f` per-function statistic name is the key name of a number value
+of the objects in the `obj["profiler"]["funcs"]` list,
+or one of the special values:
+
+* `active_threads`: `active_threads_numerator/active_threads_denominator`
+
+* `allocs_per_run`: `num_allocs/runs`
+
+* `parallel_loops_per_run`: `parallel_loops/runs`
+
+* `parallel_tasks_per_run`: `parallel_tasks/runs`
+
+* `time_ratio`: function `time_ns` / pipeline `time_ns`
+
+FUTURE: foot-gun-y how the default stats are not divided by `runs`
+and there's special `*_per_run` stats that are actually meaningful.
+
+The output JSON object has key/value pairs
+
+* one pair for each unique pipeline-global statistic included
+
+* `funcs`: list of objects, if any per-func statistics are included
+
+The `funcs` objects are in the same order as the original profiler data,
+and contain key/value pairs:
+
+* one pair for each unique per-function statistic included
+
+* `name`: string
+
+* `parent`: number, index of parent func in this list (-1 if no parent)
+
+Each numerical statistic is reported by aggregating all relevant
+benchmarks' samples (bucketed by function, for `-f`) into a 3-list:
+
+    [25th percentile, median, 75th percentile]
+
+`wall_time_smallest` and any other non-number statistics are not supported.
+
+<!-- deferred task: strip when creating prompt -->
+**Implementation Note:**
+Don't try to embed the list of allowed `-f`/`-p` values,
+other than the special values described above,
+so we don't have to keep updating this for profiler changes.
+Just let them fail naturally when looking up JSON values,
+with the error being somewhat nicer than a raw Python exception
+(wrong name / non-number type).
+
+Assert that all benchmarks found have the same number of "funcs"
+and the same names for each func. You don't have to test this.
+
+
 ### JSON Schedule Info Tool
 
     dh_hl json_schedule_info -C ... [schedule ID]
@@ -2165,7 +2332,7 @@ Prints the state of the current session as a JSON object, with key/value pairs
 
     dh_hl json_benchmark_info -C ... {benchmark ID}
 
-Prints the identified benchmark in Benchmark JSON format
+Prints the identified benchmark in benchmark sub-object JSON format.
 
 
 ### JSON Benchmark Set Info Tool
