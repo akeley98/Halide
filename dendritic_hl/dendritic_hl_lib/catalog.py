@@ -868,7 +868,8 @@ class SessionNode:
 
     @property
     def seed_idea_id(self):
-        """Back-compat convenience: the 0th seed idea (idea.md 0th-seed rule)."""
+        """The 0th seed idea -- the canonical "the session's seed idea" per the
+        idea.md 0th-seed rule (copy_seed_schedule / seed_schedule_* tools)."""
         return self.seed_idea_ids[0]
 
     # -- parent session (optional) --------------------------------------
@@ -933,7 +934,8 @@ class SessionNode:
 
     @property
     def output_schedule_id(self):
-        """Back-compat convenience: the primary output schedule (or None)."""
+        """The primary output schedule (or None) -- the canonical "the session's
+        output schedule" (session_output / terminus tools)."""
         return self.primary_output_schedule_id
 
     def set_outputs(self, schedule_pool_pairs, benchmark_set_ids):
@@ -948,10 +950,6 @@ class SessionNode:
         }
         self._outputs_dirty = True
         self.catalog._mark_dirty(self)
-
-    def set_output_schedule(self, schedule_id):
-        """Back-compat single-output setter (pool tag 'default', no bench sets)."""
-        self.set_outputs([(schedule_id, "default")], [])
 
     # -- delisted flag (presence) ---------------------------------------
     @property

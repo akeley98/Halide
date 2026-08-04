@@ -415,7 +415,6 @@ From this there's two derived states:
 
 ### Terminus Schedule ("Final Result")
 
-IMPL TASK: now defined as primary output schedule
 
 The catalog is a tree of schedules,
 so it's not necessarily clear which one is the "final" schedule.
@@ -936,7 +935,6 @@ So this is the first step to building or profiling a new schedule.
 
     dh_hl build -s ...
 
-IMPL TASK: private benchmark set list
 
 Builds the schedule nodes selected by the latest `dh_hl init_build`
 done with the current session (state stored in the session private workspace).
@@ -1185,7 +1183,6 @@ consider `restore_schedule` or `restore_idea`.
 
     dh_hl new_idea -s ... {proposal name} {proposal file} [schedule ID]
 
-IMPL TASK: pool tag, tests for two `--pool-tag`-required failure cases.
 
 Adds a new child idea node to the referenced schedule node,
 which must be a major schedule.
@@ -1217,7 +1214,6 @@ If the schedule node is a minor schedule, the tool advises:
     dh_hl list_child_ideas -C ... [schedule ID]
     dh_hl list_seed_ideas -s ...
 
-IMPL TASK: `list_ideas` split into two above commands
 
 `list_child_ideas` prints a summary of each child idea node of
 the referenced *major schedule* node; error if passed a minor schedule.
@@ -1250,7 +1246,6 @@ Prints these lines for each idea node:
     # All commands do not acquire session lock
     dh_hl view_idea -C ... {idea ID}
 
-IMPL TASK: no more `view_session_idea`
 
 Prints the referenced idea node's
 
@@ -1261,8 +1256,6 @@ Prints the referenced idea node's
 * list of child schedule IDs, one line each
 
 * idea side links, in the same format as `list_child_ideas`
-
-IMPL TASK: gap 4 fixed
 
 
 ### Add Idea Side Link Tool
@@ -1294,7 +1287,6 @@ This command takes further arguments:
 Exactly one of `--block` / `--cancel` must be given, since a `WarningToggle`'s
 value is a tagged union (see "WarningToggle State").
 
-IMPL TASK: gap 2, eliminate `session_root_node`
 
 The schedule given by `dh_hl session_root_of` is a reasonable
 default for the `{schedule ID}` argument.
@@ -1386,7 +1378,6 @@ Walks the branch of the tree from the referenced schedule node
 up toward a root node.
 For each schedule node, prints:
 
-IMPL TASK: gap 4 fixed
 
 * Its ID
 * Its child idea nodes in the same format as `dh_hl list_child_ideas`,
@@ -1457,7 +1448,6 @@ Each commentary is printed as
     # Does not acquire session lock
     dh_hl view_session_commentary -s ...
 
-IMPL TASK: add this
 
 Takes an optional `--brief` argument.
 
@@ -1477,13 +1467,6 @@ Error if the current session has no output yet.
     dh_hl root_of -C ... [schedule ID]
     dh_hl session_root_of -s ... [schedule ID]
 
-IMPL TASK: add this, including testing of `session_root_of` failure,
-and weird case where two seed ideas have an indirect parent/child
-relationship (should return the indirect child's child schedule,
-if found first). Also the timestamp failure needs testing.
-
-IMPL TASK: remember this tool satisfies the conditions for a
-timestamp check to be included (infinite loops possible).
 
 Starts at the referenced schedule node and starts walking the tree
 towards the root.
@@ -1515,19 +1498,6 @@ Rarely needed, mostly for when a new root node was created and you regret it.
 
 ### Session Creation Tools: Common Information
 
-IMPL TASK: no more private workspace initialization.
-
-IMPL TASK: inform me if there's a potential contradiction with
-the private workspace not being initialized, but somehow the
-session lock still has to exist.
-My POV for now is the `private/...` *directory* can exist,
-but the files within it won't be created.
-The "actual files exist" checks are the failure criteria
-for `init_workspace` without `--force`.
-
-IMPL TASK: prompt and multiple seed ideas
-
-IMPL TASK: per-tool default anchor node
 
 Each session creation tool requires (or implies) an input proposal name,
 prompt file, and list of parent schedule nodes.
@@ -1594,9 +1564,6 @@ so it's not a reasonable default as an anchor (profiling may never terminate)
 
     dh_hl new_sub_session -s ... {proposal name} {prompt file} [schedule IDs...]
 
-IMPL TASK: test the default anchor behavior
-
-IMPL TASK: test multiple parent schedules, and empty list behavior.
 
 Create a new sub-session,
 which is a child of the current session with 1 greater depth.
@@ -1614,9 +1581,9 @@ The default anchor is the current anchor of the current session
 
     dh_hl new_successor_session -s ... {proposal name} {prompt file}
 
-IMPL TASK: gap 3, or lack thereof.
 This uses all output schedules as parent schedules,
-not giving special treatment for the primary output schedule.
+not giving special treatment for the primary output schedule
+(except that the primary output becomes the successor's default anchor).
 
 The current session must be self-closed and have depth 0.
 
@@ -1652,11 +1619,6 @@ Give both full session IDs and session handles.
 
     dh_hl close_session -s ... [schedule IDs...]
 
-IMPL TASK: basically needs a rewrite for new functionality
-
-IMPL TASK: tests for failed pool tag (2 reasons, as with `new_idea`,
-although "not in private idea list" may be very hard to construct.
-If it's too hard, it's acceptable to keep `_forget_private_idea` internally)
 
 Add outputs to the current session, making it self-closed.
 This promotes a fair amount of private (not git tracked)
@@ -1681,7 +1643,6 @@ the tool gives an error and reminds of the `dh_hl comment` tool.
 **Output Benchmark Sets:**
 Same as the current session's private benchmark set list.
 
-IMPL TASK: gap 2, eliminate `session_root_node`
 
 **Added superseded-by Links:**
 For each output schedule `O`, find the schedule node `R`
@@ -1696,11 +1657,6 @@ where `session_root_of` would fail.
     # Acquires session lock of the current session only.
     dh_hl join_session -s {current session handle/ID} {joined session handle/ID}
 
-IMPL TASK: this is the only tool that has to reference two sessions.
-Advise me if this causes any serious complications for existing CLI helpers
-or otherwise breaks (possibly unstated) implementation assumptions.
-Note, the locking discipline doesn't require locking the joined session
-since this tool doesn't access any of its private workspace state.
 
 Adds joined session outputs to the current session's private idea list
 and private benchmark sets; error if the joined session lacks outputs.
@@ -1721,9 +1677,9 @@ If `--dry-run` is not given,
   * the output schedule node's pool tag otherwise,
     prefixed with `{pool prefix}.` if the pool prefix is non-empty.
 
-IMPL TASK: an unfriendly raw Python exception is acceptable for the
-root schedule case since this shouldn't happen without manually
-corrupting the catalog files.
+An unfriendly raw Python exception is acceptable for the root-schedule case
+(a root output) since `close_session` forbids it, so it can't happen without
+manually corrupting the catalog files.
 
 Whether or not `--dry-run` was given, this prints out
 
@@ -1733,15 +1689,6 @@ Whether or not `--dry-run` was given, this prints out
 * The idea nodes (that would be) added, as two lines of the form
   `dh_hl: add idea {id}`, `dh_hl: pool tag {pool tag}`.
   The pool tag given includes the added prefix.
-
-IMPL TASK: add a flag to `safety.commit` that enables asserting that
-no files were added (`not _new_entries`) and no overwrites queued.
-Use this flag to self-check that `--dry-run` did nothing.
-NB locking intentionally bypasses this so that won't mess anything up.
-
-IMPL TASK: test prioritization of existing pool tag.
-
-IMPL TASK: test missing joined session outputs failure.
 
 
 ### Delist Session Tool
@@ -1757,7 +1704,6 @@ Useful to get rid of old abandoned sessions in the open sessions or termini list
     # Does not acquire session lock
     dh_hl view_session_prompt -s ...
 
-IMPL TASK: add this
 
 Prints the plain text prompt of the current session,
 followed by `=== Seed Ideas ===`,
@@ -1770,13 +1716,6 @@ followed by the output of the `list_seed_ideas` tool.
     dh_hl list_private_ideas_todo -s ... [N]
     dh_hl list_private_ideas_done -s ... [N]
 
-IMPL TASK: pytest skip `list_private_ideas*` and ignore for now
-that the tool won't work well with new unordered current ideas state.
-Printing in cost-ordered way will be left to a future batch of tasks.
-For now, session private idea list can be tested with
-`get_pool_tag` including the error case.  Please write tests that have
-multiple session nodes as a guard against future accidental mixing of
-different sessions' states.
 
 FUTURE: add tool, nonfunctional for now.
 
@@ -1786,7 +1725,6 @@ FUTURE: add tool, nonfunctional for now.
     dh_hl get_current_anchor -s ...
     dh_hl set_current_anchor -s ... [schedule ID]
 
-IMPL TASK: add this
 
 Get or set the ID of the current session's current anchor node.
 The special value `none` is used for "no anchor node"
@@ -1799,9 +1737,6 @@ The special value `none` is used for "no anchor node"
     dh_hl set_pool_tag -s ... {idea ID} {pool tag}
     dh_hl hide_private_idea -s ... {idea ID}
 
-IMPL TASK: add this
-
-IMPL TASK: remove `forget_private_idea`
 
 Gets or sets the pool tag assigned for the given idea node,
 as stored in the private idea list.
@@ -1823,7 +1758,6 @@ Also the `.` prefix won't make sense until then.
 
     dh_hl rename_pool_tag -s ... {pool tag before} {pool tag after}
 
-IMPL TASK: add this, test results with `get_pool_tag`
 
 Iterates over all entries in the current session's private idea list.
 Each idea that has `{pool tag before}` as its pool tag
@@ -1854,19 +1788,16 @@ Find a certain schedule node (noun), and do something with it (verb):
 
 * `schedule`: the schedule node id'd by `[schedule ID]`.
 
-IMPL TASK: gap 3, explicit primary output schedule
 
 * `terminus_schedule`:
   the primary output schedule of the unique terminus.
   Error if there is not exactly one session node that is a terminus
   or the terminus has no output schedule.
 
-IMPL TASK: gap 3, explicit 0th seed idea
 
 * `seed_schedule`:
   the canonical schedule of the current session's 0th seed idea.
 
-IMPL TASK: gap 3, explicit primary output schedule
 
 * `session_output`:
   the primary output schedule of the current session;
@@ -2094,7 +2025,6 @@ Prints the state of the referenced idea node as a JSON object, with key/value pa
     # Does not acquire session lock
     dh_hl json_session_info -s ...
 
-IMPL TASK: `prompt`, `default_anchor_schedule`, `seed_ideas`, `output_*`
 
 Prints the state of the current session as a JSON object, with key/value pairs
 

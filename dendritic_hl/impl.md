@@ -225,26 +225,24 @@ unambiguously (`_SESSION_ID_RE` in `ids.py`).
 
 * **ID:** directory name.
 
-IMPL TASK: prompt
-
 * **Prompt:** `prompt.txt`
 
 * **Parent:** `parent.txt` holds a session node full ID plus a newline,
   unless there is no parent, in which case this file doesn't exist.
 
-IMPL TASK: new seed ideas, multiple and not just one.
-
-* **Seed Idea:** `seed_ideas.json` holds a list of idea node full IDs.
-
-IMPL TASK: default anchor schedule
+* **Seed Ideas:** `seed_ideas.json` holds a JSON list of idea node full IDs
+  (>= 1; the 0th is the canonical "the session's seed idea").
 
 * **Default Anchor Schedule:** if it exists, its full ID plus a newline is in
   `default_anchor_schedule.txt`
 
-IMPL TASK: implement your own reasonable outputs JSON internal format
-and document in a `###` sub-section right under this.
-
-* **Outputs:** `outputs.json`, doesn't exist if no outputs yet.
+* **Outputs:** `outputs.json`, doesn't exist if no outputs yet.  A JSON object
+  `{"schedules": [{"id": <schedule full ID>, "pool_tag": <str>}, ...],
+  "benchmark_sets": [<benchmark set full ID>, ...]}`.  The schedules are ordered
+  (the first is the *primary* output); the pool tags are those the outputs' parent
+  ideas had in the closing session's private idea list.  Owned by `SessionNode`
+  in `catalog.py` (`set_outputs`, `output_schedule_ids`,
+  `output_schedule_pool_tags`, `output_benchmark_set_ids`).
 
 * **Delisted Flag:** Delisted iff `delisted.txt` exists; contents are ignored.
 
