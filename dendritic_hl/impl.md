@@ -307,10 +307,13 @@ Inside the `private/{session id}` sub-directory, there is
   easier.  Its format is documented in `build.py` (`_INIT_BUILD_FILE`), not
   here, as it's not of general interest.
 
-Any command accessing `private/` or giving paths to it (`dh_hl bin` etc.)
-must initialize `private/{session id}` and its contents lazily,
-except for `generator.cpp` and `current_idea_state.txt` (we can't know this).
-This could desync from `session/` due to git checkouts.
+Any command that needs `private/{session id}` creates the *directory* lazily
+(`SessionWorkspace.ensure_private_dir`; the `session.lock` and `bin/` likewise).
+The *content* files above are written by `dh_hl init_workspace` (the blessed
+initializer) or by the `restore_*` tools — session creation no longer initializes
+them, so a freshly created session's workspace is empty until `init_workspace`
+runs.  The whole `private/` tree is gitignored, so it can desync from the
+git-tracked `session/` state after a git checkout.
 
 
 ### Current Idea State on Disk
@@ -325,27 +328,6 @@ It's a single line with trailing newline holding
 FUTURE: there's a bunch of "merge conflict" handling that's not really useful at the moment.
 If it's relatively harmless, I'd like to keep it for now,
 in case circumstances cause me to again change my mind about gitignoring `current_idea_state.txt`.
-
-
-### Private Ideas List State on Disk
-
-one idea node full ID per line, newline-terminated, in the order the ideas were added,
-
-with **new ideas appended to the END (bottom)** of the file. The file is absent
-until the first idea is added (an empty list reads as no file). It is not robust to
-malformed data: blank lines are skipped, and any line that is not the full ID
-of an existing idea node is silently ignored by the listing tools (this can
-happen after a git checkout desyncs the gitignored workspace from the catalog
-graph). Because new IDs go on the bottom, `dh_hl list_private_ideas` prints
-the list **backwards** (reads the file, reverses it) so the most recently
-added idea is shown first. `SessionWorkspace.{read,add,remove}_private_idea`
-(context.py) own this file; mutations go through `safety.write_allowed`
-(whole-file rewrite), so they participate in the deferred-overwrite/rollback
-machinery like the other workspace files.
-Interacting tools: `new_idea` and the session-creation flow append (the
-latter to the *parent/current* session's list, and `new_catalog` appends to
-nothing since it has no parent session); `forget_private_idea` removes;
-`list_private_ideas[_todo|_done]` read.
 
 
 ## Session Handles on Disk
@@ -478,8 +460,8 @@ steps, and drive everything param-dependent from Python `subprocess`:
   generator parameters.
 * Python drives the param-dependent phases directly with `subprocess`
   (serially, no parallelism): run the generator to emit outputs (phase 2),
-  link the standalone binary (phase 4), and, for `profile`, run the benchmark.
-  For `profile` this per-param-set work is a Python `for` loop; don't push the
+  link the standalone binary (phase 4), and, when `--profile` is on, run the
+  benchmark.  This per-param-set work is a Python `for` loop; don't push the
   loop into ninja. This keeps David from getting paranoid about unexpected
   parallelism (yes, I know about pools).
 
@@ -492,18 +474,28 @@ The steps performed are:
   to finish a standalone benchmarkable binary (Python)
 
 See the [Reference Build Commands](reference_build_commands.md) file for the
-tested build/link recipe. For `profile`, keep the generator executable from
-phase 1 and re-run the emit + link + benchmark steps for each parameter set.
+tested build/link recipe. When profiling, keep the per-node generator executable
+from phase 1 and re-run the emit + link + benchmark steps for each parameter set.
+(`build` reads the node source/params from the catalog files named by
+`init_build.json`, not the workspace directly.)
 
 **Generator name.** `GenGen` still requires `-g <name>` even when only one
 generator is registered, but under the single-generator assumption (see Goals)
 the name is discovered automatically: run the generator executable with **no**
 `-g`, and it errors out listing `available Generators are:` followed by the sole
-registered name; scrape that single name and pass it as `-g`. Then use a
-**fixed** output basename (e.g. `-f dh_hl_gen`), so all emitted filenames
-(`dh_hl_gen.a`, `dh_hl_gen.registration.cpp`, `dh_hl_gen.conceptual.stmt`, ...)
-are independent of the generator's registered name. This whole path was tested
-end-to-end against the local Halide build.
+registered name; scrape that single name and pass it as `-g`.
+
+**Output basename (`-f`).** A `build` run compiles many binaries in one `bin/`
+dir (up to three nodes × their parameters objects), so the `-f` basename must be
+**unique per (node, parameters index)** or the emitted `.a`/`.registration.cpp`/
+`.rungen` would clobber each other.  It ALSO must be a valid **C identifier**,
+because Halide bakes it into symbol names in the emitted `registration.cpp`.  A
+schedule full ID starts with a digit and contains `-`, so `build._emit_basename`
+sanitizes it (non-alphanumerics → `_`, prefixed with a letter) and appends the
+parameters index — unique, valid, and independent of the generator's registered
+name.  (An earlier design used a single fixed `-f dh_hl_gen`; that only worked
+for the old one-node/one-params build and was replaced.)  This whole path is
+tested end-to-end against the local Halide build.
 
 If the `available Generators are:` list contains anything other than exactly
 one name (zero, or two or more), the tool reports a harness error and stops.
@@ -593,19 +585,25 @@ of possible crashes in between overwriting a file and tool exit.
   `new_dir(path)` / `makedirs_tracked(path)` create directories, recording only
   the levels actually created. All recorded entries go on `_new_entries`
   (a LIFO list of `("file"|"dir", path)`).
-* `write_allowed(path, data)` is for the allowed-to-change files: it `new_file`s
-  when the target is absent (so rollback can remove it) and otherwise defers an
-  overwrite via `queue_overwrite`. Deferred overwrites are applied by `commit()`
-  and are NOT rolled back.
+* `write_allowed(path, data, *, allow=True)` is for the allowed-to-change files:
+  it `new_file`s when the target is absent (so rollback can remove it) and
+  otherwise defers an overwrite via `queue_overwrite`. Deferred overwrites are
+  applied by `commit()` and are NOT rolled back.  With `allow=False` an existing
+  target instead falls through to `new_file`, whose `O_EXCL` create raises — this
+  is how `init_workspace` (without `--force`) refuses to clobber existing
+  workspace state.
 * `arm()` (called at the top of `main()`) registers the `atexit` handler
   `_rollback` and maps `SIGQUIT`→`KeyboardInterrupt`.
 * `_rollback()` deletes `_new_entries` in reverse (files via `os.remove`, dirs
   via `os.rmdir`, so a created dir is empty when removed); it swallows `OSError`
   (drops that entry — no infinite loop) and retries the current entry on
   `KeyboardInterrupt`.
-* `commit()` applies the deferred overwrites, then clears `_new_entries` so the
-  still-registered `atexit` handler becomes a no-op — this is the "disable as
-  the final step" that prevents rolling back a successful tool's effects.
+* `commit(*, assert_no_writes=False)` applies the deferred overwrites, then
+  clears `_new_entries` so the still-registered `atexit` handler becomes a no-op
+  — this is the "disable as the final step" that prevents rolling back a
+  successful tool's effects.  `assert_no_writes=True` (used by `join_session
+  --dry-run`) first asserts the run recorded no new files and queued no
+  overwrites — a self-check that a dry-run mutated nothing.
 
 The flush itself lives on the model objects, not `safety`: `Catalog.flush()`
 calls every dirty object's `flush()` (see Tool Internal Design),
@@ -749,9 +747,9 @@ Because a `Catalog` implies the lock, `Catalog.__init__` does **not** acquire it
 the caller must (that is what `Context._open_catalog` and build do).  The
 per-session `SessionWorkspace` is deliberately **not** a catalog sub-object: it
 is constructed from a `catalog_dir` (+ optional `catalog`) and its reads
-(`generator.cpp`, `current_idea_state.txt`, `bin/`) need no lock — this is what
-lets `build`/`profile` read + compile the workspace before taking the catalog
-lock.  A `catalog` is required only to *mutate* the current idea state
+(the workspace files, `bin/`) need no lock — this is what lets `init_build` read
+the workspace, and `build` read + compile the catalog node files named by
+`init_build.json`, before taking the catalog lock.  A `catalog` is required only to *mutate* the current idea state
 (`CurrentIdeaState.set_*` raises without one), which always happens under the
 lock.
 
@@ -798,7 +796,7 @@ each edge-creating site currently checks inline.
 (UTC, microsecond precision) busy-waited until it is strictly greater than
 `self._last_timestamp`, the last value handed out *this process*. That guarantees
 intra-process monotonic, distinct timestamps. It is one of the two guards the
-mint helper below combines; the `profile` benchmark loop, for instance, mints each
+mint helper below combines; the `build` profiling loop, for instance, mints each
 benchmark name via `mint_timestamped_name`, so a machine fast enough to emit two
 benchmarks in one microsecond simply spins until the clock ticks (and skips any
 name another process already committed).
@@ -826,7 +824,7 @@ file), `ScheduleNode.add_benchmark` (over `bench/{host}_{ts}`), and
 `ScheduleNode.add_warning_toggle` (over `warning_toggle/{ts}.json`), and
 `Catalog.create_benchmark_set` (over `benchmark_sets/{host}_{ts}.json`).
 `add_benchmark` now mints internally and no longer takes an explicit timestamp
-argument — `build.py`'s profile loop just calls
+argument — `build.py`'s profiling loop just calls
 `node.add_benchmark(file_hostname, bench_obj)` (sanitized hostname for the file
 name). Session-dir minting routes through the same helper via
 `Catalog.mint_session_id`.
@@ -872,21 +870,27 @@ still the idea-node collision check, so it does not use the mint helper.)
 * `locks.py` — the machine directory, the flock lock hierarchy, and the lock-free
   session-handle store (see Lock Hierarchy, Session Handles).
 * `catalog.py` — the in-memory model (conceptual description below). `_UNLOADED`
-  sentinel; sub-objects `Commentary`, `Benchmark`; nodes `ScheduleNode`,
-  `IdeaNode`, `SessionNode`; the `CurrentIdeaState` parser; and the top-level
-  `Catalog` (lazy `schedules`/`ideas`/`sessions` dicts, derived child-edge
+  sentinel; schedule sub-objects `Commentary`, `Benchmark`, `WarningToggle`; the
+  top-level `BenchmarkSet`; nodes `ScheduleNode` (with generator parameters +
+  `RESULT_STATES`/`best_result`), `IdeaNode`, `SessionNode` (prompt, multiple
+  seed ideas, default anchor, `outputs.json`); the `CurrentIdeaState` parser; the
+  parameter helpers (`DEFAULT_PARAMETERS`/`dump_parameters`/`validate_parameters`/
+  `load_parameters_text`); and the top-level `Catalog` (lazy
+  `schedules`/`ideas`/`sessions`/`benchmark_sets` dicts, derived child-edge
   linking, dirty set + `flush()`, `mint_timestamped_name`/`mint_session_id`,
-  `create_schedule`/`create_idea`/`create_session`, the edge helpers, and the
-  `session_is_closed`/`session_is_terminus` predicates). `Catalog.__init__`
-  enforces the Catalog lock invariant (see Lock Hierarchy). Short-ID
-  resolution/formatting are free functions exposed via `Catalog.resolve_*` /
-  `format_*`.
+  `create_schedule`/`create_idea`/`create_session`/`create_benchmark_set`, the
+  edge helpers, and the `session_is_closed`/`session_is_terminus` predicates).
+  `Catalog.__init__` enforces the Catalog lock invariant (see Lock Hierarchy).
+  Short-ID resolution/formatting are free functions exposed via `Catalog.resolve_*`
+  / `format_*` (benchmark sets resolve by exact full ID only).
 * `context.py` — `resolve_target` maps `-C`/`-s` (handle or full ID) to
   `(catalog_dir, session_id)`; `Context.for_catalog` / `for_session` acquire the
   locks then wrap a `Catalog`; `SessionWorkspace` is the (catalog-free-readable)
-  per-session private workspace owning `generator.cpp`, `current_idea_state.txt`,
-  `bin/`; `finish()` = `catalog.flush()` + `safety.commit()`; `read_text_or_stdin`
-  handles `-` and turns a missing file into a clean `DhHlError`.
+  per-session private workspace owning `generator.cpp`, `generator_parameters.json`,
+  `current_idea_state.txt`, `current_anchor_schedule.txt`, `private_ideas.json`
+  (pool tags), `private_benchmark_sets.json`, and `bin/`; `finish()` =
+  `catalog.flush()` + `safety.commit()`; `read_text_or_stdin` handles `-` and
+  turns a missing file into a clean `DhHlError`.
 * `tools.py` — every non-build `cmd_*` (catalog/idea/session queries + session
   lifecycle) plus shared print/JSON helpers.
 * `build.py` — `cmd_init_build` / `cmd_build` (see the Build Tool in idea.md),
@@ -911,6 +915,7 @@ There is a top-level `Catalog` object, owning
 * A `Dict[str, IdeaNode]`: idea nodes by full ID
 * A `Dict[str, ScheduleNode]`: schedule nodes by full ID
 * A `Dict[str, SessionNode]`: session nodes by full ID
+* A `Dict[str, BenchmarkSet]`: benchmark set objects by full ID
 
 Each object
 * is accessed with getters and setters
@@ -989,9 +994,13 @@ the two packages works.)
     .venv/bin/python -m pytest                    # full suite
 
 Most tests are Halide-free (they exercise the catalog model, tools, short IDs,
-safety/rollback, and build/profile logic with the subprocess steps stubbed).
-The genuinely end-to-end tests are marked `halide` (registered in `pytest.ini`)
-and auto-skip unless the local `~/Halide` build and `ninja` are present.
+safety/rollback, and the `init_build`/`build` orchestration with the subprocess
+steps stubbed). The genuinely end-to-end tests are marked `halide` (registered in
+`pytest.ini`) and auto-skip unless the local `~/Halide` build and `ninja` are
+present: `test_halide.py` and `test_params_e2e.py` (in-process via `run_tool`),
+and `test_build_cli_halide.py` (real `./dh_hl` subprocess via `run_cli`, using
+the `tests/hist_params.cpp` generator to check profiler-stat attribution,
+generator-output ordering, and failed-generator handling).
 
 **Test-only hook in shipped code.** `safety.new_file` honors a
 `DH_HL_TEST_FAIL_AFTER=<n>` environment variable that raises after the n-th new
@@ -1014,10 +1023,15 @@ argv it builds. Consequences to keep in mind:
 * Because the fixture *replaces* these functions, the fake tests never run
   their real bodies, so edits *inside* a body (e.g. compiler flags in `_link`,
   ninja rules in `_write_ninja`) are invisible to them — those bodies are
-  covered only by the opt-in `halide`-marked `test_halide.py`.
+  covered only by the opt-in `halide`-marked tests (`test_halide.py`,
+  `test_params_e2e.py`, `test_build_cli_halide.py`).
 
 So the two tiers are complementary: fake-build pins the orchestration fast and
-always; the Halide test verifies the real toolchain integration when present.
+always; the Halide tests verify the real toolchain integration when present.
+Because the fake profiler returns identical dummy stats for every binary, the
+*attribution* of profiler stats to the right (schedule, parameters) is checked
+only by the Halide tier (the parallel-vs-serial perf and benchmark-set-cell
+tests in `test_build_cli_halide.py`).
 
 **Locking in tests.**
 
@@ -1056,13 +1070,34 @@ failure, it means one of the above was skipped.
   **ordering asserts** and `_state`/`locked_catalog_dir()` bookkeeping are
   genuinely exercised, minus the syscalls). `run_tool` depends on it.
 
-*Listening in on lock behavior.* `locks._trace(event)` appends to `locks._trace_sink`
-when a test sets it to a list (a no-op otherwise). Under `fake_locks`, each
-`acquire_*` records `("machine","shared")`, `("session","exclusive")`,
-`("machine","exclusive")`, `("catalog","exclusive")` in order, so a test can
-assert the exact per-command lock sequence — e.g. that `build --profile`
-upgrades the machine lock to exclusive before taking the catalog lock and a
-non-profiling `build` does not, or that a read-only tool skips the session lock. This is white-box coverage the
-subprocess tier cannot observe; real cross-process mutual exclusion is instead
-covered by the subprocess timing test (`test_locks.py`). (`run_tool` resets the
-sink per call, so `locks._trace_sink` reflects the most recent command.)
+*Listening in on lock behavior AND build commands.* `locks._trace(event)` appends
+to `locks._trace_sink` when a test sets it to a list (a no-op otherwise). Two
+kinds of event share this one ordered stream:
+
+* Lock events — each `acquire_*` records `("machine","shared")`,
+  `("session","exclusive")`, `("machine","exclusive")`, `("catalog","exclusive")`
+  in order, so a test can assert the exact per-command lock sequence: e.g. that
+  `build --profile` upgrades the machine lock to exclusive before taking the
+  catalog lock and a non-profiling `build` does not, or that a read-only tool
+  skips the session lock.
+* Build command events — `build.py` records the toolchain steps it issues as
+  `("build", <phase>, *detail)` (`cpp_compile`/`emit`/`link`/`batch`/`profile`)
+  via `build._trace_build`, deliberately onto the SAME sink (a "piggyback").
+  Sharing one stream is the point: `test_halide.py::test_build_command_trace_and_shuffle`
+  runs the REAL toolchain in-process and asserts both the command sequence AND
+  its ordering relative to the lock acquisitions (all compilation before the
+  machine-exclusive upgrade + catalog lock; all profiling after), plus that the
+  per-batch profiling order is shuffled. Tests that only want the lock sequence
+  filter build events out (`[e for e in sink if e[0] != "build"]`).
+
+This is white-box coverage the subprocess tier cannot observe; real cross-process
+mutual exclusion is instead covered by the subprocess timing test (`test_locks.py`).
+(`run_tool` resets the sink per call, so `locks._trace_sink` reflects the most
+recent command.)
+
+*Ordering of `dh_hl:` lines vs child output.* `build._run_streamed` flushes our
+own stdout/stderr before launching each child, so the harness's `dh_hl:` banners
+are ordered before the child's output in a piped/captured stream (our Python
+stdout is block-buffered when piped). This matters for printf-debugging a
+generator and is asserted by `test_build_cli_halide.py` (generator prints land
+between the begin/end generator banners).
