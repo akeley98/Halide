@@ -343,7 +343,7 @@ def _build_parser():
     # -- Phase 4: session lifecycle + queries --------------------------------
     sp = add("new_catalog")
     sp.add_argument("proposal_name", help="seed idea proposal name [A-Za-z0-9_]{1,72}")
-    sp.add_argument("proposal", help="seed idea proposal text file ('-' for stdin)")
+    sp.add_argument("proposal", help="prompt file ('-' for stdin)")
     sp.add_argument("input_cpp", help="initial C++ generator file ('-' for stdin)")
     sp.add_argument("input_parameters", nargs="?",
                     help="generator parameters JSON list file ('-' for stdin; "
@@ -351,15 +351,17 @@ def _build_parser():
 
     sp = add("new_sub_session")
     sp.add_argument("proposal_name", help="proposal name [A-Za-z0-9_]{1,72}")
-    sp.add_argument("proposal", help="proposal text file ('-' for stdin)")
-    sp.add_argument("schedule", nargs="?", help="parent schedule ID (default: status)")
+    sp.add_argument("proposal", help="prompt file ('-' for stdin)")
+    sp.add_argument("schedule", nargs="*",
+                    help="parent schedule IDs (default: status)")
 
     sp = add("new_successor_session")
     sp.add_argument("proposal_name", help="proposal name [A-Za-z0-9_]{1,72}")
-    sp.add_argument("proposal", help="proposal text file ('-' for stdin)")
+    sp.add_argument("proposal", help="prompt file ('-' for stdin)")
 
     sp = add("close_session")
-    sp.add_argument("schedule", nargs="?", help="output schedule ID (default: status)")
+    sp.add_argument("schedule", nargs="*",
+                    help="output schedule IDs (default: status)")
 
     add("delist_session")
     add("list_open_sessions")

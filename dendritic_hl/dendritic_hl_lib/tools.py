@@ -742,34 +742,44 @@ def cmd_fix_canonical(args):
 
 # ---- session creation (the "Session Creation Common" flow) ----------------
 
-def _create_session_and_idea(catalog, parent_schedule, proposal_name,
-                             proposal_text, parent_session, depth):
-    """Create the session/idea pair off *parent_schedule* (idea.md "Session
-    Creation Tools: Common Information").  Returns (session, handle).
+def _create_session(catalog, parent_schedules, proposal_name, prompt_text,
+                    parent_session, depth, default_anchor_schedule_id=None):
+    """Session Creation Common flow (idea.md "Session Creation Tools").  Creates
+    one seed idea per parent schedule (all sharing *proposal_name*, so distinct
+    IDs), each tagged session.{proposal name} in the PARENT session's private
+    list and given a duplicate of its parent schedule as its canonical.  Seeds a
+    new session (prompt = *prompt_text*, no workspace init) with those seed ideas
+    and *default_anchor_schedule_id*.  Returns (session, handle).
 
-    Mints the session ID first so the seed idea's proposal text can reference
-    it; seeds a session whose private workspace holds a copy of the parent
-    schedule's C++ pointing at the new idea; and duplicates the parent schedule
-    as the new idea's canonical, giving the new session an exclusive sub-tree."""
+    *parent_schedules* is a non-empty list of ScheduleNode."""
+    if not parent_schedules:
+        raise DhHlError("session creation needs at least one parent schedule")
     session_id = catalog.mint_session_id(depth)
-    text = proposal_text if proposal_text.endswith("\n") else proposal_text + "\n"
+    text = prompt_text if prompt_text.endswith("\n") else prompt_text + "\n"
     text += "Created for session: {}\n".format(session_id)
-    idea = catalog.create_idea(parent_schedule, proposal_name, text)
-    # The new idea joins the PARENT (current) session's private idea list, just
-    # like `new_idea` would (idea.md "Session Creation Tools: Common
-    # Information").  new_catalog has no parent session, so it adds to nothing.
-    if parent_session is not None:
-        parent_ws = SessionWorkspace(catalog.catalog_dir, parent_session.full_id,
-                                     catalog=catalog)
-        parent_ws.set_pool_tag(idea.full_id, "session." + proposal_name)
-    session = catalog.create_session(idea, parent_session, depth,
-                                     session_id=session_id)
-    ws = SessionWorkspace(catalog.catalog_dir, session_id, catalog=catalog)
-    ws.initialize(parent_schedule.source, ("idea", idea.full_id),
-                  params_text=parent_schedule.params_text)
-    dup = catalog.create_schedule(parent_schedule.source, parent_idea=idea,
-                                  params_text=parent_schedule.params_text)
-    idea.set_canonical(dup.full_id)
+    parent_ws = (SessionWorkspace(catalog.catalog_dir, parent_session.full_id,
+                                  catalog=catalog)
+                 if parent_session is not None else None)
+    seed_ideas = []
+    for ps in parent_schedules:
+        idea = catalog.create_idea(ps, proposal_name, text)
+        seed_ideas.append(idea)
+        # The seed idea joins the PARENT (current) session's private idea list,
+        # tagged session.{proposal name}.  new_catalog has no parent session, so
+        # it adds to nothing.
+        if parent_ws is not None:
+            parent_ws.set_pool_tag(idea.full_id, "session." + proposal_name)
+        # Duplicate the parent schedule as the seed idea's canonical, giving the
+        # new session an exclusive sub-tree to explore.
+        dup = catalog.create_schedule(ps.source, parent_idea=idea,
+                                      params_text=ps.params_text)
+        idea.set_canonical(dup.full_id)
+    # The private workspace is deliberately NOT initialized here (idea.md);
+    # the new agent runs `dh_hl init_workspace`.
+    session = catalog.create_session(
+        seed_ideas, parent_session, depth, prompt=prompt_text,
+        default_anchor_schedule_id=default_anchor_schedule_id,
+        session_id=session_id)
     handle = locks.allocate_handle(catalog.catalog_dir, session_id)
     return session, handle
 
@@ -782,7 +792,7 @@ def cmd_new_catalog(args):
         raise DhHlError("proposal name must be 1..72 chars of [A-Za-z0-9_]: "
                         + repr(args.proposal_name))
     input_source = read_text_or_stdin(args.input_cpp)
-    proposal_text = read_text_or_stdin(args.proposal)
+    prompt_text = read_text_or_stdin(args.proposal)
     # Optional generator parameters; default is "[{}]" (benchmark once, no params).
     if getattr(args, "input_parameters", None) is not None:
         params_text = load_parameters_text(read_text_or_stdin(args.input_parameters))
@@ -795,8 +805,10 @@ def cmd_new_catalog(args):
     catalog.ensure_created()
     root = catalog.create_schedule(input_source, parent_idea=None,
                                    params_text=params_text)
-    session, handle = _create_session_and_idea(
-        catalog, root, args.proposal_name, proposal_text,
+    # No parent session and no default anchor (a user-provided schedule may be
+    # poor, so it's not a safe anchor -- profiling might never terminate).
+    session, handle = _create_session(
+        catalog, [root], args.proposal_name, prompt_text,
         parent_session=None, depth=0)
     catalog.flush()
     safety.commit()
@@ -805,13 +817,24 @@ def cmd_new_catalog(args):
     print("Session handle: " + handle)
 
 
+def _resolve_schedule_list(ctx, schedule_args):
+    """Resolve a `[schedule IDs...]` list; an empty list falls back to the
+    default single [schedule ID] (the unambiguous workspace node)."""
+    if not schedule_args:
+        return [ctx.resolve_schedule_arg(None)]
+    return [ctx.catalog.resolve_schedule(s) for s in schedule_args]
+
+
 def cmd_new_sub_session(args):
     ctx = Context.for_session(args, session_lock=True)
-    parent_schedule = ctx.resolve_schedule_arg(args.schedule)
-    proposal_text = read_text_or_stdin(args.proposal)
-    session, handle = _create_session_and_idea(
-        ctx.catalog, parent_schedule, args.proposal_name, proposal_text,
-        parent_session=ctx.session, depth=ctx.session.depth + 1)
+    parents = _resolve_schedule_list(ctx, getattr(args, "schedule", None) or [])
+    prompt_text = read_text_or_stdin(args.proposal)
+    # The sub-session inherits the current session's *current* anchor (may be none).
+    default_anchor = ctx.workspace.current_anchor_schedule_id
+    session, handle = _create_session(
+        ctx.catalog, parents, args.proposal_name, prompt_text,
+        parent_session=ctx.session, depth=ctx.session.depth + 1,
+        default_anchor_schedule_id=default_anchor)
     ctx.finish()
     print("Created sub-session " + session.full_id)
     print("Session handle: " + handle)
@@ -825,17 +848,20 @@ def cmd_new_successor_session(args):
             "new_successor_session requires a top-level (depth 0) session")
     if not session.is_self_closed():
         raise DhHlError(
-            "the current session must be self-closed (have an output schedule "
-            "or be delisted) before starting a successor")
-    if session.output_schedule_id is None:
+            "the current session must be self-closed (have outputs or be "
+            "delisted) before starting a successor")
+    if not session.has_outputs():
         raise DhHlError(
-            "the current session has no output schedule to succeed from "
+            "the current session has no output schedules to succeed from "
             "(it was only delisted)")
-    parent_schedule = ctx.catalog.get_schedule(session.output_schedule_id)
-    proposal_text = read_text_or_stdin(args.proposal)
-    new_session, handle = _create_session_and_idea(
-        ctx.catalog, parent_schedule, args.proposal_name, proposal_text,
-        parent_session=session, depth=0)
+    parents = [ctx.catalog.get_schedule(sid)
+               for sid in session.output_schedule_ids]
+    prompt_text = read_text_or_stdin(args.proposal)
+    # Default anchor = the primary output of the current session.
+    new_session, handle = _create_session(
+        ctx.catalog, parents, args.proposal_name, prompt_text,
+        parent_session=session, depth=0,
+        default_anchor_schedule_id=session.primary_output_schedule_id)
     ctx.finish()
     print("Created successor session " + new_session.full_id)
     print("Session handle: " + handle)

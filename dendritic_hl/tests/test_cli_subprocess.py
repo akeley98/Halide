@@ -54,6 +54,15 @@ def test_new_catalog_end_to_end_cli(run_cli, tmp_path):
     assert r.returncode == 0 and sid in r.stdout
     handle = [l.split("handle:")[1].strip() for l in r.stdout.splitlines()
               if "handle:" in l][0]
+
+    # new_catalog does NOT initialize the workspace: status says so until
+    # init_workspace runs (the blessed initializer), then it's consistent.
+    r = run_cli("status", "-s", handle)
+    assert r.returncode == 0 and "missing workspace" in r.stdout
+    assert "init_workspace" in r.stdout
+
+    r = run_cli("init_workspace", "-s", handle)
+    assert r.returncode == 0, r.stderr
     r = run_cli("status", "-s", handle)
     assert r.returncode == 0
     assert "workspace consistent" in r.stdout

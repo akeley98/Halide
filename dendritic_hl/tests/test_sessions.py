@@ -48,11 +48,15 @@ def test_new_catalog_creates_everything(tmp_path, run_tool, capsys):
     assert len(os.listdir(os.path.join(cat_dir, "sch"))) == 2
     assert len(os.listdir(os.path.join(cat_dir, "idea"))) == 1
     assert os.listdir(os.path.join(cat_dir, "session")) == [sid]
-    # Private workspace holds the input C++, pointing at the seed idea.
+
+    # The private workspace is NOT initialized by new_catalog (idea.md); status
+    # reports missing workspace files until init_workspace runs.
+    st = _out(run_tool, capsys, tools.cmd_status, ns(catalog=cat_dir, session=sid))
+    assert "missing workspace" in st
+
+    run_tool(tools.cmd_init_workspace, ns(catalog=cat_dir, session=sid, force=False))
     ws = os.path.join(cat_dir, "private", sid, "generator.cpp")
     assert open(ws).read() == "// generator source\n"
-
-    # And it's immediately a consistent, open terminus.
     st = _out(run_tool, capsys, tools.cmd_status, ns(catalog=cat_dir, session=sid))
     assert "workspace consistent" in st
 
@@ -90,6 +94,46 @@ def test_new_sub_session(session, run_tool, capsys, tmp_path):
     pinfo = json.loads(_out(run_tool, capsys, tools.cmd_json_session_info,
                             session.ns()))
     assert sub_id in pinfo["children"]
+
+
+def _major_schedule_ids(session):
+    cat = open_catalog(session.catalog_dir)
+    try:
+        return [s.full_id for s in cat.schedules.values() if s.is_major()]
+    finally:
+        from dendritic_hl_lib import locks
+        locks._reset_for_tests()
+
+
+def test_new_sub_session_multiple_parents(session, run_tool, capsys, tmp_path):
+    majors = _major_schedule_ids(session)  # root + seed canonical
+    assert len(majors) >= 2
+    prop = _write(tmp_path, "p.txt", "two parents\n")
+    out = _out(run_tool, capsys, tools.cmd_new_sub_session,
+               session.ns(proposal_name="multi", proposal=prop,
+                          schedule=majors[:2]))
+    sub_id = _line_after(out, "Created sub-session ")
+    # The sub-session has one seed idea per parent schedule.
+    cat = open_catalog(session.catalog_dir)
+    try:
+        assert len(cat.get_session(sub_id).seed_idea_ids) == 2
+    finally:
+        from dendritic_hl_lib import locks
+        locks._reset_for_tests()
+
+
+def test_new_sub_session_empty_list_uses_default(session, run_tool, capsys,
+                                                 tmp_path):
+    prop = _write(tmp_path, "p.txt", "default parent\n")
+    out = _out(run_tool, capsys, tools.cmd_new_sub_session,
+               session.ns(proposal_name="deflt", proposal=prop, schedule=[]))
+    sub_id = _line_after(out, "Created sub-session ")
+    cat = open_catalog(session.catalog_dir)
+    try:
+        assert len(cat.get_session(sub_id).seed_idea_ids) == 1
+    finally:
+        from dendritic_hl_lib import locks
+        locks._reset_for_tests()
 
 
 # ---- close / successor / delist ------------------------------------------
