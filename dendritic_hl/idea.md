@@ -221,7 +221,7 @@ All pairs go to the Halide generator as `key=value`.
   current anchor schedule,
   a session private idea list,
   a session private benchmark set list,
-  workspace source code files (`generator.cpp` and `generator_parameters.json`),
+  workspace files (`generator.cpp` and `generator_parameters.json`),
   and a `bin` directory.
 
 Most harness tools require a "current session",
@@ -751,7 +751,7 @@ but the safety this provided got replaced with init_workspace. -->
 
 If there was no current session given, the tool errors.
 Otherwise, the tool tries to find a schedule node that already holds
-a copy of the workspace source code files,
+a copy of the workspace files,
 and give basic information on the current catalog state.
 
 **Outputs:**
@@ -779,7 +779,7 @@ IMPL TASK: binary open/closed replaces seed idea / output schedule.
 
 IMPL TASK: implement cases below,
 enforce `generator_parameters.json` exists in `has_workspace`.
-Consider renaming `has_workspace` based on new "source code files" terminology.
+Consider renaming `has_workspace` based on new "workspace files" terminology.
 
 
 * The status as one of
@@ -811,12 +811,12 @@ This is why the command is robust to nonexistent current idea node IDs.
 
 **Search Implementation Details:**  <!-- deferred task: strip when creating prompt -->
 
-IMPL TASK: gap 1, I decided to use "source code files" as umbrella term.
+IMPL TASK: gap 1, I decided to use "workspace files" as umbrella term.
 Advise if a more clear term is possible.
 
-Hash the workspace source code files and look for schedule nodes with matching hashes.
+Hash the workspace files and look for schedule nodes with matching hashes.
 
-If some source code files, the status is "missing workspace [missing files]".
+If some are missing, the status is "missing workspace [missing files]".
 
 Otherwise, if no hash matches exist,
 the status is "workspace inconsistent, unknown schedule".
@@ -858,7 +858,7 @@ Otherwise, the status is "workspace inconsistent, unexpected current idea state"
 
 IMPL TASK: soften the message below and handle missing `generator_parameters.json`
 
-* If some workspace source code files are not found, print
+* If some workspace files are not found, print
 
         AGENTS: run `dh_hl init_workspace` to get files to edit
 

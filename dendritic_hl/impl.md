@@ -151,6 +151,12 @@ This contains files and directories holding state:
   `_resolve_commentary` / `_format_commentary_short` free functions (exposed via
   `Catalog.resolve_commentary` / `Catalog.format_commentary_id`).
 
+**"Workspace Files" Note:** this term refers only to the C++ generator
+(`generator.cpp`) and generator parameters files
+(`generator_parameters.json`), as these are the only data explicitly
+exposed as files to the harness user.
+All other state is technically files, but not "workspace files".
+
 *Merge risk:* `parent.txt` merge conflict if two branches retroactively parented
 a root schedule node to two different idea nodes.
 No automatic fix provided: this power should be used very sparingly anyway.
