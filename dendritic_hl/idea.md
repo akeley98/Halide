@@ -573,7 +573,7 @@ and only do direct comparisons between results in the same batch.
 See `dh_hl build` for details on batched profiling.
 
 For now, we will use the `wall_time_min` statistic as the raw cost;
-the other profiler statistics are used only for the `dh_hl json_stats`
+the other profiler statistics are used only for the `dh_hl json_profiler_stats`
 tool and the table created by the profiler.
 
 Schedule nodes may really correspond to multiple schedules due to the
@@ -586,6 +586,16 @@ Ties are broken arbitrarily.
 
 
 ### 2-way Cost Comparison
+
+IMPL TASK: make this more precise, but add no more than a handful
+of lines of text (basically something a little better than my naive
+"confidence interval" alone). Put the details in a new `impl.md` section.
+
+IMPL TASK: strictly optional.
+Add a new CLI switch for setting `B`, if you perceive this to have a profitable cost:benefit ratio.
+If done, document the new CLI switch in a similar style and brevity as `--confidence`.
+However, use the same `B` by default for both the frontier and the `json_compare_cost` tools
+as the documentation describes the frontier in terms of that tool.
 
 When comparing two schedules head-to-head
 (e.g. to answer "is there a performance regression?"),
@@ -1823,7 +1833,7 @@ Performs automated detection of ideas "obsoleted by" lower cost child ideas.
 
 * `--pools {regex}`, enable including idea nodes with regex-matched pool tags.
   Unions with other `--pool`, `--pools` arguments;
-  if no such arguments, it's as if `--pools "*"` was given.
+  if no such arguments, all pool tags are enabled.
 
 * `--done`, include only idea nodes with canonical schedules.
 
@@ -2149,7 +2159,7 @@ The output is a JSON object with key/value pairs on separate lines:
 * `representative`: number,
   index of generator parameters object used by the representative.
 
-* `parameters_raw_cost`: list of numbers,
+* `parameters_raw_cost`: list, each entry is a number (or null if 0 batches),
   n-th entry gives the raw cost of the program generated with the
   n-th generator parameters object, as used for representative picking.
 

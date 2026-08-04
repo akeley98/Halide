@@ -349,6 +349,9 @@ The `hostname`, `cpu_count`, `profiler_version` are not really
 used/tested now, but please add them as a future investment.
 Assert if the benchmarks are not all the same for this value.
 
+IMPL TASK: also describe what happens for wrong `profiler_version`.
+And please put the constant expected value somewhere reasonable.
+
 FUTURE: either warn or do something intelligent when mixing benchmarks
 from different computers.
 
