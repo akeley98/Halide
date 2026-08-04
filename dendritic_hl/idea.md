@@ -23,6 +23,10 @@ The goals of the Dendritic Halide Harness (`dh_hl`) are:
   generator. This lets the build/profile tools discover the generator name
   automatically (see the Build Tool) instead of parsing it out of the source.
 
+* **Rich Cost Comparison Tools:** Built-in tools for comparing
+  different schedules based on real runtime, with automatic
+  avoidance of statistical and noise pitfalls.
+
 * **Maximize Compatibility with Source Control:**
   "transparent"-ish on-disk state for the catalog,
   designed to minimize merge conflicts.
@@ -204,7 +208,8 @@ All pairs go to the Halide generator as `key=value`.
 
 * **Parent Session:** Optional, reference to another session node.
 
-* **Default Anchor Schedule:** Optional reference to schedule node.
+* **Default Anchor Schedule:** Optional reference to schedule node;
+  see "Cost Comparison Methodology".
 
 * **Outputs:** Optional, added when a session is closed.
   This is the "final result" of the session.
@@ -553,6 +558,82 @@ This locking *never* fails for correct usage: failure to acquire is diagnosed as
 (two concurrent agents using the same session).
 
 NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
+
+
+## Cost Comparison Methodology
+
+For now, we will use real runtime performance as the cost model.
+This exposes us to a various real-world noise.
+The machine lock gives some protection, but is fairly useless
+for long term drift (e.g. gradual CPU heat increase).
+
+To combat drift, we profile short "batches" of different schedule nodes,
+and only do direct comparisons between results in the same batch.
+See `dh_hl build` for details on batched profiling.
+
+For now, we will use the `wall_time_min` statistic as the raw cost;
+the other profiler statistics are used only for the `dh_hl json_stats`
+tool and the table created by the profiler.
+
+Schedule nodes may really correspond to multiple schedules due to the
+generator parameters feature.
+For the below methods, the **representative** is picked by selecting
+the generator parameters object that led to the lowest median raw cost,
+considering only the batches relevant for the method.
+
+Ties are broken arbitrarily.
+
+
+### 2-way Cost Comparison
+
+When comparing two schedules head-to-head
+(e.g. to answer "is there a performance regression?"),
+the answer will be based only on batches that included the two schedules.
+
+Select the representative for each schedule.
+Then reduce each batch to a single sample:
+the difference (schedule A raw cost - schedule B raw cost).
+Compute the X% confidence interval (CI) of all such samples
+(configurable confidence percentage).
+
+If the lower and upper bounds of the CI are both positive,
+confidently conclude schedule A has higher cost.
+If the lower and upper bounds of the CI are both negative,
+confidently conclude schedule B has higher cost.
+
+If neither is the case, then the comparison is inconclusive.
+
+
+### Cost Ranking With Anchor Schedule
+
+We use a different method to rank arbitrarily lists of schedules,
+because it would be cost prohibitive to require profiling all of them
+in a big batch.
+The technique relies on a selection of a single anchor schedule.
+
+For each target schedule (to be ranked), consider only batches that
+included both the anchor node and the target schedule.
+Pick the representative for both schedules.
+Reduce each batch to a single sample:
+the target schedule's raw cost divided by the anchor schedule's raw cost.
+The cost metric for the target schedule is the median of the samples.
+
+This is imperfect, as various outside factors may penalize one
+schedule more than the other (e.g. if one is memory bound, one compute
+bound); however, this is better than nothing, and we don't use the
+anchor schedule technique for high-stakes "is regression" 2-way comparisons.
+
+
+### Cost Ranking Without Anchor Schedule
+
+If there is no anchor schedule, the cost ranking falls back to raw time,
+rather than dimensionless ratios.
+
+For each schedule, consider batches that included profiling that schedule.
+The cost is the median raw cost of the representative
+(the same metric used to pick the representative in the first place).
+
+This exposes the harness user to drift.
 
 
 <!--
@@ -914,8 +995,7 @@ Takes optional arguments specifying the up to three schedule nodes.
   The special value `always` is like `auto` except it's
   an error if the current session has no current anchor.
 
-`--target workspace` behavior (a missing `generator_parameters.json` is an
-error here, just as in `dh_hl status`):
+`--target workspace` behavior:
 
 * If `dh_hl status` would give an unambiguous schedule node,
   the target schedule node is the one this tool returns.
@@ -1581,10 +1661,6 @@ The default anchor is the current anchor of the current session
 
     dh_hl new_successor_session -s ... {proposal name} {prompt file}
 
-This uses all output schedules as parent schedules,
-not giving special treatment for the primary output schedule
-(except that the primary output becomes the successor's default anchor).
-
 The current session must be self-closed and have depth 0.
 
 Create a new successor session (depth = 0) with
@@ -1677,10 +1753,6 @@ If `--dry-run` is not given,
   * the output schedule node's pool tag otherwise,
     prefixed with `{pool prefix}.` if the pool prefix is non-empty.
 
-An unfriendly raw Python exception is acceptable for the root-schedule case
-(a root output) since `close_session` forbids it, so it can't happen without
-manually corrupting the catalog files.
-
 Whether or not `--dry-run` was given, this prints out
 
 * The benchmark sets (that would be) added,
@@ -1689,6 +1761,14 @@ Whether or not `--dry-run` was given, this prints out
 * The idea nodes (that would be) added, as two lines of the form
   `dh_hl: add idea {id}`, `dh_hl: pool tag {pool tag}`.
   The pool tag given includes the added prefix.
+
+These are designed to be greppable,
+in case the agent wants to undo some of this later.
+
+<!-- deferred task: strip when creating prompt -->
+An unfriendly raw Python exception is acceptable for the root-schedule case
+(a root output) since `close_session` forbids it, so it can't happen without
+manually corrupting the catalog files.
 
 
 ### Delist Session Tool
@@ -1764,6 +1844,32 @@ Each idea that has `{pool tag before}` as its pool tag
 gets its pool tag updated to `{pool tag after}`.
 
 Prints `{count} idea nodes updated`.
+
+
+### Add/Remove Private Benchmark Set Tools
+
+    dh_hl add_private_benchmark_set -s ...
+    dh_hl remove_private_benchmark_set -s ...
+
+IMPL TASK: add this.
+
+Add or remove benchmark sets from the current session's private
+benchmark set list.
+They are passed as a list of benchmark set IDs (`...`),
+which could be an empty list.
+
+This is currently not so useful, as benchmark sets are not really discoverable.
+
+
+### List Private Benchmark Sets Tool
+
+    dh_hl list_private_benchmark_sets -s ...
+
+IMPL TASK: add this.
+
+Print the full IDs of all benchmark sets in the current session's
+private benchmark set list.
+IDs are sorted lexicographically, one per line, with no other `stdout` output.
 
 
 ### Copy Schedule, ID-of Schedule Tools
@@ -1850,7 +1956,10 @@ The session lock is low-level state that is not exclusive to this tool;
 it is implicitly created without any user action.
 
 Unless `--force` is given, the tool fails if any existing state would
-be overwritten.  (Implemented by writing each file via
+be overwritten.
+
+<!-- deferred task: strip when creating prompt -->
+(Implemented by writing each file via
 `safety.write_allowed(..., allow=<--force>)`: with `--force` off, an existing
 target hits `new_file`'s `O_EXCL` create and raises, which the tool catches to
 print the AGENTS warning below.)
