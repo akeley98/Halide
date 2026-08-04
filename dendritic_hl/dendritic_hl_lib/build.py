@@ -90,12 +90,35 @@ def _rungen_bin_name(full_id, i):
 
 
 # ---------------------------------------------------------------------------
+# observability: build commands share the lock trace sink
+# ---------------------------------------------------------------------------
+# The `build` tool records the toolchain steps it issues onto the SAME ordered
+# sink as the lock events (`locks._trace_sink`), so a test can assert both the
+# command sequence AND its ordering relative to the lock acquisitions in one
+# stream.  Like the lock trace, this is a no-op unless a test sets the sink; it
+# is the one observability concession in otherwise test-agnostic build code.
+# Event shape: ("build", <phase>, *detail), e.g. ("build", "profile", full_id, i).
+# (Only `build` is instrumented; other tools are not, by design, for now.)
+
+def _trace_build(phase, *detail):
+    locks._trace(("build", phase) + detail)
+
+
+# ---------------------------------------------------------------------------
 # subprocess helpers
 # ---------------------------------------------------------------------------
 
 def _run_streamed(cmd, cwd=None, env=None):
-    """Run *cmd*, letting its stdout/stderr flow to ours.  Returns exit code."""
+    """Run *cmd*, letting its stdout/stderr flow to ours.  Returns exit code.
+
+    Flush our own stdout/stderr FIRST so that any `dh_hl:` lines we printed before
+    this child are ordered *before* the child's output in a captured stream (our
+    Python stdout is block-buffered when piped; the child writes to the same fd).
+    Tests rely on this ordering (generator prints vs the `dh_hl:` generator
+    banners)."""
     print("+ " + " ".join(cmd), file=sys.stderr)
+    sys.stdout.flush()
+    sys.stderr.flush()
     return subprocess.run(cmd, cwd=cwd, env=env).returncode
 
 
@@ -487,6 +510,7 @@ def _compile_phase(bin_dir, nodes, param_indices, target_id):
     # 1a: compile each node's generator exe (and the shared RunGenMain.o).
     for n in nodes:
         print("dh_hl: begin C++ compile: " + n.full_id)
+        _trace_build("cpp_compile", n.full_id)
         ninja_path = _write_ninja(bin_dir, n.full_id, n.source_path)
         gen_exe = _gen_exe_name(n.full_id)
         if _ninja_build(bin_dir, ninja_path, [gen_exe]) != 0:
@@ -521,6 +545,7 @@ def _compile_phase(bin_dir, nodes, param_indices, target_id):
             basename = _emit_basename(n.full_id, i)
             print("dh_hl: begin Halide generator {}: {}".format(i, n.full_id))
             print("dh_hl: params={}".format(json.dumps(n.params[i])))
+            _trace_build("emit", n.full_id, i)
             if _emit(bin_dir, _gen_exe_name(n.full_id), n.gen_name, basename,
                      n.params[i], with_stmt) != 0:
                 n.gen_ok[i] = False
@@ -530,6 +555,7 @@ def _compile_phase(bin_dir, nodes, param_indices, target_id):
             n.gen_ok[i] = True
             if with_stmt:
                 _publish_stmt(bin_dir, basename, i)
+            _trace_build("link", n.full_id, i)
             if _link(bin_dir, basename) != 0:
                 n.linked[i] = False
                 all_ok = False
@@ -574,10 +600,12 @@ def _profile_phase(bin_dir, nodes, param_indices, sched, catalog, batches):
     warnings_out = os.path.abspath(os.path.join(bin_dir, "profile_warnings.json"))
     for batch in range(batches):
         random.shuffle(binaries)  # interleaved: fresh order each batch
+        _trace_build("batch", batch)
         for n, i, slot in binaries:
             for p in (json_out, warnings_out):
                 if os.path.exists(p):
                     os.remove(p)
+            _trace_build("profile", n.full_id, i)
             rc, stdout_text = _run_benchmark(
                 bin_dir, _rungen_bin_name(n.full_id, i), json_out, warnings_out)
             ok = rc == 0

@@ -140,3 +140,71 @@ def test_view_benchmark_warnings_real_halide(hist_session, run_tool, capsys):
     dbg = capsys.readouterr().out
     assert "rule/func: no_vector_ops hist_rows" in dbg
     assert "cancelled: false" in dbg
+
+
+# ---------------------------------------------------------------------------
+# Build command trace: command sequence, ordering relative to locks, and that
+# the profiling order is randomized across batches.  Runs the REAL toolchain
+# in-process (via run_tool, like the tests above), observing the shared trace
+# sink -- no monkeypatching of the toolchain.  `build.py` records its commands
+# onto locks._trace_sink (see build.py "observability" note).
+# ---------------------------------------------------------------------------
+
+def test_build_command_trace_and_shuffle(brighten_session, run_tool, capsys):
+    from dendritic_hl_lib import locks
+    S = brighten_session
+    # A target with THREE parameters objects (+ the root as `other`) gives four
+    # binaries, so a per-batch profiling order has 4! = 24 possibilities.
+    S.write_params('[{"offset": 1}, {"offset": 2}, {"offset": 3}]')
+    run_tool(build.cmd_init_build,
+             S.ns(target="workspace", other="parent", anchor="none"))
+    capsys.readouterr()
+
+    BATCHES = 10
+    with pytest.raises(SystemExit) as e:
+        run_tool(build.cmd_build, S.ns(profile=BATCHES, only="all"))
+    assert e.value.code == 0
+    sink = list(locks._trace_sink)  # captured AFTER the build call (run_tool reset)
+
+    def idx(event):
+        return sink.index(event)
+
+    # -- ordering relative to locks ------------------------------------------
+    mach_excl = idx(("machine", "exclusive"))
+    cat_excl = idx(("catalog", "exclusive"))
+    assert idx(("machine", "shared")) < idx(("session", "exclusive")) < mach_excl
+    assert mach_excl < cat_excl
+    compile_ix = [i for i, ev in enumerate(sink)
+                  if ev[0] == "build" and ev[1] in ("cpp_compile", "emit", "link")]
+    profile_ix = [i for i, ev in enumerate(sink)
+                  if ev[0] == "build" and ev[1] == "profile"]
+    # All compilation happens before the machine-exclusive upgrade + catalog lock;
+    # all profiling happens after the catalog lock.
+    assert compile_ix and profile_ix
+    assert max(compile_ix) < mach_excl < cat_excl < min(profile_ix)
+
+    # -- command sequence as expected ----------------------------------------
+    build_evs = [ev for ev in sink if ev[0] == "build"]
+    node_ids = {ev[2] for ev in build_evs if ev[1] == "cpp_compile"}
+    assert len(node_ids) == 2                       # target + other (root)
+    emits = [ev for ev in build_evs if ev[1] == "emit"]
+    links = [ev for ev in build_evs if ev[1] == "link"]
+    assert len(emits) == 4 and len(links) == 4      # (3 target params) + (1 root)
+    # Every batch profiles all four binaries.
+    profiles = [ev for ev in build_evs if ev[1] == "profile"]
+    assert len(profiles) == 4 * BATCHES
+
+    # -- profiling order is randomized (not always identical) ----------------
+    batch_starts = [i for i, ev in enumerate(sink)
+                    if ev[0] == "build" and ev[1] == "batch"]
+    assert len(batch_starts) == BATCHES
+    orders = []
+    for b, start in enumerate(batch_starts):
+        end = batch_starts[b + 1] if b + 1 < len(batch_starts) else len(sink)
+        order = tuple((ev[2], ev[3]) for ev in sink[start:end]
+                      if ev[0] == "build" and ev[1] == "profile")
+        assert len(order) == 4          # each batch profiles all four binaries
+        orders.append(order)
+    # With 4! orderings over 10 batches, all-identical is astronomically unlikely
+    # unless the shuffle is broken.
+    assert len(set(orders)) > 1, "profiling order never varied across batches"

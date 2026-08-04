@@ -210,13 +210,19 @@ def test_only_index_caps_at_halide_error(session, run_tool, fake_build, capsys):
 # build: lock order
 # ---------------------------------------------------------------------------
 
+def _locks_only(sink):
+    """The lock events from the shared trace sink (build command events, which
+    start with "build", are filtered out)."""
+    return [e for e in sink if e[0] != "build"]
+
+
 def test_build_lock_order_no_profile(session, run_tool, fake_build):
     """build takes the catalog lock after compiling and never upgrades the
     machine lock (only profiling monopolizes the machine)."""
     from dendritic_hl_lib import locks
     _init(session, run_tool)
     _build(session, run_tool, profile=0)
-    assert locks._trace_sink == [
+    assert _locks_only(locks._trace_sink) == [
         ("machine", "shared"), ("session", "exclusive"), ("catalog", "exclusive")]
 
 
@@ -225,7 +231,7 @@ def test_build_profile_lock_order_upgrades_before_catalog(session, run_tool,
     from dendritic_hl_lib import locks
     _init(session, run_tool)
     _build(session, run_tool, profile=1)
-    assert locks._trace_sink == [
+    assert _locks_only(locks._trace_sink) == [
         ("machine", "shared"), ("session", "exclusive"),
         ("machine", "exclusive"), ("catalog", "exclusive")]
 
