@@ -327,10 +327,35 @@ def cmd_new_idea(args):
     if not node.is_major():
         raise DhHlError(_minor_schedule_advice(ctx.catalog, node))
     text = _read_file_or_stdin(args.proposal)
+    # Resolve the pool tag BEFORE creating the idea, so a --pool-tag-required
+    # failure leaves nothing half-created.
+    pool_tag = getattr(args, "pool_tag", None)
+    if pool_tag is None:
+        pool_tag = _inherit_pool_tag(ctx, node)
     idea = ctx.catalog.create_idea(node, args.proposal_name, text)
-    ctx.workspace.add_private_idea(idea.full_id)
+    ctx.workspace.set_pool_tag(idea.full_id, pool_tag)
     ctx.finish()
     print("Created idea " + ctx.catalog.format_idea_id(idea))
+
+
+def _inherit_pool_tag(ctx, node):
+    """The pool tag a new child idea of *node* inherits when --pool-tag is
+    omitted: the pool tag of *node*'s parent idea, read from the private idea
+    list.  Errors (--pool-tag required) if *node* is a root (no parent idea) or
+    its parent idea isn't in the private idea list (idea.md New Idea Tool)."""
+    if node.is_root():
+        raise DhHlError(
+            "--pool-tag is required: {} is a root node, so there is no parent "
+            "idea to inherit a pool tag from".format(
+                ctx.catalog.format_schedule_id(node)))
+    parent_idea = node.parent_idea()
+    ws = ctx.workspace
+    if not ws.has_private_idea(parent_idea.full_id):
+        raise DhHlError(
+            "--pool-tag is required: parent idea {} is not in this session's "
+            "private idea list, so its pool tag can't be inherited".format(
+                ctx.catalog.format_idea_id(parent_idea)))
+    return ws.get_pool_tag(parent_idea.full_id)
 
 
 def _minor_schedule_advice(catalog, node):
@@ -765,7 +790,7 @@ def _create_session_and_idea(catalog, parent_schedule, proposal_name,
     if parent_session is not None:
         parent_ws = SessionWorkspace(catalog.catalog_dir, parent_session.full_id,
                                      catalog=catalog)
-        parent_ws.add_private_idea(idea.full_id)
+        parent_ws.set_pool_tag(idea.full_id, "session." + proposal_name)
     session = catalog.create_session(idea, parent_session, depth,
                                      session_id=session_id)
     ws = SessionWorkspace(catalog.catalog_dir, session_id, catalog=catalog)
@@ -884,7 +909,7 @@ def _list_private_ideas(args, *, filter_kind):
     limit = getattr(args, "n", None)
     printed = 0
     any_printed = False
-    for idea_id in reversed(ctx.workspace.read_private_ideas()):
+    for idea_id in reversed(list(ctx.workspace.read_private_ideas())):
         idea = catalog.ideas.get(idea_id)
         if idea is None:
             continue  # dangling (e.g. git checkout desync); not robust per spec
@@ -914,13 +939,40 @@ def cmd_list_private_ideas_done(args):
     _list_private_ideas(args, filter_kind="done")
 
 
-def cmd_forget_private_idea(args):
+# ---- session idea pool tags -----------------------------------------------
+
+def cmd_get_pool_tag(args):
+    # Read-only relative to the git-tracked catalog, but reads the private idea
+    # list, so it takes the session lock like the other private-state tools.
     ctx = Context.for_session(args, session_lock=True)
     idea = ctx.catalog.resolve_idea(args.idea)
-    ctx.workspace.remove_private_idea(idea.full_id)
+    print(ctx.workspace.get_pool_tag(idea.full_id))
+
+
+def cmd_set_pool_tag(args):
+    ctx = Context.for_session(args, session_lock=True)
+    idea = ctx.catalog.resolve_idea(args.idea)
+    ctx.workspace.set_pool_tag(idea.full_id, args.pool_tag)
     ctx.finish()
-    print("Removed idea from private idea list: "
-          + ctx.catalog.format_idea_id(idea))
+    print("Set pool tag of {} to {}".format(
+        ctx.catalog.format_idea_id(idea), args.pool_tag))
+
+
+def cmd_hide_private_idea(args):
+    ctx = Context.for_session(args, session_lock=True)
+    idea = ctx.catalog.resolve_idea(args.idea)
+    ctx.workspace.hide_private_idea(idea.full_id)
+    ctx.finish()
+    print("Hid {} (pool tag now {})".format(
+        ctx.catalog.format_idea_id(idea),
+        ctx.workspace.get_pool_tag(idea.full_id)))
+
+
+def cmd_rename_pool_tag(args):
+    ctx = Context.for_session(args, session_lock=True)
+    n = ctx.workspace.rename_pool_tag(args.pool_tag_before, args.pool_tag_after)
+    ctx.finish()
+    print("{} idea nodes updated".format(n))
 
 
 # ---- listing --------------------------------------------------------------

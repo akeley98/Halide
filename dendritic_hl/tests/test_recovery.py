@@ -26,7 +26,8 @@ def test_force_parent_idea(session, run_tool, tmp_path, capsys):
     session.write_workspace("source A\n")
     run_tool(tools.cmd_new_root, session.ns())                  # root R1
     prop = _write(tmp_path, "p.txt", "An idea under R1.\n")
-    run_tool(tools.cmd_new_idea, session.ns(proposal_name="idea1", proposal=prop))
+    run_tool(tools.cmd_new_idea, session.ns(proposal_name="idea1", proposal=prop,
+                                            pool_tag="p"))  # root -> --pool-tag
     capsys.readouterr()
     run_tool(tools.cmd_json_idea_info, session.ns(idea=".idea1"))
     idea1_full = json.loads(capsys.readouterr().out)["id"]

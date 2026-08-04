@@ -12,6 +12,7 @@ so they can compile before locking the catalog (and, for profile, upgrade the
 machine lock to exclusive first).
 """
 
+import json
 import os
 import sys
 
@@ -127,39 +128,99 @@ class SessionWorkspace:
             self.current_idea_state.set_no_idea(val)
 
     # -- private idea list ----------------------------------------------
-    # Stored as private/{id}/private_ideas.txt: one idea full ID per line,
-    # newline-terminated, NEW ideas APPENDED to the END (bottom).  So the file
-    # is in oldest-added-first order; list_private_ideas prints it reversed
-    # (most recent first).  Not robust to malformed data (blank lines are just
-    # skipped).  See impl.md "Session Private Workspace".
+    # Stored as private/{id}/private_ideas.json: a JSON object whose keys are the
+    # idea node full IDs in the list and whose values are their pool tags
+    # (strings).  Unordered (the future cost-ranked view will sort at read time).
+    # Cost is NOT stored here; it's derived when needed.  See impl.md "Session
+    # Private Workspace".
     @property
     def private_ideas_path(self):
-        return os.path.join(self.private_dir, "private_ideas.txt")
+        return os.path.join(self.private_dir, "private_ideas.json")
 
     def read_private_ideas(self):
-        """The private idea list as full IDs, oldest-added first (disk order)."""
+        """The private idea list as a dict {idea full ID -> pool tag}."""
         try:
             with open(self.private_ideas_path, "r", encoding="utf-8") as f:
-                return [ln.strip() for ln in f if ln.strip()]
+                return json.load(f)
         except FileNotFoundError:
-            return []
+            return {}
 
     def _write_private_ideas(self, ideas):
         self.ensure_private_dir()
         safety.write_allowed(self.private_ideas_path,
-                             "".join(i + "\n" for i in ideas))
+                             json.dumps(ideas, indent=1) + "\n")
 
-    def add_private_idea(self, idea_id):
-        """Append *idea_id* to the end of the private idea list."""
-        self._write_private_ideas(self.read_private_ideas() + [idea_id])
+    def has_private_idea(self, idea_id):
+        return idea_id in self.read_private_ideas()
 
-    def remove_private_idea(self, idea_id):
-        """Remove *idea_id* from the private idea list, erroring if absent."""
+    def get_pool_tag(self, idea_id):
+        """The pool tag of *idea_id*; error if it isn't in the private list."""
         ideas = self.read_private_ideas()
         if idea_id not in ideas:
             raise DhHlError(
                 "idea is not in the session's private idea list: " + idea_id)
-        self._write_private_ideas([i for i in ideas if i != idea_id])
+        return ideas[idea_id]
+
+    def set_pool_tag(self, idea_id, pool_tag):
+        """Set *idea_id*'s pool tag, adding it to the list if necessary."""
+        ideas = self.read_private_ideas()
+        ideas[idea_id] = pool_tag
+        self._write_private_ideas(ideas)
+
+    def hide_private_idea(self, idea_id):
+        """Prepend a '.' to the idea's pool tag; error if not in the list."""
+        self.set_pool_tag(idea_id, "." + self.get_pool_tag(idea_id))
+
+    def rename_pool_tag(self, before, after):
+        """Retag every idea whose pool tag is *before* to *after*.  Returns the
+        count updated."""
+        ideas = self.read_private_ideas()
+        n = 0
+        for k, v in ideas.items():
+            if v == before:
+                ideas[k] = after
+                n += 1
+        if n:
+            self._write_private_ideas(ideas)
+        return n
+
+    def remove_private_idea(self, idea_id):
+        """Remove *idea_id* from the private idea list, erroring if absent.
+        Retained as an internal helper (idea.md close_session note)."""
+        ideas = self.read_private_ideas()
+        if idea_id not in ideas:
+            raise DhHlError(
+                "idea is not in the session's private idea list: " + idea_id)
+        del ideas[idea_id]
+        self._write_private_ideas(ideas)
+
+    # -- private benchmark set list -------------------------------------
+    # Stored as private/{id}/private_benchmark_sets.json: a JSON object whose
+    # keys are benchmark set full IDs.  Values are currently empty objects {}
+    # (they become cached statistics once cost is implemented).
+    @property
+    def private_benchmark_sets_path(self):
+        return os.path.join(self.private_dir, "private_benchmark_sets.json")
+
+    def read_private_benchmark_sets(self):
+        try:
+            with open(self.private_benchmark_sets_path, "r",
+                      encoding="utf-8") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return {}
+
+    def _write_private_benchmark_sets(self, sets):
+        self.ensure_private_dir()
+        safety.write_allowed(self.private_benchmark_sets_path,
+                             json.dumps(sets, indent=1) + "\n")
+
+    def add_private_benchmark_set(self, set_id):
+        """Add *set_id* to the private benchmark set list (value is {} for now).
+        Centralized helper so a future cost-init can hook here."""
+        sets = self.read_private_benchmark_sets()
+        sets[set_id] = {}
+        self._write_private_benchmark_sets(sets)
 
 
 def read_text_or_stdin(path):

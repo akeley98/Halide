@@ -116,7 +116,10 @@ COMMAND_HELP = {
     "list_private_ideas": "List the current session's private idea list.",
     "list_private_ideas_todo": "List private ideas without a canonical schedule.",
     "list_private_ideas_done": "List private ideas with a canonical schedule.",
-    "forget_private_idea": "Remove an idea from the session's private idea list.",
+    "get_pool_tag": "Print a private idea's pool tag.",
+    "set_pool_tag": "Set a private idea's pool tag (adding it to the list if needed).",
+    "hide_private_idea": "Prepend '.' to a private idea's pool tag.",
+    "rename_pool_tag": "Retag every private idea with a given pool tag.",
     "list_sibling_schedules": "List schedules sharing a parent idea with the given schedule.",
     "list_child_schedules": "List the child schedules of an idea node.",
     "list_equal_schedules": "List schedules with the same source hash as the given one.",
@@ -233,6 +236,8 @@ def _build_parser():
     sp.add_argument("proposal_name", help="proposal name [A-Za-z0-9_]{1,72}")
     sp.add_argument("proposal", help="proposal text file ('-' for stdin)")
     sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
+    sp.add_argument("--pool-tag", dest="pool_tag",
+                    help="pool tag (default: inherit the parent idea's)")
 
     sp = add("list_ideas")
     sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
@@ -243,8 +248,19 @@ def _build_parser():
         sp.add_argument("n", nargs="?", type=int,
                         help="list only the first up-to-N ideas")
 
-    sp = add("forget_private_idea")
+    sp = add("get_pool_tag")
     sp.add_argument("idea", help="idea ID")
+
+    sp = add("set_pool_tag")
+    sp.add_argument("idea", help="idea ID")
+    sp.add_argument("pool_tag", help="pool tag to assign")
+
+    sp = add("hide_private_idea")
+    sp.add_argument("idea", help="idea ID")
+
+    sp = add("rename_pool_tag")
+    sp.add_argument("pool_tag_before", help="existing pool tag")
+    sp.add_argument("pool_tag_after", help="new pool tag")
 
     sp = add("list_sibling_schedules")
     sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
@@ -420,7 +436,10 @@ _DISPATCH = {
     "list_private_ideas": tools.cmd_list_private_ideas,
     "list_private_ideas_todo": tools.cmd_list_private_ideas_todo,
     "list_private_ideas_done": tools.cmd_list_private_ideas_done,
-    "forget_private_idea": tools.cmd_forget_private_idea,
+    "get_pool_tag": tools.cmd_get_pool_tag,
+    "set_pool_tag": tools.cmd_set_pool_tag,
+    "hide_private_idea": tools.cmd_hide_private_idea,
+    "rename_pool_tag": tools.cmd_rename_pool_tag,
     "list_sibling_schedules": tools.cmd_list_sibling_schedules,
     "list_child_schedules": tools.cmd_list_child_schedules,
     "list_equal_schedules": tools.cmd_list_equal_schedules,

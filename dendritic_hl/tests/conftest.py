@@ -118,6 +118,9 @@ def make_catalog_session(cat_dir, source=DUMMY_SOURCE, idea_name="seed"):
         sess = cat.create_session(idea, None, 0)
         ws = SessionWorkspace(cat.catalog_dir, sess.full_id, catalog=cat)
         ws.initialize(source, ("idea", idea.full_id))
+        # Mimic init_workspace: the seed idea is in the private idea list with
+        # pool tag "default", so new_idea on its canonical inherits a tag.
+        ws.set_pool_tag(idea.full_id, "default")
         cat.flush()
         safety.commit()
         return cat.catalog_dir, sess.full_id
