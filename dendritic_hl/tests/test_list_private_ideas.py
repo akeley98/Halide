@@ -1,30 +1,72 @@
 """The cost-ranked `list_private_ideas` frontier (idea.md "List Session Private
-Ideas Tool").  Deterministic: synthetic benchmark sets give each idea's schedule
-a known cost, so ranking order, the batch_count/cost lines, the pool grouping and
-filters, obsoleted-by detection, and the drift warnings are all checked against
-hand-chosen numbers."""
+Ideas Tool").
+
+Deterministic: synthetic benchmark sets give each idea's schedule a known cost.
+Assertions are *structural* -- the output is parsed into per-idea blocks
+(`_parse`) so we check that a SPECIFIC idea has a specific cost / pool / batch
+count / obsoleted-by line, not merely that the string appears somewhere (which
+would miss a mis-attribution bug)."""
+
+from collections import defaultdict
 
 from dendritic_hl_lib import locks, safety, tools
 from dendritic_hl_lib.context import SessionWorkspace
 from conftest import add_synthetic_benchmark_set, open_catalog
 
 
+# ---- output parser (the core of the methodology) --------------------------
+
+def _parse(out):
+    """Parse frontier output into (blocks, order, warnings).
+
+    blocks[name] = {"pool", "cost" (float|None), "batch_count" (int),
+                    "obsoleted_by": [idea id strings]}
+    order[pool]  = [proposal name, ... in printed order]
+    warnings     = [warning lines]
+
+    Keyed by proposal name (unique per test).  An idea block is a non-indented
+    header line followed by its 2-space-indented fields."""
+    blocks, order, warnings = {}, defaultdict(list), []
+    pool, cur = None, None
+    for line in out.splitlines():
+        if line.startswith("=== ") and line.endswith(" ==="):
+            pool = line[4:-4]
+        elif line.startswith("Warning") or line.startswith("This amplifies"):
+            warnings.append(line)   # incl. the amplify warning's 2nd line
+        elif line.startswith("  proposal: "):
+            cur["name"] = line[len("  proposal: "):]
+            cur["pool"] = pool
+            blocks[cur["name"]] = cur
+            order[pool].append(cur["name"])
+        elif line.startswith("  batch_count: "):
+            cur["batch_count"] = int(line.split(": ", 1)[1])
+        elif line.startswith("  cost: "):
+            v = line.split(": ", 1)[1]
+            cur["cost"] = None if v == "null" else float(v)
+        elif line.startswith("  obsoleted by: "):
+            cur["obsoleted_by"].append(line.split(": ", 1)[1])
+        elif line and not line.startswith("  "):
+            cur = {"obsoleted_by": []}   # a new idea header line
+    return blocks, order, warnings
+
+
 def _out(run_tool, capsys, session, **ns_over):
     capsys.readouterr()
     run_tool(tools.cmd_list_private_ideas, _ns(session, **ns_over))
-    return capsys.readouterr().out
+    return _parse(capsys.readouterr().out)
 
 
 def _ns(session, **kw):
-    kw.setdefault("anchor", "auto")
-    kw.setdefault("confidence", None)
-    kw.setdefault("max", None)
-    kw.setdefault("pool", None)
-    kw.setdefault("pools", None)
-    kw.setdefault("done", False)
-    kw.setdefault("todo", False)
+    for k in ("anchor",):
+        kw.setdefault(k, "auto")
+    for k in ("confidence", "max", "pool", "pools"):
+        kw.setdefault(k, None)
+    for k in ("done", "todo"):
+        kw.setdefault(k, False)
     return session.ns(**kw)
 
+
+# ---- catalog setup helpers ------------------------------------------------
 
 def _build(session, fn):
     cat = open_catalog(session.catalog_dir)
@@ -42,11 +84,11 @@ def _seed_canonical(cat, session):
 
 
 def _idea(cat, ws, parent_sched_id, name, pool, cost_batches=None):
-    """Create an idea `name` (pool tag *pool*) under a major schedule; if
-    *cost_batches* is given, also a canonical schedule to be benchmarked at those
-    per-batch costs.  Returns (idea_full_id, canonical_full_id | None)."""
-    parent = cat.get_schedule(parent_sched_id)
-    idea = cat.create_idea(parent, name, name + " proposal\n")
+    """Create idea *name* (pool tag *pool*) under a major schedule; if
+    *cost_batches* is given, also a canonical schedule (to be benchmarked at
+    those per-batch costs).  Returns (idea_full_id, canonical_full_id | None)."""
+    idea = cat.create_idea(cat.get_schedule(parent_sched_id), name,
+                           name + " proposal\n")
     canon = None
     if cost_batches is not None:
         dup = cat.create_schedule(name + " src\n", parent_idea=idea)
@@ -57,9 +99,17 @@ def _idea(cat, ws, parent_sched_id, name, pool, cost_batches=None):
     return idea.full_id, canon
 
 
+def _short_idea_id(session, idea_full_id):
+    cat = open_catalog(session.catalog_dir)
+    try:
+        return cat.format_idea_id(cat.get_idea(idea_full_id))
+    finally:
+        locks._reset_for_tests()
+
+
 # ---- ranking + grouping ---------------------------------------------------
 
-def test_grouped_sorted_by_cost_with_drift_warning(session, run_tool, capsys):
+def test_grouping_and_cost_attribution(session, run_tool, capsys):
     def build(cat, ws):
         C0 = _seed_canonical(cat, session)
         _, ca1 = _idea(cat, ws, C0, "Aexpensive", "a", [200, 201, 199])
@@ -71,32 +121,33 @@ def test_grouped_sorted_by_cost_with_drift_warning(session, run_tool, capsys):
         ws.add_private_benchmark_set(set_id, cat)
     _build(session, build)
 
-    out = _out(run_tool, capsys, session, anchor="none")
-    lines = out.splitlines()
-    # Pool banners in sorted order: a, b, default (the seed idea is "default").
-    banners = [l for l in lines if l.startswith("=== ")]
-    assert banners == ["=== a ===", "=== b ===", "=== default ==="]
-    # Within pool a, the cheaper idea ranks first.
-    assert out.index("Acheap") < out.index("Aexpensive")
-    # cost + batch_count lines are present with the chosen values.
-    assert "  cost: 150" in out and "  cost: 200" in out
-    assert "  batch_count: 3" in out
-    # No anchor -> drift warning.
-    assert "Warning: ranking is drift-exposed until you set an anchor." in out
+    blocks, order, warnings = _out(run_tool, capsys, session, anchor="none")
+    # Each idea is under the RIGHT pool with the RIGHT cost (structural, not a
+    # loose "150 appears somewhere").
+    assert blocks["Acheap"]["pool"] == "a" and blocks["Acheap"]["cost"] == 150
+    assert blocks["Aexpensive"]["pool"] == "a" and blocks["Aexpensive"]["cost"] == 200
+    assert blocks["Bonly"]["pool"] == "b" and blocks["Bonly"]["cost"] == 300
+    assert blocks["Acheap"]["batch_count"] == 3
+    # The seed idea sits in "default" with no benchmarks -> null cost.
+    assert blocks["seed"]["pool"] == "default" and blocks["seed"]["cost"] is None
+    # Within pool a, cheaper first; pools iterate in sorted order.
+    assert order["a"] == ["Acheap", "Aexpensive"]
+    assert order["b"] == ["Bonly"]
+    # No anchor -> exactly the drift warning.
+    assert warnings == ["Warning: ranking is drift-exposed until you set an anchor."]
 
 
 def test_null_cost_bubbles_to_top(session, run_tool, capsys):
-    """An idea whose schedule has no benchmarks sorts as cost 0 (top)."""
     def build(cat, ws):
         C0 = _seed_canonical(cat, session)
         _, cben = _idea(cat, ws, C0, "Benched", "p", [200, 201, 199])
-        _idea(cat, ws, C0, "Unbenched", "p", [])   # canonical, but not benchmarked
+        _idea(cat, ws, C0, "Unbenched", "p", [])   # canonical, not benchmarked
         set_id = add_synthetic_benchmark_set(cat, {cben: [[200, 201, 199]]})
         ws.add_private_benchmark_set(set_id, cat)
     _build(session, build)
-    out = _out(run_tool, capsys, session, anchor="none")
-    assert out.index("Unbenched") < out.index("Benched")   # null(=0) first
-    assert "  cost: null" in out
+    blocks, order, _ = _out(run_tool, capsys, session, anchor="none", pool=["p"])
+    assert order["p"] == ["Unbenched", "Benched"]   # null (=0) sorts first
+    assert blocks["Unbenched"]["cost"] is None and blocks["Unbenched"]["batch_count"] == 0
 
 
 # ---- filters --------------------------------------------------------------
@@ -108,21 +159,27 @@ def test_todo_done_filters(session, run_tool, capsys):
         _idea(cat, ws, C0, "NoCanon", "p", None)   # no canonical schedule
     _build(session, build)
 
-    done = _out(run_tool, capsys, session, done=True, pool=["p"])
+    done, _, _ = _out(run_tool, capsys, session, done=True, pool=["p"])
     assert "HasCanon" in done and "NoCanon" not in done
-    todo = _out(run_tool, capsys, session, todo=True, pool=["p"])
+    todo, _, _ = _out(run_tool, capsys, session, todo=True, pool=["p"])
     assert "NoCanon" in todo and "HasCanon" not in todo
 
 
-def test_max_truncates_per_pool(session, run_tool, capsys):
+def test_max_truncates_the_cheapest_per_pool(session, run_tool, capsys):
     def build(cat, ws):
         C0 = _seed_canonical(cat, session)
+        # Costs 103,102,101,100 -> Idea3 cheapest, Idea0 dearest.
+        specs = {}
         for i in range(4):
-            _idea(cat, ws, C0, "Idea{}".format(i), "p", [100 + i, 100 + i, 100 + i])
+            c = 103 - i
+            _, canon = _idea(cat, ws, C0, "Idea{}".format(i), "p", [c, c, c])
+            specs[canon] = [[c, c, c]]
+        set_id = add_synthetic_benchmark_set(cat, specs)
+        ws.add_private_benchmark_set(set_id, cat)
     _build(session, build)
-    out = _out(run_tool, capsys, session, pool=["p"], max=2)
-    shown = sum("Idea{}".format(i) in out for i in range(4))
-    assert shown == 2   # only the 2 cheapest of pool p
+    _, order, _ = _out(run_tool, capsys, session, pool=["p"], max=2)
+    # Exactly the two cheapest, in cost order.
+    assert order["p"] == ["Idea3", "Idea2"]
 
 
 def test_pool_and_pools_filters(session, run_tool, capsys):
@@ -133,60 +190,78 @@ def test_pool_and_pools_filters(session, run_tool, capsys):
         _idea(cat, ws, C0, "InOther", "misc", [100, 100, 100])
     _build(session, build)
 
-    only_vec = _out(run_tool, capsys, session, pool=["vec"])
-    assert "InVec" in only_vec and "InTile" not in only_vec
-    # --pools regex unions; matches vec + tile, not misc / default.
-    rx = _out(run_tool, capsys, session, pools=["vec|tile"])
-    assert "InVec" in rx and "InTile" in rx and "InOther" not in rx
+    only_vec, _, _ = _out(run_tool, capsys, session, pool=["vec"])
+    assert set(only_vec) == {"InVec"}          # exactly the vec pool
+    rx, _, _ = _out(run_tool, capsys, session, pools=["vec|tile"])
+    assert set(rx) == {"InVec", "InTile"}      # regex union, misc/default excluded
 
 
 # ---- obsoleted-by ---------------------------------------------------------
 
-def test_obsoleted_by_child_idea(session, run_tool, capsys):
+def _obsoletion_setup(session, child_cost):
+    """Parent(canonical CP, cost 200) with a child idea (canonical CC at
+    *child_cost*), both benchmarked in one set.  Returns the child's short id."""
     def build(cat, ws):
         C0 = _seed_canonical(cat, session)
         _, cp = _idea(cat, ws, C0, "Parent", "a", [200, 201, 199, 200, 202])
-        # A child idea of Parent's canonical, with a cheaper canonical.
         child = cat.create_idea(cat.get_schedule(cp), "Child", "child\n")
         cc = cat.create_schedule("child src\n", parent_idea=child)
         cc.set_result("success")
         child.set_canonical(cc.full_id)
         ws.set_pool_tag(child.full_id, "a")
+        child_batches = [child_cost + d for d in (0, 1, -1, 0, -2)]
         set_id = add_synthetic_benchmark_set(
             cat, {cp: [[200, 201, 199, 200, 202]],
-                  cc.full_id: [[100, 101, 99, 100, 98]]})
+                  cc.full_id: [child_batches]})
         ws.add_private_benchmark_set(set_id, cat)
         return child.full_id
-    child_id = _build(session, build)
+    return _build(session, build)
 
-    out = _out(run_tool, capsys, session, anchor="none")
-    # Parent is obsoleted by Child; the line names the child idea.
-    obsoleted = [l for l in out.splitlines() if "obsoleted by:" in l]
-    assert len(obsoleted) == 1
-    cat = open_catalog(session.catalog_dir)
-    try:
-        child_short = cat.format_idea_id(cat.get_idea(child_id))
-    finally:
-        locks._reset_for_tests()
-    assert child_short in obsoleted[0]
+
+def test_obsoleted_by_when_child_is_cheaper(session, run_tool, capsys):
+    child_id = _obsoletion_setup(session, child_cost=100)   # clearly cheaper
+    child_short = _short_idea_id(session, child_id)
+    blocks, _, _ = _out(run_tool, capsys, session, anchor="none")
+    assert blocks["Parent"]["obsoleted_by"] == [child_short]
+    assert blocks["Child"]["obsoleted_by"] == []   # child has no obsoleting kids
+
+
+def test_not_obsoleted_when_child_not_cheaper(session, run_tool, capsys):
+    # Child costs the SAME as parent -> not a confident improvement -> no line.
+    self_child = _obsoletion_setup(session, child_cost=200)
+    blocks, _, _ = _out(run_tool, capsys, session, anchor="none")
+    assert blocks["Parent"]["obsoleted_by"] == []
+    del self_child  # (unused; setup returns the child id)
 
 
 # ---- anchor warnings ------------------------------------------------------
 
-def test_anchor_low_cost_warning(session, run_tool, capsys):
+def test_anchor_used_low_cost_warning(session, run_tool, capsys):
     def build(cat, ws):
         C0 = _seed_canonical(cat, session)
-        # Anchor at 200; target much faster (ratio 0.25 < 0.5).
-        _, ct = _idea(cat, ws, C0, "Fast", "a", [50, 50, 50])
+        _, ct = _idea(cat, ws, C0, "Fast", "a", [50, 50, 50])  # ratio 0.25 < 0.5
         set_id = add_synthetic_benchmark_set(
             cat, {ct: [[50, 50, 50]], C0: [[200, 200, 200]]})
         ws.add_private_benchmark_set(set_id, cat)
         ws.set_current_anchor(C0)
     _build(session, build)
+    _, _, warnings = _out(run_tool, capsys, session, anchor="always")
+    assert warnings == ["Warning: some ranked schedules were much faster than the anchor.",
+                        "This amplifies the effects of system noise; consider a new anchor."]
 
-    out = _out(run_tool, capsys, session, anchor="always")
-    assert "much faster than the anchor" in out
-    assert "drift-exposed" not in out   # anchor WAS used
+
+def test_anchor_used_no_warning_when_costs_normal(session, run_tool, capsys):
+    def build(cat, ws):
+        C0 = _seed_canonical(cat, session)
+        _, ct = _idea(cat, ws, C0, "Similar", "a", [180, 180, 180])  # ratio 0.9
+        set_id = add_synthetic_benchmark_set(
+            cat, {ct: [[180, 180, 180]], C0: [[200, 200, 200]]})
+        ws.add_private_benchmark_set(set_id, cat)
+        ws.set_current_anchor(C0)
+    _build(session, build)
+    blocks, _, warnings = _out(run_tool, capsys, session, anchor="always")
+    assert warnings == []                       # anchored, no sub-0.5 cost
+    assert blocks["Similar"]["cost"] == 0.9     # ratio, anchored
 
 
 def test_lock_is_taken(session, run_tool, capsys):

@@ -174,3 +174,84 @@ def test_failed_generator_no_benchmark_set(run_cli, tmp_path):
     assert "Benchmark set ID:" not in out
     # The node result is capped at halide error (a generator failed).
     assert _schedule_json(run_cli, handle)["result"] == "halide error"
+
+
+# ---------------------------------------------------------------------------
+# Cost tools over real profiler numbers (same real-CLI, real-Halide style).
+# The parallel variant is much faster than the serial one; the tools must see
+# that through the batched profiling.
+# ---------------------------------------------------------------------------
+
+def _profile_target(run_cli, handle, params, *, other="none", batches=3):
+    """Set the workspace params, init_build, and `build --profile` the target
+    (a fresh node, since non-default params change its hash).  Returns nothing;
+    the produced benchmark set lands in the session's private list."""
+    _set_params(run_cli, handle, params)
+    r = run_cli("init_build", "-s", handle, "--target", "workspace",
+                "--other", other, "--anchor", "none")
+    assert r.returncode == 0, r.stderr
+    r = run_cli("build", "-s", handle, "--profile", str(batches), "--only", "all")
+    assert r.returncode == 0, r.stderr
+
+
+def test_json_ranking_cost_representative_prefers_parallel(run_cli, tmp_path):
+    """json_ranking_cost picks the faster parameters object as the representative
+    and reports its raw cost (no anchor -> raw wall_time_min)."""
+    cat_dir, handle = _bootstrap(run_cli, tmp_path)
+    _profile_target(run_cli, handle,
+                    [{"enable_parallel": True}, {"enable_parallel": False}])
+
+    r = run_cli("json_ranking_cost", "-s", handle, "--anchor", "none")
+    assert r.returncode == 0, r.stderr
+    obj = json.loads(r.stdout)
+    assert obj["anchor"] is None and obj["batch_count"] == 3
+    assert obj["representative"] == 0                 # parallel (index 0) is faster
+    raw = obj["parameters_raw_cost"]
+    assert len(raw) == 2 and raw[0] < raw[1]         # parallel < serial
+    assert obj["cost"] == raw[0]                      # rep's raw cost
+
+
+def test_json_profiler_stats_aggregates_real_funcs(run_cli, tmp_path):
+    """json_profiler_stats aggregates real per-func profiler samples into
+    [p25, median, p75], sorted hottest-first, with --parameters mandatory when
+    the node has >1 params object."""
+    cat_dir, handle = _bootstrap(run_cli, tmp_path)
+    _profile_target(run_cli, handle,
+                    [{"enable_parallel": True}, {"enable_parallel": False}],
+                    batches=2)
+
+    # Two params objects -> --parameters is required.
+    r = run_cli("json_profiler_stats", "-s", handle)
+    assert r.returncode != 0 and "--parameters" in r.stderr
+
+    r = run_cli("json_profiler_stats", "-s", handle, "--parameters", "0",
+                "-p", "wall_time_mean", "-f", "recompute_ratio", "--hottest", "4")
+    assert r.returncode == 0, r.stderr
+    obj = json.loads(r.stdout)
+    # Pipeline-global stat -> a 3-number percentile list.
+    assert isinstance(obj["wall_time_mean"], list) and len(obj["wall_time_mean"]) == 3
+    funcs = obj["funcs"]
+    assert 1 <= len(funcs) <= 4                       # truncated to the 4 hottest
+    medians = [f["time_ratio"][1] for f in funcs]
+    assert medians == sorted(medians, reverse=True)   # sorted by median time_ratio
+    for f in funcs:
+        assert {"name", "parent", "canonical_id", "time_ratio",
+                "recompute_ratio"} <= set(f)
+        assert len(f["time_ratio"]) == 3 and len(f["recompute_ratio"]) == 3
+
+
+def test_json_compare_cost_detects_regression(run_cli, tmp_path):
+    """A serial target vs the parallel (default) root: the 2-way comparison
+    confidently reports a regression (LHS is the dearer serial schedule)."""
+    cat_dir, handle = _bootstrap(run_cli, tmp_path)
+    # Serial target; other=parent pulls in the root (default params -> parallel),
+    # so both are profiled in the same batches (the paired comparison needs that).
+    _profile_target(run_cli, handle, [{"enable_parallel": False}], other="parent")
+
+    # LHS defaults to the workspace (serial target); RHS defaults to the root.
+    r = run_cli("json_compare_cost", "-s", handle)
+    assert r.returncode == 0, r.stderr
+    obj = json.loads(r.stdout)
+    assert obj["batch_count"] == 3
+    assert obj["result"] == "regression"             # serial LHS slower than root
+    assert obj["lhs_raw_cost"] > obj["rhs_raw_cost"]
