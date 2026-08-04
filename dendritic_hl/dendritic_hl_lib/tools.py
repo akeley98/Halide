@@ -47,18 +47,20 @@ def _last_nonempty_line(text):
 
 def _print_idea_listing(ctx, idea, marker="", include_proposal_text=True):
     """The idea summary shared by list_child_ideas, history, and the private-idea
-    listings (idea.md "List Ideas Tools").  *include_proposal_text* is False for
-    list_seed_ideas, which omits the proposal-text first line and the
-    Created-for-session line."""
+    listings (idea.md "List Ideas Tools"): the idea ID, then a `canonical: ` line
+    and a `proposal: ` line, then (unless *include_proposal_text* is False, as for
+    list_seed_ideas) the proposal-text first line + any Created-for-session line,
+    then the side links."""
     catalog = ctx.catalog
     print("{}{}".format(marker, catalog.format_idea_id(idea)))
-    print("  " + idea.proposal_name)
     if idea.canonical is None:
-        print("  (none)")
+        canonical = "(none)"
     elif idea.canonical in catalog.schedules:
-        print("  " + catalog.format_schedule_id(catalog.schedules[idea.canonical]))
+        canonical = catalog.format_schedule_id(catalog.schedules[idea.canonical])
     else:
-        print("  " + idea.canonical)  # dangling (e.g. git checkout desync)
+        canonical = idea.canonical  # dangling (e.g. git checkout desync)
+    print("  canonical: " + canonical)
+    print("  proposal: " + idea.proposal_name)
     if include_proposal_text:
         print("  " + _first_line_72(idea.proposal_text))
         last = _last_nonempty_line(idea.proposal_text)

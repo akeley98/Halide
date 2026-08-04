@@ -1063,8 +1063,6 @@ Flags:
   only one binary, for the `N`-th generator parameters object;
   in this case `halide error` is the best result possible.
 
-IMPL TASK: `--only target` also produces benchmark sets now.
-
 This tool exits successfully iff no harness errors occurred
 and all subprocesses succeeded.
 A new benchmark set is generated, containing all benchmark objects
@@ -1298,12 +1296,6 @@ If the schedule node is a minor schedule, the tool advises:
     # All commands do not acquire session lock
     dh_hl list_child_ideas -C ... [schedule ID]
     dh_hl list_seed_ideas -s ...
-
-IMPL TASK: add `proposal:` and `canonical:` prefixes
-
-IMPL TASK: remove session lock.
-Also is there even testing for this, e.g. by using the lock logging?
-If not please see if it's easy to add this as an extra check in existing tests.
 
 `list_child_ideas` prints a summary of each child idea node of
 the referenced *major schedule* node; error if passed a minor schedule.

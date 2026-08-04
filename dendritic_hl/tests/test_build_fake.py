@@ -340,11 +340,52 @@ def test_benchmark_set_created_for_full_run(session, run_tool, fake_build,
     assert bs_id in priv
 
 
+def test_benchmark_set_created_for_only_target(session, run_tool, fake_build,
+                                               capsys):
+    """--only target --profile also produces a benchmark set (idea.md), holding
+    just the target node."""
+    run_tool(build.cmd_init_build,
+             session.ns(target="workspace", other="parent", anchor="none"))
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as e:
+        run_tool(build.cmd_build, session.ns(profile=2, only="target"))
+    assert e.value.code == 0
+    out = capsys.readouterr().out
+    set_line = [ln for ln in out.splitlines()
+                if ln.startswith("dh_hl: Benchmark set ID: ")]
+    assert set_line, "expected a benchmark set for --only target"
+    bs_id = set_line[0].split("dh_hl: Benchmark set ID: ", 1)[1].strip()
+    run_tool(tools.cmd_json_benchmark_set_info, session.ns(benchmark_set=bs_id))
+    data = json.loads(capsys.readouterr().out)
+    assert len(data) == 1  # target node only (other/anchor not built)
+
+
 def test_no_benchmark_set_without_profile(session, run_tool, fake_build, capsys):
     run_tool(build.cmd_init_build,
              session.ns(target="workspace", other="parent", anchor="none"))
     capsys.readouterr()
     _build(session, run_tool, profile=0, only="all")
+    assert "Benchmark set ID:" not in capsys.readouterr().out
+
+
+def test_no_benchmark_set_for_only_index(session, run_tool, fake_build, capsys):
+    """--only <int> profiles a single binary but never makes a benchmark set
+    (idea.md): only 'all'/'target' do."""
+    _init(session, run_tool)
+    capsys.readouterr()
+    assert _build(session, run_tool, profile=1, only="0") == 0
+    assert "Benchmark set ID:" not in capsys.readouterr().out
+
+
+def test_no_benchmark_set_when_a_subprocess_fails(session, run_tool, fake_build,
+                                                  capsys):
+    """A failed profiling subprocess (all_ok False) suppresses the benchmark set
+    even for --only all --profile."""
+    fake_build["bench_rc"] = 1  # every benchmark run "fails"
+    run_tool(build.cmd_init_build,
+             session.ns(target="workspace", other="parent", anchor="none"))
+    capsys.readouterr()
+    assert _build(session, run_tool, profile=1, only="all") == 1  # nonzero exit
     assert "Benchmark set ID:" not in capsys.readouterr().out
 
 

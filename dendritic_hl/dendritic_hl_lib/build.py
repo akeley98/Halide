@@ -487,10 +487,10 @@ def cmd_build(args):
         node = sched[n.full_id]
         node.set_result(best_result(node.result, result))
 
-    # Benchmark set: only for a full --only all run that profiled >=1 batch with
-    # no subprocess failures (idea.md "Build Tool"): the dense index is then
-    # guaranteed populated.
-    if only_kind == "all" and profile_batches > 0 and all_ok:
+    # Benchmark set: for an --only all OR --only target run that profiled >=1
+    # batch with no subprocess failures (idea.md "Build Tool"): the dense index
+    # is then guaranteed populated.  (--only <int> never makes a set.)
+    if only_kind in ("all", "target") and profile_batches > 0 and all_ok:
         bs = catalog.create_benchmark_set(bench_index)
         # Add it to the session's private benchmark set list (idea.md Build Tool).
         ws.add_private_benchmark_set(bs.full_id, catalog)

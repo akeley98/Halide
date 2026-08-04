@@ -46,6 +46,17 @@ def test_status_skips_session_lock(session, run_tool, capsys):
     assert locks._trace_sink == [("machine", "shared"), ("catalog", "exclusive")]
 
 
+def test_list_ideas_skip_session_lock(session, run_tool):
+    """list_child_ideas / list_seed_ideas are read-only (idea.md): catalog lock
+    only, never the session lock -- verified via the lock trace."""
+    from dendritic_hl_lib import locks
+    lock_free = [("machine", "shared"), ("catalog", "exclusive")]
+    run_tool(tools.cmd_list_child_ideas, session.ns())
+    assert locks._trace_sink == lock_free
+    run_tool(tools.cmd_list_seed_ideas, session.ns())
+    assert locks._trace_sink == lock_free
+
+
 def test_new_root_takes_session_lock(session, run_tool, capsys):
     """A mutating -s tool takes the session lock before the catalog lock."""
     from dendritic_hl_lib import locks
@@ -79,7 +90,8 @@ def test_idea_lifecycle(session, run_tool, tmp_path, capsys):
 
     run_tool(tools.cmd_list_child_ideas, session.ns())  # default schedule = unambiguous
     listing = capsys.readouterr().out
-    assert "vec_wider" in listing
+    assert "proposal: vec_wider" in listing      # prefixed proposal line
+    assert "canonical: " in listing              # prefixed canonical line
     assert "Vectorize wider." in listing
     assert "Second line." not in listing  # only first line, truncated
 
