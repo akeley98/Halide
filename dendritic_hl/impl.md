@@ -296,7 +296,9 @@ Inside the `private/{session id}` sub-directory, there is
 * `bin/` directory
 
 * `current_anchor_schedule.txt`, full ID of schedule node and newline.
-  No file if there's no current anchor schedule.
+  An empty *or* absent file both mean "no current anchor schedule" (we never
+  delete files, so clearing it writes empty).  Modelled by the `CurrentAnchor`
+  object (see "Private-workspace state objects").
 
 * `private_ideas.json`, the session private idea list (a JSON object).
   The keys are the set of idea node full IDs comprising the list.
@@ -626,7 +628,9 @@ interleaved profiling round.  Its key is `(benchmark set full ID, batch index)`,
 because only schedules profiled *together in one build run* share drift; two
 schedules are "in the same batch" only when the same set measured both at the
 same batch index.  Sets whose cached `profiler_version` isn't
-`catalog.EXPECTED_PROFILER_VERSION` are dropped whole.
+`catalog.EXPECTED_PROFILER_VERSION` are dropped whole, with a stderr warning
+naming the set (the shared `cost.compatible_sets` gate — see "Private Benchmark
+Sets on Disk").
 
 **Raw cost + representative.** The raw cost of one (schedule, parameters index)
 in a batch is its `wall_time_min` (robust: the fastest of a record's runs, ~1%
@@ -995,8 +999,10 @@ still the idea-node collision check, so it does not use the mint helper.)
 * `locks.py` — the machine directory, the flock lock hierarchy, and the lock-free
   session-handle store (see Lock Hierarchy, Session Handles).
 * `catalog.py` — the in-memory model (conceptual description below). `_UNLOADED`
-  sentinel; schedule sub-objects `Commentary`, `Benchmark`, `WarningToggle`; the
-  top-level `BenchmarkSet`; nodes `ScheduleNode` (with generator parameters +
+  sentinel; the `EXPECTED_PROFILER_VERSION` constant (the profiler JSON schema
+  version the cost tools understand); schedule sub-objects `Commentary`,
+  `Benchmark` (with `wall_time_min` / `profiler_version` cost accessors),
+  `WarningToggle`; the top-level `BenchmarkSet`; nodes `ScheduleNode` (with generator parameters +
   `RESULT_STATES`/`best_result`), `IdeaNode`, `SessionNode` (prompt, multiple
   seed ideas, default anchor, `outputs.json`); the `CurrentIdeaState` parser; the
   parameter helpers (`DEFAULT_PARAMETERS`/`dump_parameters`/`validate_parameters`/
@@ -1019,11 +1025,21 @@ still the idea-node collision check, so it does not use the mint helper.)
   `safety.commit()`; `read_text_or_stdin` handles `-` and turns a missing file
   into a clean `DhHlError`.
 * `tools.py` — every non-build `cmd_*` (catalog/idea/session queries + session
-  lifecycle) plus shared print/JSON helpers.
+  lifecycle, the JSON cost query tools, the private-benchmark-set tools) plus
+  shared print/JSON helpers and the profiler-stats reachability walk.
 * `build.py` — `cmd_init_build` / `cmd_build` (see the Build Tool in idea.md),
   with the toolchain steps behind the monkeypatch seams `_write_ninja`,
   `_ninja_build`, `_discover_generator_name`, `_emit`, `_link`, `_run_benchmark`
   (see Tests).
+* `cost.py` — the cost model core behind `json_ranking_cost` / `json_compare_cost`
+  and the `list_private_ideas` frontier (see "Cost Model Core"): `CostData`
+  (batched `wall_time_min` samples from the private-benchmark-set caches, ranking
+  ±anchor, the 2-way `compare`), the paired-difference bootstrap primitives
+  (`paired_diff_ci`/`compare_verdict`), and `compatible_sets` — the profiler-version
+  gate that drops + stderr-warns on mismatched sets.
+* `profiler_stats.py` — the pure `aggregate` for `json_profiler_stats`: per-func
+  and pipeline-global statistics (incl. the derived `active_threads` / `*_per_run`
+  / `time_ratio` specials) summarised across benchmarks into `[p25, median, p75]`.
 
 Obviousness and idiot-proofing are priorities for this prototype since
 this design may evolve quickly and isn't meant to scale to production uses.
@@ -1127,7 +1143,10 @@ steps stubbed). The genuinely end-to-end tests are marked `halide` (registered i
 present: `test_halide.py` and `test_params_e2e.py` (in-process via `run_tool`),
 and `test_build_cli_halide.py` (real `./dh_hl` subprocess via `run_cli`, using
 the `tests/hist_params.cpp` generator to check profiler-stat attribution,
-generator-output ordering, and failed-generator handling).
+generator-output ordering, failed-generator handling, and the cost tools over
+real profiler numbers — `json_ranking_cost` picking the faster parameters
+object as representative, `json_profiler_stats` aggregating real per-func
+samples, and `json_compare_cost` calling a serial-vs-parallel regression).
 
 **Test-only hook in shipped code.** `safety.new_file` honors a
 `DH_HL_TEST_FAIL_AFTER=<n>` environment variable that raises after the n-th new
@@ -1159,6 +1178,24 @@ Because the fake profiler returns identical dummy stats for every binary, the
 *attribution* of profiler stats to the right (schedule, parameters) is checked
 only by the Halide tier (the parallel-vs-serial perf and benchmark-set-cell
 tests in `test_build_cli_halide.py`).
+
+**Cost-tool testing (deterministic, Halide-free).** The cost model is tested
+against *known numbers* without ever running the profiler: `conftest`'s
+`add_synthetic_benchmark_set` (with `make_profiler_obj`) fabricates real
+`Benchmark` + `BenchmarkSet` objects with hand-chosen `wall_time_min` values (and
+optional `funcs` for the profiler-stats tests), so a test knows the exact cost of
+every schedule.  This works precisely because the paired-difference bootstrap is
+**fixed-seed deterministic** (see "Cost Model Core"): identical samples always
+yield the same CI and thus the same improvement/regression/unknown verdict, so a
+test can assert an exact verdict.  `test_cost.py` (the `cost.py` core),
+`test_cost_tools.py` (`json_ranking_cost`/`json_compare_cost` wiring),
+`test_profiler_stats.py` (`profiler_stats.aggregate` + the tool), and
+`test_list_private_ideas.py` (the frontier — parsed into per-idea blocks so
+cost/pool/obsoleted-by are checked *per idea*, not by loose substring) all rely
+on it; `test_private_benchmark_sets.py` also guards the lazy-load-once objects
+against the looped-mutation regression.  The Halide tier then re-checks the same
+tools against genuinely noisy real timings (above), where only *robust* facts
+(the parallel variant is much faster) can be asserted.
 
 **Locking in tests.**
 
