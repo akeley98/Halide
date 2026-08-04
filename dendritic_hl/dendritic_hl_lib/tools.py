@@ -7,6 +7,7 @@ rollback handler is disarmed.
 
 import json
 import os
+import re
 import sys
 
 from . import cost
@@ -1184,45 +1185,100 @@ def cmd_join_session(args):
     safety.commit(assert_no_writes=dry)
 
 
-# ---- session private idea list --------------------------------------------
+# ---- session private idea list (cost-ranked frontier) ---------------------
 
-def _list_private_ideas(args, *, filter_kind):
-    """Shared body of list_private_ideas / _todo / _done.  Prints the private
-    idea list most-recent-first (disk order reversed), filtered by canonical
-    status, capped at N *printed* ideas (excluded ideas don't count)."""
-    ctx = Context.for_session(args, session_lock=True)
-    catalog = ctx.catalog
-    limit = getattr(args, "n", None)
-    printed = 0
-    any_printed = False
-    for idea_id in reversed(list(ctx.workspace.read_private_ideas())):
-        idea = catalog.ideas.get(idea_id)
-        if idea is None:
-            continue  # dangling (e.g. git checkout desync); not robust per spec
-        has_canon = idea.canonical is not None
-        if filter_kind == "todo" and has_canon:
+def _pool_enable_predicate(pools_exact, pools_regex):
+    """Build `enabled(tag) -> bool` from the --pool / --pools arguments.  With no
+    such arguments, every pool tag is enabled (idea.md)."""
+    exact = set(pools_exact or [])
+    try:
+        patterns = [re.compile(p) for p in (pools_regex or [])]
+    except re.error as e:
+        raise DhHlError("invalid --pools regex: {}".format(e))
+    if not exact and not patterns:
+        return lambda tag: True
+    return lambda tag: tag in exact or any(p.search(tag) for p in patterns)
+
+
+def _idea_cost_schedule(idea):
+    """The schedule whose cost stands in for the idea: its canonical schedule if
+    it has one, else its parent schedule (idea.md)."""
+    return (idea.canonical if idea.canonical is not None
+            else idea.parent_schedule().full_id)
+
+
+def _obsoleted_by(ctx, data, idea, confidence):
+    """Child ideas of *idea*'s canonical schedule that confidently improve on it
+    (idea.md "Obsoleted By").  Empty unless *idea* has a canonical schedule."""
+    if idea.canonical is None:
+        return []
+    canon_node = ctx.catalog.schedules.get(idea.canonical)
+    if canon_node is None:
+        return []
+    out = []
+    for child in ctx.catalog.child_ideas(canon_node):
+        if child.canonical is None:
             continue
-        if filter_kind == "done" and not has_canon:
-            continue
-        _print_idea_listing(ctx, idea)
-        any_printed = True
-        printed += 1
-        if limit is not None and printed >= limit:
-            break
-    if not any_printed:
-        print("(no private ideas)")
+        if data.is_improvement(child.canonical, idea.canonical, confidence,
+                               cost.DEFAULT_BOOTSTRAP):
+            out.append(child)
+    return out
 
 
 def cmd_list_private_ideas(args):
-    _list_private_ideas(args, filter_kind="all")
+    ctx = Context.for_session(args, session_lock=True)
+    catalog = ctx.catalog
+    ws = ctx.workspace
+    anchor_id = _resolve_anchor_arg(ctx, getattr(args, "anchor", None))
+    confidence = _confidence_arg(args)
+    max_n = getattr(args, "max", None)
+    max_n = 6 if max_n is None else max_n
+    done = bool(getattr(args, "done", False))
+    todo = bool(getattr(args, "todo", False))
+    enabled = _pool_enable_predicate(getattr(args, "pool", None),
+                                     getattr(args, "pools", None))
+    data = cost.CostData.from_private_sets(ws.read_private_benchmark_sets())
 
+    # Group the enabled private ideas by pool tag, and cost each once.
+    by_pool = {}
+    cost_of = {}   # idea full id -> ranking_cost dict
+    for idea_id, tag in ws.read_private_ideas().items():
+        if not enabled(tag):
+            continue
+        idea = catalog.ideas.get(idea_id)
+        if idea is None:
+            continue  # dangling (e.g. git checkout desync); skip defensively
+        by_pool.setdefault(tag, []).append(idea)
+        cost_of[idea_id] = data.ranking_cost(_idea_cost_schedule(idea), anchor_id)
 
-def cmd_list_private_ideas_todo(args):
-    _list_private_ideas(args, filter_kind="todo")
+    any_low_cost = False
+    for tag in sorted(by_pool):
+        print("=== {} ===".format(tag))
+        # Sort by cost (a null cost sorts as 0 -> bubbles to the top); then apply
+        # the --done/--todo filter; then truncate to --max.
+        ideas = sorted(by_pool[tag],
+                       key=lambda i: cost_of[i.full_id]["cost"] or 0)
+        if done:
+            ideas = [i for i in ideas if i.canonical is not None]
+        elif todo:
+            ideas = [i for i in ideas if i.canonical is None]
+        for idea in ideas[:max_n]:
+            rc = cost_of[idea.full_id]
+            _print_idea_listing(ctx, idea)
+            print("  batch_count: {}".format(rc["batch_count"]))
+            print("  cost: {}".format("null" if rc["cost"] is None else rc["cost"]))
+            if (anchor_id is not None and rc["cost"] is not None
+                    and rc["cost"] < 0.5):
+                any_low_cost = True
+            for child in _obsoleted_by(ctx, data, idea, confidence):
+                print("  obsoleted by: " + catalog.format_idea_id(child))
 
-
-def cmd_list_private_ideas_done(args):
-    _list_private_ideas(args, filter_kind="done")
+    # Drift warnings (idea.md implementation notes).
+    if anchor_id is None:
+        print("Warning: ranking is drift-exposed until you set an anchor.")
+    elif any_low_cost:
+        print("Warning: some ranked schedules were much faster than the anchor.")
+        print("This amplifies the effects of system noise; consider a new anchor.")
 
 
 # ---- session idea pool tags -----------------------------------------------

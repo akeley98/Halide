@@ -1800,11 +1800,7 @@ followed by the output of the `list_seed_ideas` tool.
 
 ### List Session Private Ideas Tool
 
-    dh_hl list_private_ideas -s ... [N]
-
-IMPL TASK: rewrite tool, `_todo` and `_done` variants replaced with switches.
-
-IMPL TASK: we need to think about how to test that this is calculated correctly.
+    dh_hl list_private_ideas -s ...
 
 Gives a cost ranked "frontier" of session private ideas,
 grouped by pool tag (as mapped by the session private workspace state).

@@ -114,9 +114,7 @@ COMMAND_HELP = {
     "new_idea": "Add a child idea node (proposal) to a major schedule.",
     "list_child_ideas": "List the child idea nodes of a major schedule.",
     "list_seed_ideas": "List the current session's seed ideas.",
-    "list_private_ideas": "List the current session's private idea list.",
-    "list_private_ideas_todo": "List private ideas without a canonical schedule.",
-    "list_private_ideas_done": "List private ideas with a canonical schedule.",
+    "list_private_ideas": "Cost-ranked frontier of the session's private ideas by pool.",
     "init_workspace": "Initialize the session's private workspace to defaults.",
     "get_current_anchor": "Print the session's current anchor schedule.",
     "set_current_anchor": "Set (or clear) the session's current anchor schedule.",
@@ -258,11 +256,22 @@ def _build_parser():
 
     add("list_seed_ideas")
 
-    for _name in ("list_private_ideas", "list_private_ideas_todo",
-                  "list_private_ideas_done"):
-        sp = add(_name)
-        sp.add_argument("n", nargs="?", type=int,
-                        help="list only the first up-to-N ideas")
+    sp = add("list_private_ideas")
+    sp.add_argument("--anchor", default="auto",
+                    help="anchor schedule ID, 'auto' (default), 'always', or 'none'")
+    sp.add_argument("--confidence", type=float, metavar="CI",
+                    help="confidence for obsoleted-by CI, 0 < ci < 1 (default 0.95)")
+    sp.add_argument("--max", type=int, metavar="N",
+                    help="list up to N ideas per pool tag (default 6)")
+    sp.add_argument("--pool", action="append", metavar="NAME",
+                    help="enable a pool tag by exact name (repeatable)")
+    sp.add_argument("--pools", action="append", metavar="REGEX",
+                    help="enable pool tags matching a regex (repeatable)")
+    grp = sp.add_mutually_exclusive_group()
+    grp.add_argument("--done", action="store_true",
+                     help="only ideas with a canonical schedule")
+    grp.add_argument("--todo", action="store_true",
+                     help="only ideas without a canonical schedule")
 
     sp = add("init_workspace")
     sp.add_argument("--force", action="store_true",
@@ -514,8 +523,6 @@ _DISPATCH = {
     "list_child_ideas": tools.cmd_list_child_ideas,
     "list_seed_ideas": tools.cmd_list_seed_ideas,
     "list_private_ideas": tools.cmd_list_private_ideas,
-    "list_private_ideas_todo": tools.cmd_list_private_ideas_todo,
-    "list_private_ideas_done": tools.cmd_list_private_ideas_done,
     "init_workspace": tools.cmd_init_workspace,
     "get_current_anchor": tools.cmd_get_current_anchor,
     "set_current_anchor": tools.cmd_set_current_anchor,

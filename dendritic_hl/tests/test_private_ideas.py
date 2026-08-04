@@ -168,12 +168,8 @@ def test_private_lists_are_per_session(tmp_path, run_tool, capsys):
                 S1.ns(idea=".seed")).strip() == "s1only"
 
 
-# ---- list_private_ideas* : deferred (unordered list; future cost view) ----
-
-@pytest.mark.skip(reason="list_private_ideas* deferred to the cost-ranking batch "
-                         "(idea.md); unordered private list for now")
-def test_list_private_ideas_todo_done():
-    pass
+# The cost-ranked list_private_ideas frontier is covered in
+# test_list_private_ideas.py.
 
 
 # ---- restore_idea ---------------------------------------------------------
