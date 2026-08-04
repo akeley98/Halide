@@ -145,7 +145,7 @@ def _comment(session, run_tool, tmp_path, review="neutral",
 
 
 def test_close_session_requires_commentary(session, run_tool):
-    with pytest.raises(DhHlError, match="at least one commentary"):
+    with pytest.raises(DhHlError, match="no commentary"):
         run_tool(tools.cmd_close_session, session.ns())
 
 
@@ -159,7 +159,7 @@ def test_close_then_successor(session, run_tool, capsys, tmp_path):
     assert info["output_schedule"] is not None
 
     # Closing again is refused.
-    with pytest.raises(DhHlError, match="already has an output schedule"):
+    with pytest.raises(DhHlError, match="already has outputs"):
         run_tool(tools.cmd_close_session, session.ns())
 
     # A closed depth-0 session is still the terminus (closed terminus is normal),
@@ -183,6 +183,93 @@ def test_close_then_successor(session, run_tool, capsys, tmp_path):
                    ns(catalog=session.catalog_dir))
     assert session.session_id not in termini
     assert succ_id in termini
+
+
+def _reset():
+    from dendritic_hl_lib import locks
+    locks._reset_for_tests()
+    safety._new_entries.clear()
+    safety._pending_overwrites.clear()
+
+
+def test_close_records_pool_tag_and_benchmark_sets(session, run_tool, tmp_path,
+                                                   capsys):
+    # Seed a private benchmark set and retag the seed idea, then close.
+    cat = open_catalog(session.catalog_dir)
+    try:
+        from dendritic_hl_lib.context import SessionWorkspace
+        ws = SessionWorkspace(cat.catalog_dir, session.session_id, catalog=cat)
+        ws.add_private_benchmark_set("Testhost_2026-01-01T000000_000000Z")
+        seed = cat.get_session(session.session_id).seed_idea_id
+        ws.set_pool_tag(seed, "chosen")
+        cat.flush(); safety.commit()
+    finally:
+        _reset()
+    _comment(session, run_tool, tmp_path)
+    run_tool(tools.cmd_close_session, session.ns())
+    cat = open_catalog(session.catalog_dir)
+    try:
+        sess = cat.get_session(session.session_id)
+        assert list(sess.output_schedule_pool_tags().values()) == ["chosen"]
+        assert sess.output_benchmark_set_ids == [
+            "Testhost_2026-01-01T000000_000000Z"]
+    finally:
+        _reset()
+
+
+def test_close_rejects_root_output(session, run_tool, tmp_path):
+    _comment(session, run_tool, tmp_path)
+    root_id = [s for s in _major_schedule_ids(session)
+               if _is_root(session, s)][0]
+    with pytest.raises(DhHlError, match="cannot be a root node"):
+        run_tool(tools.cmd_close_session, session.ns(schedule=[root_id]))
+
+
+def _is_root(session, sched_id):
+    cat = open_catalog(session.catalog_dir)
+    try:
+        return cat.get_schedule(sched_id).is_root()
+    finally:
+        _reset()
+
+
+def test_close_rejects_parent_not_in_list(session, run_tool, tmp_path):
+    _comment(session, run_tool, tmp_path)
+    cat = open_catalog(session.catalog_dir)
+    try:
+        from dendritic_hl_lib.context import SessionWorkspace
+        ws = SessionWorkspace(cat.catalog_dir, session.session_id, catalog=cat)
+        ws.remove_private_idea(cat.get_session(session.session_id).seed_idea_id)
+        cat.flush(); safety.commit()
+    finally:
+        _reset()
+    with pytest.raises(DhHlError, match="not in this session's private idea list"):
+        run_tool(tools.cmd_close_session, session.ns())
+
+
+# ---- root_of / session_root_of --------------------------------------------
+
+def test_root_of(session, run_tool, capsys):
+    out = _out(run_tool, capsys, tools.cmd_root_of, session.ns())
+    root_id = [s for s in _major_schedule_ids(session) if _is_root(session, s)][0]
+    # root_of prints a (short) ID resolving to the tree root.
+    cat = open_catalog(session.catalog_dir)
+    try:
+        assert cat.resolve_schedule(out.strip()).full_id == root_id
+    finally:
+        _reset()
+
+
+def test_session_root_of_finds_seed_child(session, run_tool, capsys):
+    # The default schedule (seed canonical) is itself a child of the seed idea.
+    out = _out(run_tool, capsys, tools.cmd_session_root_of, session.ns())
+    assert out.strip()  # resolves to a schedule (the seed canonical)
+
+
+def test_session_root_of_fails_off_subtree(session, run_tool):
+    root_id = [s for s in _major_schedule_ids(session) if _is_root(session, s)][0]
+    with pytest.raises(DhHlError, match="no ancestor schedule"):
+        run_tool(tools.cmd_session_root_of, session.ns(schedule=root_id))
 
 
 def test_successor_requires_self_closed(session, run_tool, tmp_path):

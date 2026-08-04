@@ -138,6 +138,8 @@ COMMAND_HELP = {
     "add_warning_toggle": "Add a WarningToggle (block a warning or cancel another) to a schedule.",
     "debug_warning_toggle": "List the WarningToggles in effect for a schedule node.",
     "view_benchmark_warnings": "Pretty-print a benchmark's profiler warnings (with block info).",
+    "root_of": "Print the tree root of a schedule node.",
+    "session_root_of": "Print the session-root schedule (child of a seed idea) above a node.",
     "history": "Walk from a schedule node up to its root, printing each hop.",
     "fix_canonical": "Resolve a canonical.txt merge conflict for an idea node.",
     "exec": "Run a command (after `--`) with the machine lock held (shared).",
@@ -337,6 +339,12 @@ def _build_parser():
     sp = add("history")
     sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
 
+    sp = add("root_of")
+    sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
+
+    sp = add("session_root_of")
+    sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
+
     sp = add("fix_canonical")
     sp.add_argument("idea", help="idea ID")
 
@@ -473,6 +481,8 @@ _DISPATCH = {
     "add_warning_toggle": tools.cmd_add_warning_toggle,
     "debug_warning_toggle": tools.cmd_debug_warning_toggle,
     "view_benchmark_warnings": tools.cmd_view_benchmark_warnings,
+    "root_of": tools.cmd_root_of,
+    "session_root_of": tools.cmd_session_root_of,
     "history": tools.cmd_history,
     "fix_canonical": tools.cmd_fix_canonical,
     # Phase 4

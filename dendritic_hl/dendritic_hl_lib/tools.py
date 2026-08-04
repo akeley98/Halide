@@ -524,6 +524,44 @@ def cmd_history(args):
 
 
 # ---------------------------------------------------------------------------
+# root_of / session_root_of
+# ---------------------------------------------------------------------------
+
+def _session_root_schedule(catalog, seed_idea_ids, node):
+    """The nearest ancestor schedule of *node* (inclusive) whose parent idea is
+    a seed idea in *seed_idea_ids*, or None if none is found up to the root.
+    Walks nearest-first, so with nested seed ideas the deeper one wins (idea.md
+    session_root_of note).  schedule_path_to_root carries the loop guard."""
+    seeds = set(seed_idea_ids)
+    for n in catalog.schedule_path_to_root(node):
+        pid = n.parent_id  # parent idea full ID (None for a root node)
+        if pid is not None and pid in seeds:
+            return n
+    return None
+
+
+def cmd_root_of(args):
+    # Does not acquire the session lock (idea.md).
+    ctx = Context.for_catalog(args)
+    node = ctx.resolve_schedule_arg(args.schedule)
+    root = ctx.catalog.schedule_path_to_root(node)[-1]
+    print(ctx.catalog.format_schedule_id(root))
+
+
+def cmd_session_root_of(args):
+    # Does not acquire the session lock (idea.md).
+    ctx = Context.for_session(args, session_lock=False)
+    node = ctx.resolve_schedule_arg(args.schedule)
+    root = _session_root_schedule(ctx.catalog, ctx.session.seed_idea_ids, node)
+    if root is None:
+        raise DhHlError(
+            "session_root_of: no ancestor schedule of {} is a child of a seed "
+            "idea of the current session".format(
+                ctx.catalog.format_schedule_id(node)))
+    print(ctx.catalog.format_schedule_id(root))
+
+
+# ---------------------------------------------------------------------------
 # list_sibling_schedules / list_child_schedules / list_equal_schedules
 # ---------------------------------------------------------------------------
 
@@ -871,21 +909,52 @@ def cmd_new_successor_session(args):
 
 def cmd_close_session(args):
     ctx = Context.for_session(args, session_lock=True)
-    node = ctx.resolve_schedule_arg(args.schedule)
+    catalog = ctx.catalog
     session = ctx.session
-    if session.output_schedule_id is not None:
-        raise DhHlError(
-            "the current session already has an output schedule: "
-            + ctx.catalog.format_schedule_id(
-                ctx.catalog.get_schedule(session.output_schedule_id)))
-    if not node.commentary:
-        raise DhHlError(
-            "the output schedule must have at least one commentary sub-object;\n"
-            "use `dh_hl comment` to record a session summary first")
-    session.set_output_schedule(node.full_id)
+    ws = ctx.workspace
+    if session.has_outputs():
+        raise DhHlError("the current session already has outputs")
+
+    outputs = _resolve_schedule_list(ctx, getattr(args, "schedule", None) or [])
+    # Validate every output and compute its pool tag (from its parent idea's
+    # entry in the private idea list) BEFORE mutating anything.
+    schedule_pool_pairs = []
+    for node in outputs:
+        if node.is_root():
+            raise DhHlError(
+                "an output schedule cannot be a root node: "
+                + catalog.format_schedule_id(node))
+        parent_idea = node.parent_idea()
+        if not ws.has_private_idea(parent_idea.full_id):
+            raise DhHlError(
+                "output {}'s parent idea {} is not in this session's private "
+                "idea list; fix with `dh_hl set_pool_tag`".format(
+                    catalog.format_schedule_id(node),
+                    catalog.format_idea_id(parent_idea)))
+        if not node.commentary:
+            raise DhHlError(
+                "output schedule {} has no commentary; use `dh_hl comment` to "
+                "record a session summary first".format(
+                    catalog.format_schedule_id(node)))
+        schedule_pool_pairs.append(
+            (node.full_id, ws.get_pool_tag(parent_idea.full_id)))
+
+    benchmark_sets = list(ws.read_private_benchmark_sets().keys())
+    session.set_outputs(schedule_pool_pairs, benchmark_sets)
+
+    # Superseded-by links: for each output O, the session-root schedule R (its
+    # ancestor whose parent idea is a seed idea) has its parent idea superseded
+    # by O's parent idea.  Silently skipped where session_root_of fails.
+    for node in outputs:
+        root = _session_root_schedule(catalog, session.seed_idea_ids, node)
+        if root is None:
+            continue
+        root.parent_idea().add_side_link("superseded_by",
+                                         node.parent_idea().full_id)
+
     ctx.finish()
-    print("Closed session; output schedule "
-          + ctx.catalog.format_schedule_id(node))
+    print("Closed session; {} output schedule(s), primary {}".format(
+        len(outputs), catalog.format_schedule_id(outputs[0])))
 
 
 def cmd_delist_session(args):
