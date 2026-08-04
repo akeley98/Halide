@@ -121,3 +121,19 @@ def test_empty_list_is_noop(session, run_tool, capsys):
 def test_list_takes_session_lock(session, run_tool):
     run_tool(tools.cmd_list_private_benchmark_sets, session.ns())
     assert ("session", "exclusive") in locks._trace_sink
+
+
+def test_read_returns_read_only_view(session):
+    """The external accessors hand out a read-only view: mutating it raises,
+    so state can't change without going through a dirty-tracking method."""
+    s1, _ = _two_sets(session)
+    cat = open_catalog(session.catalog_dir)
+    try:
+        ws = SessionWorkspace(cat.catalog_dir, session.session_id, catalog=cat)
+        ws.add_private_benchmark_set(s1, cat)
+        with pytest.raises(TypeError):
+            ws.read_private_benchmark_sets()["sneaky"] = {}
+        with pytest.raises(TypeError):
+            ws.read_private_ideas()["sneaky"] = "tag"
+    finally:
+        locks._reset_for_tests()

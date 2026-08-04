@@ -328,9 +328,11 @@ into memory (`_UNLOADED` sentinel), mutate in memory, and register on the catalo
 dirty set (`catalog._mark_dirty`) so `catalog.flush()` writes them **once** —
 exactly like `CurrentIdeaState`.  `SessionWorkspace` owns one of each (lazily
 created) and its `read_*` / pool-tag / benchmark-set methods are thin
-delegations; `read_private_ideas` / `read_private_benchmark_sets` return the
-*live* in-memory dict (read-only for callers; `join_session` snapshots with
-`dict()` before mutating).  This is what makes a looped mutation correct — e.g.
+delegations; `read_private_ideas` / `read_private_benchmark_sets` return a
+**read-only `MappingProxyType` view** of the live map (mutating it raises, the
+nearest Python has to a `const&`, so state can only change through the objects'
+own dirty-tracking methods — never a stray outside mutation; `join_session`
+snapshots with `dict()` before mutating).  This is what makes a looped mutation correct — e.g.
 `join_session` adding several benchmark sets, or `new_sub_session` setting
 several pool tags, accumulate in the one in-memory map and flush together
 (the previous re-read-per-call code persisted only the last write).  `init_workspace`

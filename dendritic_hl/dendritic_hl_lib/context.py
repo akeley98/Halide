@@ -15,6 +15,7 @@ machine lock to exclusive first).
 import json
 import os
 import sys
+from types import MappingProxyType
 
 from . import ids
 from . import locks
@@ -39,7 +40,11 @@ class _PrivateMapState:
     def __init__(self, path, catalog=None):
         self._path = path
         self._catalog = catalog
-        self._map = _UNLOADED       # dict once loaded (absent file => {})
+        # _UNLOADED until first access; an absent file *loads* as {} (a missing
+        # list is an empty list).  This is a load default only -- flush writes
+        # solely when _dirty (i.e. after a real mutation), so a pure read never
+        # creates the file.
+        self._map = _UNLOADED
         self._dirty = False
 
     @property
@@ -48,6 +53,10 @@ class _PrivateMapState:
 
     @property
     def map(self):
+        """The live mapping (real dict) for the object's OWN mutating methods.
+        External callers must go through `view` (read-only) -- handing out the
+        raw dict would let outside code mutate without dirtying, violating the
+        'objects dirty themselves; never dirty from outside' rule."""
         if self._map is _UNLOADED:
             try:
                 with open(self._path, "r", encoding="utf-8") as f:
@@ -55,6 +64,13 @@ class _PrivateMapState:
             except FileNotFoundError:
                 self._map = {}
         return self._map
+
+    @property
+    def view(self):
+        """A read-only view of the mapping for external readers.  Mutating it
+        raises TypeError (Python's nearest thing to a const reference), so state
+        can only change through the object's own dirty-tracking methods."""
+        return MappingProxyType(self.map)
 
     def _dirtied(self, catalog=None):
         catalog = catalog or self._catalog
@@ -342,10 +358,11 @@ class SessionWorkspace:
         return os.path.join(self.private_dir, "private_ideas.json")
 
     def read_private_ideas(self):
-        """The private idea list as a live {idea full ID -> pool tag} dict.
-        Read-only for callers; mutate via the pool-tag methods.  Snapshot with
-        dict() if you need a pre-mutation view (see join_session)."""
-        return self.idea_list.map
+        """A read-only view of the private idea list ({idea full ID -> pool
+        tag}); mutate via the pool-tag methods.  It reflects live in-memory
+        changes, so snapshot with dict() for a pre-mutation copy (see
+        join_session)."""
+        return self.idea_list.view
 
     def has_private_idea(self, idea_id):
         return self.idea_list.contains(idea_id)
@@ -384,9 +401,9 @@ class SessionWorkspace:
         return os.path.join(self.private_dir, "private_benchmark_sets.json")
 
     def read_private_benchmark_sets(self):
-        """The private benchmark set list as a live {set full ID -> cache} dict
-        (read-only for callers)."""
-        return self.benchmark_set_list.map
+        """A read-only view of the private benchmark set list ({set full ID ->
+        cache}); reflects live in-memory changes."""
+        return self.benchmark_set_list.view
 
     def add_private_benchmark_set(self, set_id, catalog=None):
         """Add *set_id* to the private benchmark set list, caching its
