@@ -66,20 +66,33 @@ class SessionWorkspace:
                 + " (refusing to create a private workspace under it)")
         safety.makedirs_tracked(self.private_dir)
 
-    def has_workspace(self):
-        return os.path.isfile(self.workspace_path)
+    # The two "workspace files" (idea.md terminology): the only workspace state
+    # the harness user edits directly.  Both are required -- there is no implicit
+    # default for the parameters file (use `init_workspace` to create them).
+    _WORKSPACE_FILES = ("generator.cpp", "generator_parameters.json")
 
-    def require_workspace(self):
-        if not self.has_workspace():
-            raise DhHlError(
-                "no workspace C++ file for the current session at "
-                + self.workspace_path)
+    def missing_workspace_files(self):
+        """Which of the two workspace files are absent (in a stable order)."""
+        missing = []
+        if not os.path.isfile(self.workspace_path):
+            missing.append("generator.cpp")
+        if not os.path.isfile(self.params_path):
+            missing.append("generator_parameters.json")
+        return missing
+
+    def has_workspace_files(self):
+        return not self.missing_workspace_files()
+
+    def require_workspace_files(self):
+        if not self.has_workspace_files():
+            raise DhHlError(_missing_workspace_message(
+                self.missing_workspace_files(), self.private_dir))
 
     @property
     def workspace_bytes(self):
         if self._workspace_bytes is None:
-            with open(self.workspace_path, "rb") as f:
-                self._workspace_bytes = f.read()
+            self._workspace_bytes = self._read_workspace_file(
+                self.workspace_path, "generator.cpp")
         return self._workspace_bytes
 
     @property
@@ -88,16 +101,45 @@ class SessionWorkspace:
 
     @property
     def workspace_params_text(self):
-        """Text of the workspace generator_parameters.json.  A missing file
-        defaults to the canonical "[{}]" so the workspace always has parameters
-        to build/hash (matching a node created with the same default)."""
+        """Text of the workspace generator_parameters.json (required; no implicit
+        default -- a missing file is a clean 'run init_workspace' error)."""
         if self._params_text is None:
-            try:
-                with open(self.params_path, "rb") as f:
-                    self._params_text = f.read().decode("utf-8")
-            except FileNotFoundError:
-                self._params_text = dump_parameters(DEFAULT_PARAMETERS)
+            self._params_text = self._read_workspace_file(
+                self.params_path, "generator_parameters.json").decode("utf-8")
         return self._params_text
+
+    def _read_workspace_file(self, path, label):
+        """Read a workspace file as bytes, turning a missing file into a friendly
+        'run init_workspace' error (naming the path) instead of a raw traceback
+        (idea.md init_workspace notes)."""
+        try:
+            with open(path, "rb") as f:
+                return f.read()
+        except FileNotFoundError:
+            raise DhHlError(_missing_workspace_message([label], self.private_dir))
+
+    # -- current anchor schedule ----------------------------------------
+    @property
+    def current_anchor_path(self):
+        return os.path.join(self.private_dir, "current_anchor_schedule.txt")
+
+    @property
+    def current_anchor_schedule_id(self):
+        """The current anchor schedule full ID, or None (absent or empty file)."""
+        try:
+            with open(self.current_anchor_path, "r", encoding="utf-8") as f:
+                v = f.read().strip()
+        except FileNotFoundError:
+            return None
+        return v or None
+
+    def set_current_anchor(self, schedule_id, *, allow=True):
+        """Set (or clear, when *schedule_id* is None) the current anchor.  An
+        empty file encodes 'no anchor' (we never delete files)."""
+        self.ensure_private_dir()
+        safety.write_allowed(self.current_anchor_path,
+                             (schedule_id + "\n") if schedule_id else "",
+                             allow=allow)
 
     @property
     def workspace_hash(self):
@@ -223,6 +265,15 @@ class SessionWorkspace:
         self._write_private_benchmark_sets(sets)
 
 
+def _missing_workspace_message(missing, private_dir):
+    """A friendly 'run init_workspace' message naming the missing workspace
+    file(s) and their directory (idea.md Status / init_workspace notes)."""
+    return (
+        "missing workspace {} in {}\n"
+        "AGENTS: run `dh_hl init_workspace` to get files to edit".format(
+            " and ".join(missing), private_dir))
+
+
 def read_text_or_stdin(path):
     """Read a text input argument.  Universally, "-" means read from stdin;
     otherwise *path* is a filename.  A missing/unreadable file is a clean
@@ -341,7 +392,7 @@ class Context:
     def unambiguous_schedule(self):
         """The schedule node `status` would report as unambiguous, or None."""
         ws = self.workspace
-        if not ws.has_workspace():
+        if not ws.has_workspace_files():
             return None
         h = ws.workspace_hash
         matching = [n for n in self.catalog.schedules.values() if n.hash == h]

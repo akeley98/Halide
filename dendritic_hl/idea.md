@@ -760,8 +760,6 @@ and give basic information on the current catalog state.
 
 * The is-delisted flag of the current session
 
-IMPL TASK: binary open/closed replaces seed idea / output schedule.
-
 * Whether the current session is `open` or `closed`.
 
 * The current idea state,
@@ -776,11 +774,6 @@ IMPL TASK: binary open/closed replaces seed idea / output schedule.
       is a root node whose timestamp matches the current idea state
     - **some current idea:**
       its parent is the current idea node.
-
-IMPL TASK: implement cases below,
-enforce `generator_parameters.json` exists in `has_workspace`.
-Consider renaming `has_workspace` based on new "workspace files" terminology.
-
 
 * The status as one of
     - `missing workspace generator.cpp`
@@ -811,12 +804,11 @@ This is why the command is robust to nonexistent current idea node IDs.
 
 **Search Implementation Details:**  <!-- deferred task: strip when creating prompt -->
 
-IMPL TASK: gap 1, I decided to use "workspace files" as umbrella term.
-Advise if a more clear term is possible.
-
 Hash the workspace files and look for schedule nodes with matching hashes.
 
-If some are missing, the status is "missing workspace [missing files]".
+If either workspace file is missing, the status is the matching
+`missing workspace ...` value, naming whichever of `generator.cpp` /
+`generator_parameters.json` is absent (both, if both).
 
 Otherwise, if no hash matches exist,
 the status is "workspace inconsistent, unknown schedule".
@@ -844,8 +836,7 @@ Otherwise, the status is "workspace inconsistent, unexpected current idea state"
 
 * The is-delisted flag of the current session
 
-* The IDs of the session's seed idea node and output schedule node
-  (may be none for the latter)
+* Whether the current session is `open` or `closed`
 
 * Give the current idea state
   (no current idea/some current idea/parse error/missing/etc.).
@@ -856,15 +847,11 @@ Otherwise, the status is "workspace inconsistent, unexpected current idea state"
 
 * Gives the status as documented previously
 
-IMPL TASK: soften the message below and handle missing `generator_parameters.json`
-
 * If some workspace files are not found, print
 
         AGENTS: run `dh_hl init_workspace` to get files to edit
 
 * If the workspace is consistent, print the ID of the unambiguous schedule node.
-
-IMPL TASK: remove the dramatic "workspace inconsistent" warning.
 
 
 ### Restore Schedule Tool
@@ -928,14 +915,8 @@ Takes optional arguments specifying the up to three schedule nodes.
   The special value `always` is like `auto` except it's
   an error if the current session has no current anchor.
 
-IMPL TASK: `--anchor auto`, `--anchor always`
-
-`--target workspace` behavior:
-
-IMPL TASK: the specification now inherits the `dh_hl status` behavior
-of not being happy if `generator_parameters.json` is missing;
-the code needs to be updated to match (if not already automagically fixed).
-Also add a test for this case (`generator.cpp` present, `generator_parameters.json` missing)
+`--target workspace` behavior (a missing `generator_parameters.json` is an
+error here, just as in `dh_hl status`):
 
 * If `dh_hl status` would give an unambiguous schedule node,
   the target schedule node is the one this tool returns.
@@ -1927,8 +1908,6 @@ Initialize the session private workspace state to defaults:
   initialized from the current session's default anchor schedule;
   no current anchor if no default anchor schedule.
 
-IMPL TASK: gap 5 fixed; may reconsider when I gain practical experience.
-
 * **Private Idea List:** initialized from the current session's seed ideas,
   each with pool tag `default`.
   This is intentionally different from the parent session's pool tags;
@@ -1940,31 +1919,18 @@ The session lock is low-level state that is not exclusive to this tool;
 it is implicitly created without any user action.
 
 Unless `--force` is given, the tool fails if any existing state would
-be overwritten.
+be overwritten.  (Implemented by writing each file via
+`safety.write_allowed(..., allow=<--force>)`: with `--force` off, an existing
+target hits `new_file`'s `O_EXCL` create and raises, which the tool catches to
+print the AGENTS warning below.)
 
-IMPL TASK: the `--force` behavior should be easy to implement
-by using the `safety.write_allowed` feature updated to something similar to
+Direct reads of the workspace files (`generator.cpp`, `generator_parameters.json`)
+are funneled through a helper that, on a missing file, gives a friendly
+"run `init_workspace`" notice naming the missing path rather than a raw
+Python traceback.
 
-    def write_allowed(path, data, *, allow=True):
-        """Write one of the allowed-to-change files.  If it doesn't exist yet we
-        create it with new_file (recorded, so rollback removes it and the dir it
-        lives in can be rmdir'd).  If it exists we defer an overwrite that is NOT
-        rolled back.  Existence is checked once; we assume no concurrent changes."""
-        if allow and os.path.exists(path):
-            queue_overwrite(path, data)
-        else:
-            new_file(path, data)
-
-and piping the `--force` flag to `allow`.
-Correct me if I'm being naive.
-
-IMPL TASK: try to replace direct reads to session private files with
-helpers that give a notice to use `init_workspace` in case the file is
-not found, rather than the default Python file not found error.
-But still show the path of the missing file.
-
-IMPL TASK: In case the tool fails due to `safety.new_file`,
-give one of the following AGENTS warnings:
+If the tool fails because some workspace state already exists (without
+`--force`), it prints one of the following AGENTS warnings:
 
     # Session depth == 0
     AGENTS: the session seems to already be initialized,

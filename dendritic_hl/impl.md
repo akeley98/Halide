@@ -289,27 +289,18 @@ Inside the `private/{session id}` sub-directory, there is
 * `current_anchor_schedule.txt`, full ID of schedule node and newline.
   No file if there's no current anchor schedule.
 
-IMPL TASK: replace .txt with .json and remove all documentation references
-to the ordering of the stored ideas list.  The changes this turn are
-to prepare for a future tool that shows current ideas ranked by pool
-and cost. The cost is not to be implemented yet.
-
-* `private_ideas.json`, the session private idea list (actually JSON object).
+* `private_ideas.json`, the session private idea list (a JSON object).
   The keys are the set of idea node full IDs comprising the list.
-  The values are the pool tags (strings).
-  The cost is not stored here; it's derived when needed.
-
-IMPL TASK: private benchmark set list.  The values will become
-non-trivial once cost is implemented.  Please implement a separate
-object with an allow-overwrite flush to store the private benchmark
-set list.  In the future, the value will be initialized when a new
-benchmark set is added to the list, so a centralized "add benchmark
-set" helper will be prudent.
-Discuss with me if the "new flushable object" plan is questionable.
+  The values are the pool tags (strings).  Unordered; the cost is not stored
+  here, it's derived when needed.  Owned by `SessionWorkspace` in `context.py`
+  (`read_private_ideas` / `set_pool_tag` / `get_pool_tag` / `hide_private_idea`
+  / `rename_pool_tag` / `remove_private_idea`).
 
 * `private_benchmark_sets.json`, the session private benchmark set list.
   The keys are the set of benchmark set full IDs comprising the list.
-  The values are currently empty objects `{}`.
+  The values are currently empty objects `{}` (they become cached statistics
+  once cost lands).  `SessionWorkspace.add_private_benchmark_set` is the
+  centralized add helper so that future value-init can hook there.
 
 * `init_build.json`, left behind by `dh_hl init_build`: the catalog-relative
   `generator.cpp` + `generator_parameters.json` paths of each schedule node to

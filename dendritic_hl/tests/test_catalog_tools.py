@@ -144,7 +144,9 @@ def test_edited_workspace_is_inconsistent(session, run_tool, capsys):
     session.write_workspace("totally unknown content\n")
     out = _status(session, run_tool, capsys)
     assert "inconsistent, unknown schedule" in out
-    assert "AGENTS:" in out  # the warning banner
+    # The dramatic "workspace inconsistent" AGENTS banner was intentionally
+    # removed (idea.md Status Tool); only the missing-files case advises now.
+    assert "AGENTS:" not in out
 
 
 def tools_ns_catalog(catalog_dir, **kw):

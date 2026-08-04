@@ -121,6 +121,41 @@ def test_build_without_init_build_errors(session, run_tool):
         run_tool(build.cmd_build, session.ns(profile=0, only="all"))
 
 
+def test_init_build_workspace_missing_params_errors(session, run_tool):
+    """--target workspace requires generator_parameters.json (no implicit [{}]);
+    a workspace with only generator.cpp is a clean error."""
+    import os as _os
+    from dendritic_hl_lib.errors import DhHlError
+    session.write_workspace("edited source\n")           # inconsistent workspace
+    _os.remove(_os.path.join(session.private_dir, "generator_parameters.json"))
+    with pytest.raises(DhHlError, match="generator_parameters.json"):
+        run_tool(build.cmd_init_build,
+                 session.ns(target="workspace", other="none", anchor="none"))
+
+
+def test_init_build_anchor_always_errors_without_current_anchor(session, run_tool):
+    from dendritic_hl_lib.errors import DhHlError
+    with pytest.raises(DhHlError, match="no current anchor"):
+        run_tool(build.cmd_init_build,
+                 session.ns(target="workspace", other="none", anchor="always"))
+
+
+def test_init_build_anchor_auto_uses_current_anchor(session, run_tool, capsys):
+    # No current anchor yet -> auto disables it.
+    run_tool(build.cmd_init_build,
+             session.ns(target="workspace", other="none", anchor="auto"))
+    sel = json.loads(open(os.path.join(session.private_dir,
+                                       "init_build.json")).read())
+    assert sel["anchor"] is None
+    # Set a current anchor, then auto picks it up.
+    run_tool(tools.cmd_set_current_anchor, session.ns(schedule=None))
+    run_tool(build.cmd_init_build,
+             session.ns(target="workspace", other="none", anchor="auto"))
+    sel = json.loads(open(os.path.join(session.private_dir,
+                                       "init_build.json")).read())
+    assert sel["anchor"] is not None and sel["anchor"]["role"] == "anchor"
+
+
 # ---------------------------------------------------------------------------
 # build: result states
 # ---------------------------------------------------------------------------

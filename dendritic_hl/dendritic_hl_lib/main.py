@@ -116,6 +116,9 @@ COMMAND_HELP = {
     "list_private_ideas": "List the current session's private idea list.",
     "list_private_ideas_todo": "List private ideas without a canonical schedule.",
     "list_private_ideas_done": "List private ideas with a canonical schedule.",
+    "init_workspace": "Initialize the session's private workspace to defaults.",
+    "get_current_anchor": "Print the session's current anchor schedule.",
+    "set_current_anchor": "Set (or clear) the session's current anchor schedule.",
     "get_pool_tag": "Print a private idea's pool tag.",
     "set_pool_tag": "Set a private idea's pool tag (adding it to the list if needed).",
     "hide_private_idea": "Prepend '.' to a private idea's pool tag.",
@@ -247,6 +250,16 @@ def _build_parser():
         sp = add(_name)
         sp.add_argument("n", nargs="?", type=int,
                         help="list only the first up-to-N ideas")
+
+    sp = add("init_workspace")
+    sp.add_argument("--force", action="store_true",
+                    help="reinitialize even if workspace state already exists")
+
+    add("get_current_anchor")
+
+    sp = add("set_current_anchor")
+    sp.add_argument("schedule", nargs="?",
+                    help="schedule ID, or 'none' to clear (default: status)")
 
     sp = add("get_pool_tag")
     sp.add_argument("idea", help="idea ID")
@@ -436,6 +449,9 @@ _DISPATCH = {
     "list_private_ideas": tools.cmd_list_private_ideas,
     "list_private_ideas_todo": tools.cmd_list_private_ideas_todo,
     "list_private_ideas_done": tools.cmd_list_private_ideas_done,
+    "init_workspace": tools.cmd_init_workspace,
+    "get_current_anchor": tools.cmd_get_current_anchor,
+    "set_current_anchor": tools.cmd_set_current_anchor,
     "get_pool_tag": tools.cmd_get_pool_tag,
     "set_pool_tag": tools.cmd_set_pool_tag,
     "hide_private_idea": tools.cmd_hide_private_idea,

@@ -113,34 +113,6 @@ def _print_current_idea_details(catalog, cis):
         print("  Current idea's canonical schedule: " + canon + " (missing!)")
 
 
-INCONSISTENT_WARNING = """\
-AGENTS: If this is the first time editing this file this session,
-this means the file was edited without correct harness tracking.
-DO NOT PROCEED, unless you have been advised otherwise.
-Likely causes include user action, git checkouts / merges,
-or concurrent/interrupted agent sessions."""
-
-_SUBAGENT_NO_WORKSPACE = """\
-AGENTS: the current session is a sub-agent session,
-but was not initialized with a schedule for you to edit.
-DO NOT PROCEED and report back to the main agent,
-unless you have been advised to do otherwise."""
-
-
-def _print_no_workspace_advice(session):
-    if session.depth != 0:
-        print(_SUBAGENT_NO_WORKSPACE)
-    elif session.is_self_closed():
-        print("The current session is closed. Start a new one with")
-        print("  dh_hl new_successor_session")
-    else:
-        print("To start editing a C++ schedule, consider one of")
-        print("  dh_hl seed_schedule_short_id")
-        print("to get the ID of a schedule to start editing, followed by")
-        print("  dh_hl restore_schedule {schedule ID}")
-        print("to initialize the workspace")
-
-
 # ---------------------------------------------------------------------------
 # status
 # ---------------------------------------------------------------------------
@@ -155,23 +127,23 @@ def cmd_status(args):
     print("Session: " + session.full_id)
     print("Parent session: " + (session.parent_id or "(none)"))
     print("Delisted: " + ("yes" if session.delisted else "no"))
-    print("Seed idea: " + session.seed_idea_id)
-    print("Output schedule: " + (session.output_schedule_id or "(none)"))
+    print("Session: " + ("closed" if catalog.session_is_closed(session)
+                         else "open"))
 
     cis = ws.current_idea_state
     print("Current idea state: " + _current_idea_description(cis))
     _print_current_idea_details(catalog, cis)
 
-    if not ws.has_workspace():
-        print("Status: no workspace C++ file")
-        _print_no_workspace_advice(session)
+    missing = ws.missing_workspace_files()
+    if missing:
+        print("Status: missing workspace " + " and ".join(missing))
+        print("AGENTS: run `dh_hl init_workspace` to get files to edit")
         return
 
     h = ws.workspace_hash
     matching = [n for n in catalog.schedules.values() if n.hash == h]
     if not matching:
         print("Status: workspace inconsistent, unknown schedule")
-        print(INCONSISTENT_WARNING)
         return
 
     node = ctx.unambiguous_schedule()
@@ -181,7 +153,6 @@ def cmd_status(args):
         return
 
     print("Status: workspace inconsistent, unexpected current idea state")
-    print(INCONSISTENT_WARNING)
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +248,7 @@ def cmd_new_root(args):
     ctx = Context.for_session(args, session_lock=True)
     catalog = ctx.catalog
     ws = ctx.workspace
-    ws.require_workspace()
+    ws.require_workspace_files()
     ws.ensure_private_dir()
     h = ws.workspace_hash
     same_hash = [n for n in catalog.schedules.values() if n.hash == h]
@@ -973,6 +944,98 @@ def cmd_rename_pool_tag(args):
     n = ctx.workspace.rename_pool_tag(args.pool_tag_before, args.pool_tag_after)
     ctx.finish()
     print("{} idea nodes updated".format(n))
+
+
+# ---- init_workspace + current anchor --------------------------------------
+
+_INIT_WS_ALREADY_DEPTH0 = """\
+AGENTS: the session seems to already be initialized,
+as if in use by (or previously used by) another agent.
+Things will fail badly if this session is used concurrently.
+If you can speak with the user interactively, ask for a decision:
+
+1. the user finds the conversation that was for this session
+and asks that agent to close the session (preferred)
+
+2. inspect the current session workspace and try to pick up
+where the previous agent left off.
+
+3. restart the session from scratch (re-run this tool with --force)
+
+If you can't ask (e.g. automated workflow),
+don't continue, unless other prompting provides an expected fix."""
+
+_INIT_WS_ALREADY_SUB = """\
+AGENTS: the session seems to already be initialized,
+as if it's in use by (or previously used by) another agent.
+STOP IMMEDIATELY and report to the main agent or user what happened.
+You can do so normally, not via `dh_hl close_session`."""
+
+
+def cmd_init_workspace(args):
+    ctx = Context.for_session(args, session_lock=True)
+    catalog = ctx.catalog
+    session = ctx.session
+    ws = ctx.workspace
+    ws.ensure_private_dir()
+    allow = getattr(args, "force", False)
+
+    # As if `restore_idea` on the 0th seed idea: workspace from the seed idea's
+    # parent schedule, current idea state = that seed idea (idea.md).
+    seed0 = catalog.get_idea(session.seed_idea_ids[0])
+    parent = seed0.parent_schedule()
+    # current_idea_state is written directly (bypassing CurrentIdeaState.set_idea)
+    # so the --force flag threads through as write_allowed(allow=...).
+    idea_state_text = "dendritic_hl_idea({})\n".format(seed0.full_id)
+    # Private idea list: every seed idea at pool tag "default".
+    private_ideas = {sid: "default" for sid in session.seed_idea_ids}
+
+    try:
+        safety.write_allowed(ws.workspace_path, parent.source, allow=allow)
+        safety.write_allowed(ws.params_path, parent.params_text, allow=allow)
+        safety.write_allowed(ws.current_idea_state.path, idea_state_text,
+                             allow=allow)
+        ws.set_current_anchor(session.default_anchor_schedule_id, allow=allow)
+        safety.write_allowed(ws.private_ideas_path,
+                             json.dumps(private_ideas, indent=1) + "\n",
+                             allow=allow)
+        safety.write_allowed(ws.private_benchmark_sets_path, "{}\n", allow=allow)
+    except FileExistsError:
+        # Some workspace state already exists and --force was not given.
+        print(_INIT_WS_ALREADY_DEPTH0 if session.depth == 0
+              else _INIT_WS_ALREADY_SUB)
+        raise DhHlError(
+            "session workspace already initialized (see message above; "
+            "re-run with --force to reinitialize)")
+
+    ctx.finish()
+    print("Initialized workspace for session " + session.full_id)
+    print("Current idea: " + catalog.format_idea_id(seed0))
+
+
+def cmd_get_current_anchor(args):
+    ctx = Context.for_session(args, session_lock=True)
+    anchor = ctx.workspace.current_anchor_schedule_id
+    if anchor is None:
+        print("none")
+    else:
+        print(ctx.catalog.format_schedule_id(ctx.catalog.get_schedule(anchor)))
+
+
+def cmd_set_current_anchor(args):
+    ctx = Context.for_session(args, session_lock=True)
+    ws = ctx.workspace
+    ws.ensure_private_dir()
+    spec = getattr(args, "schedule", None)
+    if spec == "none":
+        ws.set_current_anchor(None)
+        ctx.finish()
+        print("Cleared current anchor")
+        return
+    node = ctx.resolve_schedule_arg(spec)
+    ws.set_current_anchor(node.full_id)
+    ctx.finish()
+    print("Set current anchor to " + ctx.catalog.format_schedule_id(node))
 
 
 # ---- listing --------------------------------------------------------------

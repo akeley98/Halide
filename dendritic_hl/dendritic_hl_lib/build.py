@@ -297,19 +297,20 @@ def _resolve_other(ctx, spec, target):
 
 
 def _resolve_anchor(ctx, spec):
-    """Resolve --anchor: `none` (disabled), `auto`/`always` (session private
-    anchor -- not yet implemented), or an explicit ID."""
+    """Resolve --anchor: `none` (disabled); `auto` (the session's current anchor,
+    or disabled if none); `always` (the current anchor, error if none); or an
+    explicit schedule ID."""
     if spec == "none":
         return None
     if spec in ("auto", "always"):
-        # FUTURE: session private anchor state does not exist yet (idea.md
-        # Init-Build Tool).  `auto` therefore always takes the "no anchor"
-        # branch; `always` (which errors when there is no anchor) is unreachable
-        # in a valid state.  Untested todo asserts guard the not-yet-built paths.
-        if spec == "always":
-            assert False, "TODO: --anchor always needs session anchor state"
-        # assert False, "TODO: --anchor auto with an existing session anchor"
-        return None
+        anchor_id = ctx.workspace.current_anchor_schedule_id
+        if anchor_id is None:
+            if spec == "always":
+                raise DhHlError(
+                    "--anchor always: the current session has no current anchor "
+                    "(set one with `dh_hl set_current_anchor`)")
+            return None
+        return ctx.catalog.get_schedule(anchor_id)
     return ctx.catalog.resolve_schedule(spec)
 
 
