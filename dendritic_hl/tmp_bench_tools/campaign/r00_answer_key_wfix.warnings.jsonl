@@ -1,0 +1,1 @@
+{"pipeline": "dh_hl_gen", "warnings": [{"rule_id": 10, "rule": "many_scalar_stores", "canonical_id": 7, "func": "hist_rows", "message": "A significant fraction of the stores to hist_rows are scalar: 1239M out of 1290M. There may be an update definition that was not vectorized."}]}

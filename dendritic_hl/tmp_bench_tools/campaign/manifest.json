@@ -1,0 +1,134 @@
+{
+ "campaign": "hist_demo",
+ "machine": "Davids-MacBook-Pro",
+ "records": [
+  {
+   "label": "answer_key",
+   "round": 0,
+   "hostname": "Mac.lan",
+   "cpu_count": 11,
+   "profiler_json": "r00_answer_key.profiler.json",
+   "warnings_json": "r00_answer_key.warnings.jsonl"
+  },
+  {
+   "label": "opus_no_peek",
+   "round": 0,
+   "hostname": "Mac.lan",
+   "cpu_count": 11,
+   "profiler_json": "r00_opus_no_peek.profiler.json",
+   "warnings_json": "r00_opus_no_peek.warnings.jsonl"
+  },
+  {
+   "label": "opus_hist_unroll",
+   "round": 0,
+   "hostname": "Mac.lan",
+   "cpu_count": 11,
+   "profiler_json": "r00_opus_hist_unroll.profiler.json",
+   "warnings_json": "r00_opus_hist_unroll.warnings.jsonl"
+  },
+  {
+   "label": "answer_key_wfix",
+   "round": 0,
+   "hostname": "Mac.lan",
+   "cpu_count": 11,
+   "profiler_json": "r00_answer_key_wfix.profiler.json",
+   "warnings_json": "r00_answer_key_wfix.warnings.jsonl"
+  },
+  {
+   "label": "opus_no_peek",
+   "round": 1,
+   "hostname": "Mac.lan",
+   "cpu_count": 11,
+   "profiler_json": "r01_opus_no_peek.profiler.json",
+   "warnings_json": "r01_opus_no_peek.warnings.jsonl"
+  },
+  {
+   "label": "opus_hist_unroll",
+   "round": 1,
+   "hostname": "Mac.lan",
+   "cpu_count": 11,
+   "profiler_json": "r01_opus_hist_unroll.profiler.json",
+   "warnings_json": "r01_opus_hist_unroll.warnings.jsonl"
+  },
+  {
+   "label": "answer_key_wfix",
+   "round": 1,
+   "hostname": "Mac.lan",
+   "cpu_count": 11,
+   "profiler_json": "r01_answer_key_wfix.profiler.json",
+   "warnings_json": "r01_answer_key_wfix.warnings.jsonl"
+  },
+  {
+   "label": "answer_key",
+   "round": 1,
+   "hostname": "Mac.lan",
+   "cpu_count": 11,
+   "profiler_json": "r01_answer_key.profiler.json",
+   "warnings_json": "r01_answer_key.warnings.jsonl"
+  },
+  {
+   "label": "opus_no_peek",
+   "round": 2,
+   "hostname": "Mac.lan",
+   "cpu_count": 11,
+   "profiler_json": "r02_opus_no_peek.profiler.json",
+   "warnings_json": "r02_opus_no_peek.warnings.jsonl"
+  },
+  {
+   "label": "answer_key",
+   "round": 2,
+   "hostname": "Mac.lan",
+   "cpu_count": 11,
+   "profiler_json": "r02_answer_key.profiler.json",
+   "warnings_json": "r02_answer_key.warnings.jsonl"
+  },
+  {
+   "label": "opus_hist_unroll",
+   "round": 2,
+   "hostname": "Mac.lan",
+   "cpu_count": 11,
+   "profiler_json": "r02_opus_hist_unroll.profiler.json",
+   "warnings_json": "r02_opus_hist_unroll.warnings.jsonl"
+  },
+  {
+   "label": "answer_key_wfix",
+   "round": 2,
+   "hostname": "Mac.lan",
+   "cpu_count": 11,
+   "profiler_json": "r02_answer_key_wfix.profiler.json",
+   "warnings_json": "r02_answer_key_wfix.warnings.jsonl"
+  },
+  {
+   "label": "opus_hist_unroll",
+   "round": 3,
+   "hostname": "Mac.lan",
+   "cpu_count": 11,
+   "profiler_json": "r03_opus_hist_unroll.profiler.json",
+   "warnings_json": "r03_opus_hist_unroll.warnings.jsonl"
+  },
+  {
+   "label": "opus_no_peek",
+   "round": 3,
+   "hostname": "Mac.lan",
+   "cpu_count": 11,
+   "profiler_json": "r03_opus_no_peek.profiler.json",
+   "warnings_json": "r03_opus_no_peek.warnings.jsonl"
+  },
+  {
+   "label": "answer_key_wfix",
+   "round": 3,
+   "hostname": "Mac.lan",
+   "cpu_count": 11,
+   "profiler_json": "r03_answer_key_wfix.profiler.json",
+   "warnings_json": "r03_answer_key_wfix.warnings.jsonl"
+  },
+  {
+   "label": "answer_key",
+   "round": 3,
+   "hostname": "Mac.lan",
+   "cpu_count": 11,
+   "profiler_json": "r03_answer_key.profiler.json",
+   "warnings_json": "r03_answer_key.warnings.jsonl"
+  }
+ ]
+}
