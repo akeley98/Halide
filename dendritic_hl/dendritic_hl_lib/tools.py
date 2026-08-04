@@ -9,14 +9,16 @@ import json
 import os
 import sys
 
+from . import cost
 from . import ids
 from . import locks
+from . import profiler_stats
 from . import profiler_warnings
 from . import prompts
 from . import safety
 from .catalog import (Catalog, COMMENTARY_REVIEWS, DEFAULT_PARAMETERS,
-                      IDEA_SIDE_LINK_TYPES, dump_parameters,
-                      load_parameters_text)
+                      EXPECTED_PROFILER_VERSION, IDEA_SIDE_LINK_TYPES,
+                      dump_parameters, load_parameters_text)
 from .context import (Context, SessionWorkspace, resolve_target,
                       _validate_catalog_dir, read_text_or_stdin)
 from .errors import DhHlError
@@ -723,6 +725,143 @@ def cmd_view_benchmark_stdout(args):
     sys.stdout.write(bench.data.get("stdout", ""))
 
 
+# ---------------------------------------------------------------------------
+# cost query tools (json_ranking_cost / json_compare_cost)
+# ---------------------------------------------------------------------------
+
+def _resolve_anchor_arg(ctx, spec):
+    """Map the `--anchor` argument to an anchor schedule full ID or None
+    (idea.md "JSON Ranking Cost Query Tool").  `none` -> no anchor; `always` ->
+    the session's current anchor (error if unset); `auto` (default) -> the
+    current anchor if set else no anchor; anything else -> an explicit
+    schedule ID."""
+    spec = spec or "auto"
+    if spec == "none":
+        return None
+    current = ctx.workspace.current_anchor_schedule_id
+    if spec == "always":
+        if current is None:
+            raise DhHlError(
+                "--anchor always: the session has no current anchor schedule")
+        return current
+    if spec == "auto":
+        return current
+    return ctx.catalog.resolve_schedule(spec).full_id
+
+
+def _confidence_arg(args):
+    """The `--confidence` value (fraction), defaulting to cost.DEFAULT_CONFIDENCE
+    and validated to 0 < ci < 1 (idea.md)."""
+    ci = getattr(args, "confidence", None)
+    if ci is None:
+        return cost.DEFAULT_CONFIDENCE
+    if not 0.0 < ci < 1.0:
+        raise DhHlError("--confidence must satisfy 0 < ci < 1")
+    return ci
+
+
+def _bootstrap_arg(args):
+    """The `--bootstrap` resample count, defaulting to cost.DEFAULT_BOOTSTRAP."""
+    b = getattr(args, "bootstrap", None)
+    if b is None:
+        return cost.DEFAULT_BOOTSTRAP
+    if b < 2:
+        raise DhHlError("--bootstrap must be at least 2")
+    return b
+
+
+def _cost_data(ctx):
+    return cost.CostData.from_private_sets(
+        ctx.workspace.read_private_benchmark_sets())
+
+
+def cmd_json_ranking_cost(args):
+    # Reads the private benchmark set list (private workspace) -> session lock.
+    ctx = Context.for_session(args, session_lock=True)
+    node = ctx.resolve_schedule_arg(args.schedule)
+    anchor_id = _resolve_anchor_arg(ctx, getattr(args, "anchor", None))
+    r = _cost_data(ctx).ranking_cost(node.full_id, anchor_id)
+    raw = r["raw_costs"]
+    out = {
+        "batch_count": r["batch_count"],
+        "cost": r["cost"],
+        "anchor": r["anchor"],
+        "representative": r["representative"],
+        # One entry per generator parameters object (null where unbenchmarked).
+        "parameters_raw_cost": [raw.get(i) for i in range(len(node.parameters))],
+    }
+    print(json.dumps(out, indent=1))
+
+
+def cmd_json_compare_cost(args):
+    ctx = Context.for_session(args, session_lock=True)
+    lhs = ctx.resolve_schedule_arg(getattr(args, "lhs", None))
+    rhs_spec = getattr(args, "rhs", None)
+    if rhs_spec is not None:
+        rhs = ctx.catalog.resolve_schedule(rhs_spec)
+    else:
+        # Default RHS: the parent schedule of the LHS's parent idea (idea.md).
+        if lhs.is_root():
+            raise DhHlError(
+                "LHS is a root schedule (no parent idea) so the default RHS is "
+                "undefined; pass an explicit RHS schedule ID")
+        rhs = lhs.parent_idea().parent_schedule()
+    r = _cost_data(ctx).compare(lhs.full_id, rhs.full_id,
+                                _confidence_arg(args), _bootstrap_arg(args))
+    print(json.dumps(r, indent=1))
+
+
+def _reachable_benchmarks_by_param(catalog, private_sets, sched_id):
+    """``{parameters index: [Benchmark, ...]}`` for benchmarks of *sched_id*
+    reachable from the private benchmark set list (idea.md json_profiler_stats).
+    Version-mismatched sets are skipped, matching the cost core."""
+    from collections import defaultdict
+    out = defaultdict(list)
+    for cache in private_sets.values():
+        if cache.get("profiler_version") != EXPECTED_PROFILER_VERSION:
+            continue
+        cells = cache.get("schedules", {}).get(sched_id)
+        if not cells:
+            continue
+        for pidx, cell in enumerate(cells):
+            for bid in cell.get("id", []):
+                out[pidx].append(catalog.resolve_benchmark(bid))
+    return out
+
+
+def cmd_json_profiler_stats(args):
+    ctx = Context.for_session(args, session_lock=True)
+    node = ctx.resolve_schedule_arg(args.schedule)
+    reachable = _reachable_benchmarks_by_param(
+        ctx.catalog, ctx.workspace.read_private_benchmark_sets(), node.full_id)
+    if not reachable:
+        raise DhHlError(
+            "no benchmarks reachable from the private benchmark set list for "
+            "this schedule")
+
+    pidx = getattr(args, "parameters", None)
+    if pidx is None:
+        # Mandatory only when the reachable benchmarks span >1 params object.
+        if len(reachable) > 1:
+            raise DhHlError(
+                "--parameters is required: reachable benchmarks span {} "
+                "parameters objects ({})".format(
+                    len(reachable), sorted(reachable)))
+        pidx = next(iter(reachable))
+    elif pidx not in reachable:
+        raise DhHlError(
+            "no reachable benchmarks for --parameters {}".format(pidx))
+
+    hottest = getattr(args, "hottest", None)
+    if hottest is not None and hottest < 1:
+        raise DhHlError("--hottest must be >= 1")
+
+    out = profiler_stats.aggregate(
+        [b.profiler for b in reachable[pidx]],
+        getattr(args, "p", None), getattr(args, "f", None), hottest=hottest)
+    print(json.dumps(out, indent=1))
+
+
 def cmd_json_idea_info(args):
     ctx = Context.for_catalog(args)
     idea = ctx.catalog.resolve_idea(args.idea)
@@ -1015,7 +1154,9 @@ def cmd_join_session(args):
     dry = bool(getattr(args, "dry_run", False))
     prefix = getattr(args, "pool_prefix", "") or ""
 
-    existing = ws.read_private_ideas()  # snapshot: "already in the list" pre-join
+    # Snapshot (copy): read_private_ideas is now the live dict, and the
+    # set_pool_tag calls below mutate it; we need the pre-join membership.
+    existing = dict(ws.read_private_ideas())
     joined_tags = joined.output_schedule_pool_tags()
 
     for bs_id in joined.output_benchmark_set_ids:
@@ -1120,6 +1261,43 @@ def cmd_rename_pool_tag(args):
     print("{} idea nodes updated".format(n))
 
 
+# ---- session private benchmark set list -----------------------------------
+
+def cmd_add_private_benchmark_set(args):
+    ctx = Context.for_session(args, session_lock=True)
+    ws = ctx.workspace
+    added = []
+    for spec in (getattr(args, "benchmark_sets", None) or []):
+        bs = ctx.catalog.resolve_benchmark_set(spec)  # must exist in the catalog
+        ws.add_private_benchmark_set(bs.full_id, ctx.catalog)
+        added.append(bs.full_id)
+    ctx.finish()
+    for sid in added:
+        print("Added benchmark set " + sid)
+
+
+def cmd_remove_private_benchmark_set(args):
+    ctx = Context.for_session(args, session_lock=True)
+    ws = ctx.workspace
+    removed = []
+    for spec in (getattr(args, "benchmark_sets", None) or []):
+        # Benchmark sets have no short IDs; match the given full ID against the
+        # private list directly (tolerating an entry no longer in the catalog).
+        if spec in ws.read_private_benchmark_sets():
+            ws.remove_private_benchmark_set(spec)
+            removed.append(spec)
+    ctx.finish()
+    for sid in removed:
+        print("Removed benchmark set " + sid)
+
+
+def cmd_list_private_benchmark_sets(args):
+    # Reads the private workspace list -> session lock (idea.md).
+    ctx = Context.for_session(args, session_lock=True)
+    for sid in sorted(ctx.workspace.read_private_benchmark_sets()):
+        print(sid)
+
+
 # ---- init_workspace + current anchor --------------------------------------
 
 _INIT_WS_ALREADY_DEPTH0 = """\
@@ -1164,12 +1342,17 @@ def cmd_init_workspace(args):
     # Private idea list: every seed idea at pool tag "default".
     private_ideas = {sid: "default" for sid in session.seed_idea_ids}
 
+    anchor = session.default_anchor_schedule_id
+    anchor_text = (anchor + "\n") if anchor else ""
+    # init_workspace is a pure initializer: it writes each workspace file
+    # directly with the --force `allow` flag (so an existing file raises
+    # FileExistsError here, caught below), bypassing the lazy state objects.
     try:
         safety.write_allowed(ws.workspace_path, parent.source, allow=allow)
         safety.write_allowed(ws.params_path, parent.params_text, allow=allow)
         safety.write_allowed(ws.current_idea_state.path, idea_state_text,
                              allow=allow)
-        ws.set_current_anchor(session.default_anchor_schedule_id, allow=allow)
+        safety.write_allowed(ws.current_anchor_path, anchor_text, allow=allow)
         safety.write_allowed(ws.private_ideas_path,
                              json.dumps(private_ideas, indent=1) + "\n",
                              allow=allow)

@@ -128,6 +128,48 @@ def make_catalog_session(cat_dir, source=DUMMY_SOURCE, idea_name="seed"):
         locks._reset_for_tests()
 
 
+def make_profiler_obj(wall_time_min, *, profiler_version=1, name="p", funcs=None,
+                      **extra):
+    """A minimal profiler pipeline object (idea.md "Benchmark Sub-object State")
+    for synthetic benchmarks: enough for the cost core (`wall_time_min`,
+    `profiler_version`), extensible with `funcs=` / `**extra` for the
+    profiler-stats tests."""
+    obj = {"profiler_version": profiler_version, "name": name,
+           "wall_time_min": wall_time_min, "funcs": funcs or []}
+    obj.update(extra)
+    return obj
+
+
+def add_synthetic_benchmark_set(cat, specs, *, hostname="host", cpu_count=8,
+                                profiler_version=1):
+    """Create real benchmark sub-objects + a benchmark set from *specs*, with NO
+    Halide/profiler run -- the deterministic backbone of the cost tests
+    (impl.md "Cost Model Core" / idea.md testing notes).
+
+    *specs* maps ``schedule full id -> [[batch sample, ...] per params index]``.
+    A batch sample is either a ``wall_time_min`` number (wrapped into a minimal
+    profiler object) or a full profiler dict.  Returns the new benchmark set's
+    full ID.  The caller must hold the catalog lock (e.g. via `open_catalog`)."""
+    data = {}
+    for sched_id, per_pidx in specs.items():
+        node = cat.get_schedule(sched_id)
+        cells = []
+        for batch_samples in per_pidx:  # one list per params index
+            row = []
+            for sample in batch_samples:
+                prof = (sample if isinstance(sample, dict)
+                        else make_profiler_obj(
+                            sample, profiler_version=profiler_version))
+                bench = node.add_benchmark(hostname, {
+                    "hostname": hostname, "cpu_count": cpu_count,
+                    "parameters": {}, "profiler": prof, "warnings": [],
+                    "stdout": ""})
+                row.append(bench.full_id)
+            cells.append(row)
+        data[sched_id] = cells
+    return cat.create_benchmark_set(data).full_id
+
+
 class Sess:
     """Handle to a test catalog+session for driving cmd_* in-process."""
 

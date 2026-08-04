@@ -124,6 +124,9 @@ COMMAND_HELP = {
     "set_pool_tag": "Set a private idea's pool tag (adding it to the list if needed).",
     "hide_private_idea": "Prepend '.' to a private idea's pool tag.",
     "rename_pool_tag": "Retag every private idea with a given pool tag.",
+    "add_private_benchmark_set": "Add benchmark set(s) to the session's private list.",
+    "remove_private_benchmark_set": "Remove benchmark set(s) from the private list.",
+    "list_private_benchmark_sets": "List the session's private benchmark set IDs.",
     "list_output_schedules": "List the current session's output schedules.",
     "list_sibling_schedules": "List schedules sharing a parent idea with the given schedule.",
     "list_child_schedules": "List the child schedules of an idea node.",
@@ -136,6 +139,9 @@ COMMAND_HELP = {
     "json_idea_info": "Dump an idea node's full state as JSON.",
     "json_benchmark_info": "Dump a benchmark sub-object as JSON.",
     "json_benchmark_set_info": "Dump a benchmark set as JSON.",
+    "json_ranking_cost": "Report a schedule's cost (with/without an anchor) as JSON.",
+    "json_compare_cost": "Head-to-head 2-way cost comparison of two schedules as JSON.",
+    "json_profiler_stats": "Aggregate profiler statistics for a schedule as JSON.",
     "view_benchmark_stdout": "Print the stdout captured for a benchmark.",
     "add_warning_toggle": "Add a WarningToggle (block a warning or cancel another) to a schedule.",
     "debug_warning_toggle": "List the WarningToggles in effect for a schedule node.",
@@ -282,6 +288,14 @@ def _build_parser():
     sp.add_argument("pool_tag_before", help="existing pool tag")
     sp.add_argument("pool_tag_after", help="new pool tag")
 
+    sp = add("add_private_benchmark_set")
+    sp.add_argument("benchmark_sets", nargs="*", help="benchmark set full IDs")
+
+    sp = add("remove_private_benchmark_set")
+    sp.add_argument("benchmark_sets", nargs="*", help="benchmark set full IDs")
+
+    add("list_private_benchmark_sets")
+
     add("list_output_schedules")
 
     sp = add("list_sibling_schedules")
@@ -319,6 +333,31 @@ def _build_parser():
 
     sp = add("json_benchmark_set_info")
     sp.add_argument("benchmark_set", help="benchmark set ID")
+
+    sp = add("json_ranking_cost")
+    sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
+    sp.add_argument("--anchor", default="auto",
+                    help="anchor schedule ID, 'auto' (default), 'always', or 'none'")
+
+    sp = add("json_compare_cost")
+    sp.add_argument("lhs", nargs="?", help="LHS schedule ID (default: status)")
+    sp.add_argument("rhs", nargs="?",
+                    help="RHS schedule ID (default: parent of LHS's parent idea)")
+    sp.add_argument("--confidence", type=float, metavar="CI",
+                    help="confidence for the CI, 0 < ci < 1 (default 0.95)")
+    sp.add_argument("--bootstrap", type=int, metavar="B",
+                    help="bootstrap resample count (default: shared frontier B)")
+
+    sp = add("json_profiler_stats")
+    sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
+    sp.add_argument("-f", action="append", metavar="NAME",
+                    help="include a per-function statistic (repeatable)")
+    sp.add_argument("-p", action="append", metavar="NAME",
+                    help="include a pipeline-global statistic (repeatable)")
+    sp.add_argument("--parameters", type=int, metavar="N",
+                    help="restrict to the N-th generator parameters object")
+    sp.add_argument("--hottest", type=int, metavar="N",
+                    help="output only the N hottest functions")
 
     sp = add("view_benchmark_stdout")
     sp.add_argument("benchmark", help="benchmark ID")
@@ -484,6 +523,9 @@ _DISPATCH = {
     "set_pool_tag": tools.cmd_set_pool_tag,
     "hide_private_idea": tools.cmd_hide_private_idea,
     "rename_pool_tag": tools.cmd_rename_pool_tag,
+    "add_private_benchmark_set": tools.cmd_add_private_benchmark_set,
+    "remove_private_benchmark_set": tools.cmd_remove_private_benchmark_set,
+    "list_private_benchmark_sets": tools.cmd_list_private_benchmark_sets,
     "list_output_schedules": tools.cmd_list_output_schedules,
     "list_sibling_schedules": tools.cmd_list_sibling_schedules,
     "list_child_schedules": tools.cmd_list_child_schedules,
@@ -496,6 +538,9 @@ _DISPATCH = {
     "json_idea_info": tools.cmd_json_idea_info,
     "json_benchmark_info": tools.cmd_json_benchmark_info,
     "json_benchmark_set_info": tools.cmd_json_benchmark_set_info,
+    "json_ranking_cost": tools.cmd_json_ranking_cost,
+    "json_compare_cost": tools.cmd_json_compare_cost,
+    "json_profiler_stats": tools.cmd_json_profiler_stats,
     "view_benchmark_stdout": tools.cmd_view_benchmark_stdout,
     "add_warning_toggle": tools.cmd_add_warning_toggle,
     "debug_warning_toggle": tools.cmd_debug_warning_toggle,

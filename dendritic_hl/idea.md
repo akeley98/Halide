@@ -587,16 +587,6 @@ Ties are broken arbitrarily.
 
 ### 2-way Cost Comparison
 
-IMPL TASK: make this more precise, but add no more than a handful
-of lines of text (basically something a little better than my naive
-"confidence interval" alone). Put the details in a new `impl.md` section.
-
-IMPL TASK: strictly optional.
-Add a new CLI switch for setting `B`, if you perceive this to have a profitable cost:benefit ratio.
-If done, document the new CLI switch in a similar style and brevity as `--confidence`.
-However, use the same `B` by default for both the frontier and the `json_compare_cost` tools
-as the documentation describes the frontier in terms of that tool.
-
 When comparing two schedules head-to-head
 (e.g. to answer "is there a performance regression?"),
 the answer will be based only on batches that included the two schedules.
@@ -604,8 +594,9 @@ the answer will be based only on batches that included the two schedules.
 Select the representative for each schedule.
 Then reduce each batch to a single sample:
 the difference (schedule A raw cost - schedule B raw cost).
-Compute the X% confidence interval (CI) of all such samples
-(configurable confidence percentage, defaults to 95%).
+The samples are *paired* by batch, which cancels common-mode drift.
+Compute the X% confidence interval (CI) of the *median* of these samples,
+by percentile bootstrap (`B` resamples; configurable confidence, default 95%).
 
 If the lower and upper bounds of the CI are both positive,
 confidently conclude schedule A has higher cost.
@@ -613,6 +604,7 @@ If the lower and upper bounds of the CI are both negative,
 confidently conclude schedule B has higher cost.
 
 If neither is the case, then the comparison is inconclusive.
+See impl.md "Cost Model Core" for the precise bootstrap procedure.
 
 
 ### Cost Ranking With Anchor Schedule
@@ -1939,8 +1931,6 @@ Prints `{count} idea nodes updated`.
     dh_hl add_private_benchmark_set -s ...
     dh_hl remove_private_benchmark_set -s ...
 
-IMPL TASK: add this.
-
 Add or remove benchmark sets from the current session's private
 benchmark set list.
 They are passed as a list of benchmark set IDs (`...`),
@@ -1952,8 +1942,6 @@ This is currently not so useful, as benchmark sets are not really discoverable.
 ### List Private Benchmark Sets Tool
 
     dh_hl list_private_benchmark_sets -s ...
-
-IMPL TASK: add this.
 
 Print the full IDs of all benchmark sets in the current session's
 private benchmark set list.
@@ -2141,8 +2129,6 @@ this is load bearing for correctness, since it encodes more than a session full 
 
     dh_hl json_ranking_cost -s ... [schedule ID]
 
-IMPL TASK: add this.
-
 Report the cost for the given schedule, based on "Cost Ranking" methodology.
 This relies only on batches reachable from
 the current session's private benchmark set list,
@@ -2183,10 +2169,6 @@ depending on the optional `--anchor {schedule ID}` argument:
 
     dh_hl json_compare_cost [LHS schedule ID] [RHS schedule ID]
 
-IMPL TASK: add this
-
-IMPL TASK: test all LHS/RHS argument behavior.
-
 Do a head-to-head cost comparison between the LHS and RHS schedules,
 using the "2-way Cost Comparison" methodology.
 This relies only on batches reachable from
@@ -2204,13 +2186,19 @@ with an explicit `--other`, as the default parent won't suffice.
 The optional `--confidence {ci}` argument overrides the default
 confidence for the confidence interval; must have `0 < ci < 1`.
 
+The optional `--bootstrap {B}` argument overrides the number of bootstrap
+resamples used for the confidence interval; must be at least `2`.
+
 The output is a JSON object with key/value pairs on separate lines:
 
 * `batch_count`: number of batches found
 
-* `result`: string, "regression" if the LHS is worse,
-  "improvement" if the RHS is better,
+* `result`: string, "regression" if the LHS is confidently worse (higher cost)
+  than the RHS, "improvement" if the LHS is confidently better (lower cost),
   "unknown" if inconclusive.
+  (The RHS is the baseline: for the default RHS the LHS is the newer schedule,
+  and "improvement" means it beat its parent.  This is the direction the
+  `list_private_ideas` "obsoleted by" check relies on.)
 
 * `lhs_raw_cost`: number, median raw cost of LHS representative
 
@@ -2226,12 +2214,6 @@ The output is a JSON object with key/value pairs on separate lines:
 ### JSON Profiler Statistics Tool
 
     dh_hl json_profiler_stats [schedule ID]
-
-IMPL TASK: add this
-
-IMPL TASK: need to think about how to test this.
-Maybe an internal tool (not CLI exposed) that allows injecting
-fake benchmark objects?
 
 Aggregate profiler statistics for the referenced schedule,
 considering only benchmarks reachable from the private benchmark set list.

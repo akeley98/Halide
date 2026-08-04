@@ -10,7 +10,7 @@ import pytest
 
 from dendritic_hl_lib import ids, safety, tools
 from dendritic_hl_lib.errors import DhHlError
-from conftest import ns, open_catalog
+from conftest import ns, open_catalog, add_synthetic_benchmark_set
 
 
 def _out(run_tool, capsys, fn, args):
@@ -202,13 +202,15 @@ def _reset():
 
 def test_close_records_pool_tag_and_benchmark_sets(session, run_tool, tmp_path,
                                                    capsys):
-    # Seed a private benchmark set and retag the seed idea, then close.
+    # Seed a real private benchmark set and retag the seed idea, then close.
     cat = open_catalog(session.catalog_dir)
     try:
         from dendritic_hl_lib.context import SessionWorkspace
         ws = SessionWorkspace(cat.catalog_dir, session.session_id, catalog=cat)
-        ws.add_private_benchmark_set("Testhost_2026-01-01T000000_000000Z")
         seed = cat.get_session(session.session_id).seed_idea_id
+        dup = cat.get_idea(seed).canonical
+        set_id = add_synthetic_benchmark_set(cat, {dup: [[100, 101, 99]]})
+        ws.add_private_benchmark_set(set_id, cat)
         ws.set_pool_tag(seed, "chosen")
         cat.flush(); safety.commit()
     finally:
@@ -219,8 +221,7 @@ def test_close_records_pool_tag_and_benchmark_sets(session, run_tool, tmp_path,
     try:
         sess = cat.get_session(session.session_id)
         assert list(sess.output_schedule_pool_tags().values()) == ["chosen"]
-        assert sess.output_benchmark_set_ids == [
-            "Testhost_2026-01-01T000000_000000Z"]
+        assert sess.output_benchmark_set_ids == [set_id]
     finally:
         _reset()
 
@@ -289,11 +290,10 @@ def test_successor_requires_self_closed(session, run_tool, tmp_path):
 
 # ---- join_session ---------------------------------------------------------
 
-def _build_joined_session(session, pool="jpool",
-                          bench="Host_2026-01-01T000000_000000Z"):
+def _build_joined_session(session, pool="jpool"):
     """Out-of-band: a closed sub-session J whose single output is a fresh
-    schedule under a new seed idea, tagged *pool*, with one benchmark set.
-    Returns (J_full_id, output_parent_idea_full_id)."""
+    schedule under a new seed idea, tagged *pool*, with one real benchmark set.
+    Returns (J_full_id, output_parent_idea_full_id, benchmark_set_full_id)."""
     cat = open_catalog(session.catalog_dir)
     try:
         s = cat.get_session(session.session_id)
@@ -302,19 +302,20 @@ def _build_joined_session(session, pool="jpool",
         seed_i = cat.create_idea(major, "joinedseed", "joined\n")
         dup = cat.create_schedule("joined source\n", parent_idea=seed_i)
         seed_i.set_canonical(dup.full_id)
+        bench = add_synthetic_benchmark_set(cat, {dup.full_id: [[100, 101, 99]]})
         j = cat.create_session(seed_i, s, 1, prompt="joined prompt\n")
         j.set_outputs([(dup.full_id, pool)], [bench])
         cat.flush(); safety.commit()
-        return j.full_id, seed_i.full_id
+        return j.full_id, seed_i.full_id, bench
     finally:
         _reset()
 
 
 def test_join_session(session, run_tool, capsys):
-    j_id, joined_idea = _build_joined_session(session)
+    j_id, joined_idea, bench = _build_joined_session(session)
     out = _out(run_tool, capsys, tools.cmd_join_session,
                session.ns(joined=j_id, dry_run=False, pool_prefix=""))
-    assert "dh_hl: add benchmark set Host_2026-01-01T000000_000000Z" in out
+    assert "dh_hl: add benchmark set " + bench in out
     assert "dh_hl: add idea " + joined_idea in out
     assert "dh_hl: pool tag jpool" in out
     # The joined idea is now in S's private list at the joined pool tag.
@@ -323,7 +324,7 @@ def test_join_session(session, run_tool, capsys):
 
 
 def test_join_session_pool_prefix(session, run_tool, capsys):
-    j_id, joined_idea = _build_joined_session(session)
+    j_id, joined_idea, _bench = _build_joined_session(session)
     _out(run_tool, capsys, tools.cmd_join_session,
          session.ns(joined=j_id, dry_run=False, pool_prefix="px"))
     assert _out(run_tool, capsys, tools.cmd_get_pool_tag,
@@ -331,7 +332,7 @@ def test_join_session_pool_prefix(session, run_tool, capsys):
 
 
 def test_join_session_dry_run_mutates_nothing(session, run_tool, capsys):
-    j_id, joined_idea = _build_joined_session(session)
+    j_id, joined_idea, _bench = _build_joined_session(session)
     out = _out(run_tool, capsys, tools.cmd_join_session,
                session.ns(joined=j_id, dry_run=True, pool_prefix=""))
     assert "dh_hl: add idea " + joined_idea in out  # still reports
@@ -341,7 +342,7 @@ def test_join_session_dry_run_mutates_nothing(session, run_tool, capsys):
 
 
 def test_join_session_existing_tag_unchanged(session, run_tool, capsys):
-    j_id, joined_idea = _build_joined_session(session)
+    j_id, joined_idea, _bench = _build_joined_session(session)
     run_tool(tools.cmd_join_session,
              session.ns(joined=j_id, dry_run=False, pool_prefix=""))
     # Retag locally, then join again: the existing tag must win (unchanged).

@@ -301,15 +301,16 @@ Inside the `private/{session id}` sub-directory, there is
 * `private_ideas.json`, the session private idea list (a JSON object).
   The keys are the set of idea node full IDs comprising the list.
   The values are the pool tags (strings).  Unordered; the cost is not stored
-  here, it's derived when needed.  Owned by `SessionWorkspace` in `context.py`
-  (`read_private_ideas` / `set_pool_tag` / `get_pool_tag` / `hide_private_idea`
-  / `rename_pool_tag` / `remove_private_idea`).
+  here, it's derived when needed.  Modelled by the `PrivateIdeaList` object
+  (see "Private-workspace state objects" below); `SessionWorkspace` exposes it
+  through `read_private_ideas` / `set_pool_tag` / `get_pool_tag` /
+  `hide_private_idea` / `rename_pool_tag` / `remove_private_idea`.
 
 * `private_benchmark_sets.json`, the session private benchmark set list.
   The keys are the set of benchmark set full IDs comprising the list.
-  The values have cached benchmark info (documented below).
-  `SessionWorkspace.add_private_benchmark_set` is the
-  centralized add helper so that value-init can hook there.
+  The values have cached benchmark info (documented below).  Modelled by the
+  `PrivateBenchmarkSetList` object; `SessionWorkspace.add_private_benchmark_set`
+  / `remove_private_benchmark_set` are the exposed helpers.
 
 * `init_build.json`, left behind by `dh_hl init_build`: the catalog-relative
   `generator.cpp` + `generator_parameters.json` paths of each schedule node to
@@ -317,6 +318,24 @@ Inside the `private/{session id}` sub-directory, there is
   acquiring the catalog lock -- `init_build` is a hack to make that locking
   easier.  Its format is documented in `build.py` (`_INIT_BUILD_FILE`), not
   here, as it's not of general interest.
+
+**Private-workspace state objects.** The mutable private-workspace state follows
+the same lazy-load-once + dirty + flush discipline as the catalog nodes (see
+"Tool Internal Design"); there is deliberately **no** bare "read the file each
+call" code.  `PrivateIdeaList` and `PrivateBenchmarkSetList` (a shared
+`_PrivateMapState` base) and `CurrentAnchor` each lazy-load their file **once**
+into memory (`_UNLOADED` sentinel), mutate in memory, and register on the catalog
+dirty set (`catalog._mark_dirty`) so `catalog.flush()` writes them **once** —
+exactly like `CurrentIdeaState`.  `SessionWorkspace` owns one of each (lazily
+created) and its `read_*` / pool-tag / benchmark-set methods are thin
+delegations; `read_private_ideas` / `read_private_benchmark_sets` return the
+*live* in-memory dict (read-only for callers; `join_session` snapshots with
+`dict()` before mutating).  This is what makes a looped mutation correct — e.g.
+`join_session` adding several benchmark sets, or `new_sub_session` setting
+several pool tags, accumulate in the one in-memory map and flush together
+(the previous re-read-per-call code persisted only the last write).  `init_workspace`
+is the exception: as a pure initializer it writes every file directly with its
+`--force` `allow` flag (immediate `O_EXCL` refuse), bypassing these objects.
 
 Any command that needs `private/{session id}` creates the *directory* lazily
 (`SessionWorkspace.ensure_private_dir`; the `session.lock` and `bin/` likewise).
@@ -329,8 +348,6 @@ git-tracked `session/` state after a git checkout.
 
 ### Private Benchmark Sets on Disk
 
-IMPL TASK: update `add_private_benchmark_set` to add this information.
-
 Each value stored in the `private_benchmark_sets.json` object includes
 key/value pairs:
 
@@ -340,17 +357,26 @@ key/value pairs:
 
 * `profiler_version`: number, `profiler_version` of each referenced benchmark.
 
-* `schedules`: object, indexed by `[schedule id][parameters index]`.
-  This gives a list of objects `{"wall_time_min": [...], "id": [...]}`,
-  each list being of length batch-count and giving the per-benchmark
-  `wall_time_min` or benchmark full ID, respectively.
+* `schedules`: object, keyed by schedule full ID; each value is a list indexed
+  by parameters index, whose entries are objects `{"wall_time_min": [...],
+  "id": [...]}`.  Both lists are of length batch-count and give the per-batch
+  `wall_time_min` and benchmark full ID, respectively.
 
-The `hostname`, `cpu_count`, `profiler_version` are not really
-used/tested now, but please add them as a future investment.
-Assert if the benchmarks are not all the same for this value.
+**Implemented** as `context._benchmark_set_cache`, called by
+`SessionWorkspace.add_private_benchmark_set(set_id, catalog)` (the sole add
+helper, so the cache is always populated).  It reads the `BenchmarkSet` JSON and
+each referenced `Benchmark` sub-object under the catalog lock — every caller
+(the `build` profile phase, `join_session`, the `add_private_benchmark_set`
+tool) already holds it.  The `hostname`, `cpu_count`, `profiler_version` must be
+identical across every benchmark in the set (one machine, one profiling run);
+this is asserted at population time.
 
-IMPL TASK: also describe what happens for wrong `profiler_version`.
-And please put the constant expected value somewhere reasonable.
+Wrong `profiler_version`: the cache records the set's actual version verbatim
+rather than rejecting it at add time (an agent may legitimately hold a set from
+before a profiler bump).  The cost core (`cost.CostData.from_private_sets`)
+then *skips whole sets* whose cached `profiler_version` differs from
+`catalog.EXPECTED_PROFILER_VERSION` (the single expected-version constant), so
+incompatible records never enter a comparison.
 
 FUTURE: either warn or do something intelligent when mixing benchmarks
 from different computers.
@@ -578,6 +604,51 @@ performance for algorithms like atomic-increment histograms
 FUTURE: GPU target.
 More in general really we should just pass args through
 to the Halide generator and RunGenMain.
+
+
+# Cost Model Core
+
+The shared computation behind `json_ranking_cost`, `json_compare_cost`, and the
+`list_private_ideas` frontier lives in `dendritic_hl_lib/cost.py`.  It is
+catalog-agnostic: `CostData.from_private_sets` consumes the cached benchmark-set
+statistics (see "Private Benchmark Sets on Disk") and the tools translate its
+plain-dict results into JSON.  This keeps the statistics in one tested place and
+lets the frontier reuse the exact `json_compare_cost` logic the docs describe it
+in terms of.  The approach and its bootstrap primitives were ported from the
+reference campaign tooling (`tmp_bench_tools/bench_analyze.py`).
+
+**Batch identity.** A "batch" (idea.md "Cost Comparison Methodology") is one
+interleaved profiling round.  Its key is `(benchmark set full ID, batch index)`,
+because only schedules profiled *together in one build run* share drift; two
+schedules are "in the same batch" only when the same set measured both at the
+same batch index.  Sets whose cached `profiler_version` isn't
+`catalog.EXPECTED_PROFILER_VERSION` are dropped whole.
+
+**Raw cost + representative.** The raw cost of one (schedule, parameters index)
+in a batch is its `wall_time_min` (robust: the fastest of a record's runs, ~1%
+CV; the mean is outlier-contaminated).  A schedule's *representative* for a
+method is the parameters index with the lowest median raw cost over that
+method's relevant batches (ties → lower index, deterministic).
+
+**Making the 2-way CI precise.** idea.md says "compute the X% CI of the per-batch
+differences."  Concretely: pair by batch — for every batch containing both
+schedules, form `cost(LHS_rep) − cost(RHS_rep)` — then take a **percentile
+bootstrap CI of the *median* of those paired differences** (`paired_diff_ci`:
+resample the differences with replacement `B` times, take the median of each
+resample, and read off the `(1−ci)/2` and `(1+ci)/2` percentiles).  Pairing
+cancels common-mode drift, which is the whole point of interleaved batches;
+marginal (unpaired) CIs would ignore it and over-flag.  A CI strictly below zero
+⇒ `improvement` (LHS cheaper), strictly above ⇒ `regression`, straddling zero or
+undefined (< 2 batches) ⇒ `unknown`.
+
+**Determinism.** The bootstrap uses a fixed-seed local `random.Random`, so equal
+inputs always yield an equal CI and thus an equal verdict.  That reproducibility
+is what makes the cost tools testable from synthetic benchmarks (no Halide); it
+is preferred over marginally higher precision from reseeding.  `B` defaults to
+`cost.DEFAULT_BOOTSTRAP` (reduced from the reference's 20000 because the frontier
+runs many pairwise checks in the agent's interactive loop, and a few thousand
+resamples already give a stable percentile at these sample sizes); the same `B`
+is shared by `json_compare_cost` and the frontier.
 
 
 # Tool Safety Requirements
@@ -937,10 +1008,12 @@ still the idea-node collision check, so it does not use the mint helper.)
   `(catalog_dir, session_id)`; `Context.for_catalog` / `for_session` acquire the
   locks then wrap a `Catalog`; `SessionWorkspace` is the (catalog-free-readable)
   per-session private workspace owning `generator.cpp`, `generator_parameters.json`,
-  `current_idea_state.txt`, `current_anchor_schedule.txt`, `private_ideas.json`
-  (pool tags), `private_benchmark_sets.json`, and `bin/`; `finish()` =
-  `catalog.flush()` + `safety.commit()`; `read_text_or_stdin` handles `-` and
-  turns a missing file into a clean `DhHlError`.
+  `current_idea_state.txt`, and `bin/`, plus the lazy-load-once + flush state
+  objects `PrivateIdeaList` / `PrivateBenchmarkSetList` (`_PrivateMapState`) and
+  `CurrentAnchor` (see "Private-workspace state objects"); `_benchmark_set_cache`
+  builds a benchmark set's cached cost stats; `finish()` = `catalog.flush()` +
+  `safety.commit()`; `read_text_or_stdin` handles `-` and turns a missing file
+  into a clean `DhHlError`.
 * `tools.py` — every non-build `cmd_*` (catalog/idea/session queries + session
   lifecycle) plus shared print/JSON helpers.
 * `build.py` — `cmd_init_build` / `cmd_build` (see the Build Tool in idea.md),

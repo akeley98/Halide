@@ -29,6 +29,14 @@ from . import profiler_warnings
 from . import safety
 from .errors import DhHlError, HarnessError
 
+# The profiler JSON schema version this harness understands (the `profiler_version`
+# field stamped into every pipeline object; see reference_build_commands.md and
+# src/runtime/profiler_common.cpp).  Cost tooling compares only benchmarks at this
+# version -- a benchmark set cached at any other version is a "can't compare"
+# record and is skipped by the cost core (see cost.py / impl.md "Private Benchmark
+# Sets on Disk").  Bump this if the profiler schema/semantics change.
+EXPECTED_PROFILER_VERSION = 1
+
 # Sentinel distinguishing "not yet looked at disk" from a real loaded value.
 # Several fields are lazily populated and hold one of three kinds of value:
 #
@@ -231,6 +239,29 @@ class Benchmark:
         JSON Format" `warnings`).  Delegated to profiler_warnings, the single
         chokepoint for the temporary warning-delivery hack."""
         return profiler_warnings.warnings_of_benchmark(self.data)
+
+    @property
+    def profiler(self):
+        """The stored pipeline stats object (benchmark JSON `profiler`)."""
+        return self.data["profiler"]
+
+    @property
+    def wall_time_min(self):
+        """The raw cost statistic (idea.md "Cost Comparison Methodology"): the
+        fastest wall-clock run recorded by the profiler for this benchmark."""
+        return self.profiler["wall_time_min"]
+
+    @property
+    def profiler_version(self):
+        return self.profiler.get("profiler_version")
+
+    @property
+    def hostname(self):
+        return self.data.get("hostname")
+
+    @property
+    def cpu_count(self):
+        return self.data.get("cpu_count")
 
     def flush(self):
         safety.makedirs_tracked(self.schedule.bench_dir)

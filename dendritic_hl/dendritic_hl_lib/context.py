@@ -20,8 +20,150 @@ from . import ids
 from . import locks
 from . import safety
 from .catalog import (Catalog, CurrentIdeaState, DEFAULT_PARAMETERS,
-                      dump_parameters)
+                      dump_parameters, _UNLOADED)
 from .errors import DhHlError
+
+
+class _PrivateMapState:
+    """A JSON-object private-workspace file modelled with the catalog object
+    discipline (impl.md "Tool Internal Design"): lazy-load the mapping ONCE into
+    memory, mutate in memory, flush ONCE -- no bare per-call disk reads.
+
+    Mutation requires a (locked) catalog: the object registers on the catalog's
+    dirty set so `catalog.flush()` calls this object's `flush()`, exactly like
+    `CurrentIdeaState`.  Reading needs no catalog (build reads lock-free).  A
+    single in-memory `map` is why repeated mutations in a loop (e.g. join_session
+    adding several benchmark sets) all persist -- the pre-object code re-read the
+    file each call and only the last write survived."""
+
+    def __init__(self, path, catalog=None):
+        self._path = path
+        self._catalog = catalog
+        self._map = _UNLOADED       # dict once loaded (absent file => {})
+        self._dirty = False
+
+    @property
+    def path(self):
+        return self._path
+
+    @property
+    def map(self):
+        if self._map is _UNLOADED:
+            try:
+                with open(self._path, "r", encoding="utf-8") as f:
+                    self._map = json.load(f)
+            except FileNotFoundError:
+                self._map = {}
+        return self._map
+
+    def _dirtied(self, catalog=None):
+        catalog = catalog or self._catalog
+        if catalog is None:
+            raise DhHlError(
+                "cannot mutate private workspace state without a locked catalog")
+        self._catalog = catalog
+        self._dirty = True
+        catalog._mark_dirty(self)
+
+    def flush(self):
+        # The private dir is guaranteed to exist by flush time (mutating tools
+        # call ensure_private_dir / the session lock created it), matching the
+        # CurrentIdeaState assumption.
+        if self._dirty:
+            safety.write_allowed(self._path,
+                                 json.dumps(self._map, indent=1) + "\n")
+
+
+class PrivateIdeaList(_PrivateMapState):
+    """The session private idea list: ``{idea full ID -> pool tag}``."""
+
+    def contains(self, idea_id):
+        return idea_id in self.map
+
+    def get(self, idea_id):
+        try:
+            return self.map[idea_id]
+        except KeyError:
+            raise DhHlError(
+                "idea is not in the session's private idea list: " + idea_id)
+
+    def ids(self):
+        return list(self.map)
+
+    def set(self, idea_id, pool_tag):
+        self.map[idea_id] = pool_tag
+        self._dirtied()
+
+    def remove(self, idea_id):
+        self.get(idea_id)  # error if absent (idea.md close_session note)
+        del self.map[idea_id]
+        self._dirtied()
+
+    def rename(self, before, after):
+        n = 0
+        for k, v in self.map.items():
+            if v == before:
+                self.map[k] = after
+                n += 1
+        if n:
+            self._dirtied()
+        return n
+
+
+class PrivateBenchmarkSetList(_PrivateMapState):
+    """The session private benchmark set list: ``{benchmark set full ID ->
+    cached cost stats}`` (the cache is built by `_benchmark_set_cache`)."""
+
+    def ids(self):
+        return list(self.map)
+
+    def add(self, set_id, catalog):
+        # Caching reads the referenced benchmark sub-objects, hence a catalog.
+        self.map[set_id] = _benchmark_set_cache(catalog, set_id)
+        self._dirtied(catalog)
+
+    def remove(self, set_id):
+        if set_id in self.map:
+            del self.map[set_id]
+            self._dirtied()
+
+
+class CurrentAnchor:
+    """current_anchor_schedule.txt: a single schedule full ID, or None (empty or
+    absent file).  Lazy-load once + flush, per the object discipline."""
+
+    def __init__(self, path, catalog=None):
+        self._path = path
+        self._catalog = catalog
+        self._value = _UNLOADED     # str id / None (no anchor) once loaded
+        self._dirty = False
+
+    @property
+    def path(self):
+        return self._path
+
+    @property
+    def value(self):
+        if self._value is _UNLOADED:
+            try:
+                with open(self._path, "r", encoding="utf-8") as f:
+                    self._value = f.read().strip() or None
+            except FileNotFoundError:
+                self._value = None
+        return self._value
+
+    def set(self, schedule_id):
+        if self._catalog is None:
+            raise DhHlError(
+                "cannot mutate the current anchor without a locked catalog")
+        self._value = schedule_id or None
+        self._dirty = True
+        self._catalog._mark_dirty(self)
+
+    def flush(self):
+        if self._dirty:
+            safety.write_allowed(
+                self._path, (self._value + "\n") if self._value else "")
 
 
 class SessionWorkspace:
@@ -46,12 +188,38 @@ class SessionWorkspace:
         self._workspace_bytes = None
         self._params_text = None
         self._current_idea = None
+        self._idea_list = None            # PrivateIdeaList
+        self._benchmark_set_list = None   # PrivateBenchmarkSetList
+        self._anchor = None               # CurrentAnchor
 
     @property
     def current_idea_state(self):
         if self._current_idea is None:
             self._current_idea = CurrentIdeaState(self.private_dir, self.catalog)
         return self._current_idea
+
+    # The three private-workspace state objects (lazy-created once; they lazy-load
+    # their file once and flush via the catalog dirty set -- see the classes
+    # above and impl.md "Tool Internal Design").
+    @property
+    def idea_list(self):
+        if self._idea_list is None:
+            self._idea_list = PrivateIdeaList(self.private_ideas_path,
+                                              self.catalog)
+        return self._idea_list
+
+    @property
+    def benchmark_set_list(self):
+        if self._benchmark_set_list is None:
+            self._benchmark_set_list = PrivateBenchmarkSetList(
+                self.private_benchmark_sets_path, self.catalog)
+        return self._benchmark_set_list
+
+    @property
+    def anchor(self):
+        if self._anchor is None:
+            self._anchor = CurrentAnchor(self.current_anchor_path, self.catalog)
+        return self._anchor
 
     def ensure_private_dir(self):
         """Create private/ and private/{id} (gitignored -> absent on a fresh
@@ -126,20 +294,15 @@ class SessionWorkspace:
     @property
     def current_anchor_schedule_id(self):
         """The current anchor schedule full ID, or None (absent or empty file)."""
-        try:
-            with open(self.current_anchor_path, "r", encoding="utf-8") as f:
-                v = f.read().strip()
-        except FileNotFoundError:
-            return None
-        return v or None
+        return self.anchor.value
 
-    def set_current_anchor(self, schedule_id, *, allow=True):
+    def set_current_anchor(self, schedule_id):
         """Set (or clear, when *schedule_id* is None) the current anchor.  An
-        empty file encodes 'no anchor' (we never delete files)."""
+        empty file encodes 'no anchor' (we never delete files).  `init_workspace`
+        writes the file directly (with its --force `allow` flag), so this
+        deferred-flush path is only the ordinary set_current_anchor tool."""
         self.ensure_private_dir()
-        safety.write_allowed(self.current_anchor_path,
-                             (schedule_id + "\n") if schedule_id else "",
-                             allow=allow)
+        self.anchor.set(schedule_id)
 
     @property
     def workspace_hash(self):
@@ -170,44 +333,31 @@ class SessionWorkspace:
             self.current_idea_state.set_no_idea(val)
 
     # -- private idea list ----------------------------------------------
-    # Stored as private/{id}/private_ideas.json: a JSON object whose keys are the
-    # idea node full IDs in the list and whose values are their pool tags
-    # (strings).  Unordered (the future cost-ranked view will sort at read time).
-    # Cost is NOT stored here; it's derived when needed.  See impl.md "Session
-    # Private Workspace".
+    # private/{id}/private_ideas.json: {idea full ID -> pool tag}.  Unordered
+    # (the cost-ranked view sorts at read time); cost is NOT stored here, it is
+    # derived when needed.  Backed by the PrivateIdeaList object (self.idea_list);
+    # these are thin delegations, kept for the existing call sites.
     @property
     def private_ideas_path(self):
         return os.path.join(self.private_dir, "private_ideas.json")
 
     def read_private_ideas(self):
-        """The private idea list as a dict {idea full ID -> pool tag}."""
-        try:
-            with open(self.private_ideas_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except FileNotFoundError:
-            return {}
-
-    def _write_private_ideas(self, ideas):
-        self.ensure_private_dir()
-        safety.write_allowed(self.private_ideas_path,
-                             json.dumps(ideas, indent=1) + "\n")
+        """The private idea list as a live {idea full ID -> pool tag} dict.
+        Read-only for callers; mutate via the pool-tag methods.  Snapshot with
+        dict() if you need a pre-mutation view (see join_session)."""
+        return self.idea_list.map
 
     def has_private_idea(self, idea_id):
-        return idea_id in self.read_private_ideas()
+        return self.idea_list.contains(idea_id)
 
     def get_pool_tag(self, idea_id):
         """The pool tag of *idea_id*; error if it isn't in the private list."""
-        ideas = self.read_private_ideas()
-        if idea_id not in ideas:
-            raise DhHlError(
-                "idea is not in the session's private idea list: " + idea_id)
-        return ideas[idea_id]
+        return self.idea_list.get(idea_id)
 
     def set_pool_tag(self, idea_id, pool_tag):
         """Set *idea_id*'s pool tag, adding it to the list if necessary."""
-        ideas = self.read_private_ideas()
-        ideas[idea_id] = pool_tag
-        self._write_private_ideas(ideas)
+        self.ensure_private_dir()
+        self.idea_list.set(idea_id, pool_tag)
 
     def hide_private_idea(self, idea_id):
         """Prepend a '.' to the idea's pool tag; error if not in the list."""
@@ -216,53 +366,89 @@ class SessionWorkspace:
     def rename_pool_tag(self, before, after):
         """Retag every idea whose pool tag is *before* to *after*.  Returns the
         count updated."""
-        ideas = self.read_private_ideas()
-        n = 0
-        for k, v in ideas.items():
-            if v == before:
-                ideas[k] = after
-                n += 1
-        if n:
-            self._write_private_ideas(ideas)
-        return n
+        self.ensure_private_dir()
+        return self.idea_list.rename(before, after)
 
     def remove_private_idea(self, idea_id):
         """Remove *idea_id* from the private idea list, erroring if absent.
         Retained as an internal helper (idea.md close_session note)."""
-        ideas = self.read_private_ideas()
-        if idea_id not in ideas:
-            raise DhHlError(
-                "idea is not in the session's private idea list: " + idea_id)
-        del ideas[idea_id]
-        self._write_private_ideas(ideas)
+        self.ensure_private_dir()
+        self.idea_list.remove(idea_id)
 
     # -- private benchmark set list -------------------------------------
-    # Stored as private/{id}/private_benchmark_sets.json: a JSON object whose
-    # keys are benchmark set full IDs.  Values are currently empty objects {}
-    # (they become cached statistics once cost is implemented).
+    # private/{id}/private_benchmark_sets.json: {benchmark set full ID -> cached
+    # cost stats} (see impl.md "Private Benchmark Sets on Disk" and
+    # `_benchmark_set_cache`).  Backed by the PrivateBenchmarkSetList object.
     @property
     def private_benchmark_sets_path(self):
         return os.path.join(self.private_dir, "private_benchmark_sets.json")
 
     def read_private_benchmark_sets(self):
-        try:
-            with open(self.private_benchmark_sets_path, "r",
-                      encoding="utf-8") as f:
-                return json.load(f)
-        except FileNotFoundError:
-            return {}
+        """The private benchmark set list as a live {set full ID -> cache} dict
+        (read-only for callers)."""
+        return self.benchmark_set_list.map
 
-    def _write_private_benchmark_sets(self, sets):
+    def add_private_benchmark_set(self, set_id, catalog=None):
+        """Add *set_id* to the private benchmark set list, caching its
+        cost-relevant statistics (impl.md "Private Benchmark Sets on Disk").
+
+        A *catalog* is required to read the referenced benchmark sub-objects; it
+        defaults to ``self.catalog`` (set for tool-driven callers).  Callers hold
+        the catalog lock (build's profile phase, join_session, the
+        add_private_benchmark_set tool), so reading the benchmark files is safe.
+        Re-adding, or adding several in a loop, is safe: the in-memory list
+        accumulates and flushes once."""
+        catalog = catalog or self.catalog
+        if catalog is None:
+            raise DhHlError(
+                "add_private_benchmark_set needs a catalog to cache cost stats")
         self.ensure_private_dir()
-        safety.write_allowed(self.private_benchmark_sets_path,
-                             json.dumps(sets, indent=1) + "\n")
+        self.benchmark_set_list.add(set_id, catalog)
 
-    def add_private_benchmark_set(self, set_id):
-        """Add *set_id* to the private benchmark set list (value is {} for now).
-        Centralized helper so a future cost-init can hook here."""
-        sets = self.read_private_benchmark_sets()
-        sets[set_id] = {}
-        self._write_private_benchmark_sets(sets)
+    def remove_private_benchmark_set(self, set_id):
+        """Drop *set_id* from the private benchmark set list.  Silent no-op if it
+        is not present (idea.md "Add/Remove Private Benchmark Set Tools")."""
+        self.ensure_private_dir()
+        self.benchmark_set_list.remove(set_id)
+
+
+def _benchmark_set_cache(catalog, set_id):
+    """Build the cached cost statistics stored for one private benchmark set
+    (impl.md "Private Benchmark Sets on Disk").
+
+    Shape::
+
+        {"hostname": str, "cpu_count": num, "profiler_version": num,
+         "schedules": {<schedule full id>: [<cell>, ... per params index]}}
+
+    where each ``<cell>`` is ``{"wall_time_min": [...], "id": [...]}`` with both
+    lists of length batch-count (parallel: the raw cost and the benchmark full ID
+    for each batch).  The three top-level provenance fields must be identical
+    across every benchmark in the set (a single profiling machine/run) -- we
+    assert that.  ``profiler_version`` is carried verbatim; the cost core skips a
+    set whose version isn't `catalog.EXPECTED_PROFILER_VERSION`, so a stale
+    version is recorded here rather than rejected at add time."""
+    bs = catalog.get_benchmark_set(set_id)
+    prov = {}  # first-seen hostname/cpu_count/profiler_version, for the assert
+    schedules = {}
+    for sched_id, per_pidx in bs.data.items():
+        cells = []
+        for batch_ids in per_pidx:  # one list per parameters index
+            wall_time_min, ids_out = [], []
+            for bid in batch_ids:
+                bench = catalog.resolve_benchmark(bid)
+                ids_out.append(bid)
+                wall_time_min.append(bench.wall_time_min)
+                seen = (bench.hostname, bench.cpu_count, bench.profiler_version)
+                first = prov.setdefault("provenance", seen)
+                assert first == seen, (
+                    "benchmark set {} mixes provenance {} vs {}".format(
+                        set_id, first, seen))
+            cells.append({"wall_time_min": wall_time_min, "id": ids_out})
+        schedules[sched_id] = cells
+    host, cpu, ver = prov.get("provenance", (None, None, None))
+    return {"hostname": host, "cpu_count": cpu, "profiler_version": ver,
+            "schedules": schedules}
 
 
 def _missing_workspace_message(missing, private_dir):

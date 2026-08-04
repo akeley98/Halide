@@ -55,7 +55,12 @@ def fake_build(monkeypatch):
 
     def fake_bench(bin_dir, rungen_bin, json_out, warnings_out):
         with open(json_out, "w") as f:
-            json.dump({"pipelines": [{"name": "dummy", "time_ns": 42}]}, f)
+            # Include the fields the cost cache reads (wall_time_min,
+            # profiler_version); the same dummy value for every binary is fine
+            # here -- profiler-stat *attribution* is a Halide-tier concern.
+            json.dump({"pipelines": [{"name": "dummy", "time_ns": 42,
+                                      "profiler_version": 1,
+                                      "wall_time_min": 42, "funcs": []}]}, f)
         if knobs["warnings"] is not None:
             with open(warnings_out, "w") as f:
                 json.dump({"pipeline": "dummy", "warnings": knobs["warnings"]}, f)
@@ -274,7 +279,8 @@ def test_profile_json_path_is_absolute_with_relative_catalog(
     def spy_bench(bin_dir, rungen_bin, json_out, warnings_out):
         seen["json_out"] = json_out
         with open(json_out, "w") as f:
-            json.dump({"pipelines": [{"name": "x"}]}, f)
+            json.dump({"pipelines": [{"name": "x", "profiler_version": 1,
+                                      "wall_time_min": 42, "funcs": []}]}, f)
         return 0, ""
     monkeypatch.setattr(build, "_run_benchmark", spy_bench)
 
