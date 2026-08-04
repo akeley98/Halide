@@ -69,6 +69,17 @@ def test_hottest_truncates_after_sort():
     assert [f["name"] for f in out["funcs"]] == ["hot"]
 
 
+def test_output_holds_exactly_the_requested_stats():
+    """The output has EXACTLY the requested pipeline/func stats (plus the func
+    identity keys and the always-on time_ratio) -- no extra keys leak in.  Guards
+    against an aggregation accidentally computing/emitting an unrequested stat."""
+    p = _pipe(10, 100, [_func(0, "a", -1, 60)])
+    out = ps.aggregate([p], ["memory_peak"], ["num_allocs"])
+    assert set(out) == {"memory_peak", "funcs"}
+    assert set(out["funcs"][0]) == {"name", "parent", "canonical_id",
+                                    "num_allocs", "time_ratio"}
+
+
 def test_unknown_and_non_numeric_stats_error():
     p = _pipe(10, 100, [_func(0, "a", -1, 60)])
     with pytest.raises(DhHlError, match="no such pipeline statistic"):
@@ -160,6 +171,25 @@ def test_tool_requires_parameters_when_multiple(session, run_tool, capsys):
     out = _out(run_tool, capsys, tools.cmd_json_profiler_stats,
                _stats_ns(session, A, parameters=1))
     assert json.loads(out)["funcs"][0]["name"] == "a"
+
+
+def test_tool_parameters_selects_the_named_object(session, run_tool, capsys):
+    """--parameters N must select the N-th params object's benchmarks, not just
+    be accepted.  The two objects carry DISTINCT per-func values so a mis-select
+    (e.g. always reading index 0) is caught."""
+    A = _child_schedule(session)
+    par = [_func(0, "loop", -1, 60, parallel_loops=100)]   # params index 0
+    ser = [_func(0, "loop", -1, 60, parallel_loops=0)]     # params index 1
+    _add_set(session, {A: [[_bench(100, par, runs=10, time_ns=100)],
+                           [_bench(140, ser, runs=10, time_ns=100)]]})
+
+    def loops(pidx):
+        out = _out(run_tool, capsys, tools.cmd_json_profiler_stats,
+                   _stats_ns(session, A, parameters=pidx, f=["parallel_loops"]))
+        return json.loads(out)["funcs"][0]["parallel_loops"][1]  # median
+
+    assert loops(0) == 100     # params index 0
+    assert loops(1) == 0       # params index 1 -> different data, really selected
 
 
 def test_tool_no_reachable_benchmarks(session, run_tool):

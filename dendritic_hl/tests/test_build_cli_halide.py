@@ -230,14 +230,38 @@ def test_json_profiler_stats_aggregates_real_funcs(run_cli, tmp_path):
     obj = json.loads(r.stdout)
     # Pipeline-global stat -> a 3-number percentile list.
     assert isinstance(obj["wall_time_mean"], list) and len(obj["wall_time_mean"]) == 3
+    # Exactly the requested pipeline stat + funcs -- no unrequested stat leaks in.
+    assert set(obj) == {"wall_time_mean", "funcs"}
     funcs = obj["funcs"]
     assert 1 <= len(funcs) <= 4                       # truncated to the 4 hottest
     medians = [f["time_ratio"][1] for f in funcs]
     assert medians == sorted(medians, reverse=True)   # sorted by median time_ratio
     for f in funcs:
-        assert {"name", "parent", "canonical_id", "time_ratio",
-                "recompute_ratio"} <= set(f)
+        # EXACTLY the func identity keys + the two requested per-func stats.
+        assert set(f) == {"name", "parent", "canonical_id", "time_ratio",
+                          "recompute_ratio"}
         assert len(f["time_ratio"]) == 3 and len(f["recompute_ratio"]) == 3
+
+
+def test_json_profiler_stats_parameters_selects_parallelism(run_cli, tmp_path):
+    """--parameters actually selects the named params object's benchmarks: the
+    parallel variant reports parallel loops, the serial one reports none.  A
+    mis-select (e.g. always reading index 0) flips one of these assertions."""
+    cat_dir, handle = _bootstrap(run_cli, tmp_path)
+    # index 0 = parallel, index 1 = serial.
+    _profile_target(run_cli, handle,
+                    [{"enable_parallel": True}, {"enable_parallel": False}],
+                    batches=2)
+
+    def total_parallel_loops(pidx):
+        r = run_cli("json_profiler_stats", "-s", handle, "--parameters", str(pidx),
+                    "-f", "parallel_loops")
+        assert r.returncode == 0, r.stderr
+        # Sum the median parallel_loops over funcs; parallelized funcs are > 0.
+        return sum(f["parallel_loops"][1] for f in json.loads(r.stdout)["funcs"])
+
+    assert total_parallel_loops(0) > 0     # parallel variant runs parallel loops
+    assert total_parallel_loops(1) == 0    # serial variant runs none
 
 
 def test_json_compare_cost_detects_regression(run_cli, tmp_path):
