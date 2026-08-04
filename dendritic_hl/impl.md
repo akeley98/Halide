@@ -375,10 +375,12 @@ this is asserted at population time.
 
 Wrong `profiler_version`: the cache records the set's actual version verbatim
 rather than rejecting it at add time (an agent may legitimately hold a set from
-before a profiler bump).  The cost core (`cost.CostData.from_private_sets`)
-then *skips whole sets* whose cached `profiler_version` differs from
-`catalog.EXPECTED_PROFILER_VERSION` (the single expected-version constant), so
-incompatible records never enter a comparison.
+before a profiler bump).  The version gate is the shared `cost.compatible_sets`
+helper (used by both `cost.CostData.from_private_sets` and the profiler-stats
+reachability walk): it *skips whole sets* whose cached `profiler_version`
+differs from `catalog.EXPECTED_PROFILER_VERSION` (the single expected-version
+constant), and — crucially — **warns to stderr naming the discarded set**, so a
+version bump doesn't silently turn every cost into `null` with no explanation.
 
 FUTURE: either warn or do something intelligent when mixing benchmarks
 from different computers.

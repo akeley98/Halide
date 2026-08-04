@@ -193,6 +193,22 @@ def test_wrong_profiler_version_skipped(tmp_path):
         "representative": None, "raw_costs": {}}
 
 
+def test_version_mismatch_warns_with_set_id(tmp_path, capsys):
+    """A discarded set is announced on stderr (naming the set + versions), so an
+    all-null cost after a profiler bump isn't a silent mystery."""
+    cat, t = _catalog(tmp_path)
+    set_id = add_synthetic_benchmark_set(
+        cat, {t["A"]: [[100, 101, 99]]},
+        profiler_version=EXPECTED_PROFILER_VERSION + 1)
+    cat.flush(); safety.commit()
+
+    cost.CostData.from_private_sets(_benchmark_set_dict(cat, set_id))
+    err = capsys.readouterr().err
+    assert set_id in err
+    assert "profiler_version" in err and "null" in err
+    assert str(EXPECTED_PROFILER_VERSION) in err
+
+
 # ---- bootstrap primitive determinism --------------------------------------
 
 def test_paired_diff_ci_deterministic():

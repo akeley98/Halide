@@ -23,6 +23,7 @@ in `tmp_bench_tools/bench_analyze.py`.
 import math
 import random
 import statistics as st
+import sys
 from collections import defaultdict
 
 from .catalog import EXPECTED_PROFILER_VERSION
@@ -38,6 +39,27 @@ DEFAULT_BOOTSTRAP = 4000
 # Fixed so a given set of samples always yields the same CI (and thus the same
 # improvement/regression/unknown verdict) -- reproducibility over raw precision.
 _BOOTSTRAP_SEED = 1
+
+
+def compatible_sets(private_sets):
+    """Iterate ``(set id, cache)`` for the benchmark sets usable at the current
+    `EXPECTED_PROFILER_VERSION`, warning to stderr (naming the discarded set) for
+    each version mismatch.
+
+    Without this, a profiler-version bump would silently make every cost read as
+    `null` with no clue why; the warning tells the user which sets were dropped
+    and to re-profile.  The single gate for both the cost core and the
+    profiler-stats reachability walk."""
+    for set_id, cache in private_sets.items():
+        got = cache.get("profiler_version")
+        if got == EXPECTED_PROFILER_VERSION:
+            yield set_id, cache
+        else:
+            sys.stderr.write(
+                "dh_hl: warning: ignoring benchmark set {} with incompatible "
+                "profiler_version {} (expected {}); its costs read as null -- "
+                "re-profile to use it\n".format(
+                    set_id, got, EXPECTED_PROFILER_VERSION))
 
 
 class CostData:
@@ -57,11 +79,10 @@ class CostData:
     @classmethod
     def from_private_sets(cls, private_sets):
         """Build from ``{set id: cache}`` (SessionWorkspace cache shape, see
-        impl.md "Private Benchmark Sets on Disk")."""
+        impl.md "Private Benchmark Sets on Disk").  Version-mismatched sets are
+        dropped with a stderr warning (see `compatible_sets`)."""
         self = cls()
-        for set_id, cache in private_sets.items():
-            if cache.get("profiler_version") != EXPECTED_PROFILER_VERSION:
-                continue  # incompatible profiler schema: skip whole set
+        for set_id, cache in compatible_sets(private_sets):
             for sched_id, cells in cache.get("schedules", {}).items():
                 for pidx, cell in enumerate(cells):
                     for batch, v in enumerate(cell.get("wall_time_min", [])):

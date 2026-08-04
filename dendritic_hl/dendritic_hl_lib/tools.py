@@ -18,8 +18,8 @@ from . import profiler_warnings
 from . import prompts
 from . import safety
 from .catalog import (Catalog, COMMENTARY_REVIEWS, DEFAULT_PARAMETERS,
-                      EXPECTED_PROFILER_VERSION, IDEA_SIDE_LINK_TYPES,
-                      dump_parameters, load_parameters_text)
+                      IDEA_SIDE_LINK_TYPES, dump_parameters,
+                      load_parameters_text)
 from .context import (Context, SessionWorkspace, resolve_target,
                       _validate_catalog_dir, read_text_or_stdin)
 from .errors import DhHlError
@@ -817,12 +817,11 @@ def cmd_json_compare_cost(args):
 def _reachable_benchmarks_by_param(catalog, private_sets, sched_id):
     """``{parameters index: [Benchmark, ...]}`` for benchmarks of *sched_id*
     reachable from the private benchmark set list (idea.md json_profiler_stats).
-    Version-mismatched sets are skipped, matching the cost core."""
+    Version-mismatched sets are skipped (with a stderr warning), matching the
+    cost core -- via the shared cost.compatible_sets gate."""
     from collections import defaultdict
     out = defaultdict(list)
-    for cache in private_sets.values():
-        if cache.get("profiler_version") != EXPECTED_PROFILER_VERSION:
-            continue
+    for _set_id, cache in cost.compatible_sets(private_sets):
         cells = cache.get("schedules", {}).get(sched_id)
         if not cells:
             continue
