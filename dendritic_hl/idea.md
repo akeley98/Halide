@@ -595,7 +595,7 @@ Select the representative for each schedule.
 Then reduce each batch to a single sample:
 the difference (schedule A raw cost - schedule B raw cost).
 Compute the X% confidence interval (CI) of all such samples
-(configurable confidence percentage).
+(configurable confidence percentage, defaults to 95%).
 
 If the lower and upper bounds of the CI are both positive,
 confidently conclude schedule A has higher cost.
@@ -1266,7 +1266,6 @@ consider `restore_schedule` or `restore_idea`.
 
     dh_hl new_idea -s ... {proposal name} {proposal file} [schedule ID]
 
-
 Adds a new child idea node to the referenced schedule node,
 which must be a major schedule.
 Furthermore, the idea node is added to the current session's
@@ -1294,9 +1293,15 @@ If the schedule node is a minor schedule, the tool advises:
 
 ### List Ideas Tools
 
+    # All commands do not acquire session lock
     dh_hl list_child_ideas -C ... [schedule ID]
     dh_hl list_seed_ideas -s ...
 
+IMPL TASK: add `proposal:` and `canonical:` prefixes
+
+IMPL TASK: remove session lock.
+Also is there even testing for this, e.g. by using the lock logging?
+If not please see if it's easy to add this as an extra check in existing tests.
 
 `list_child_ideas` prints a summary of each child idea node of
 the referenced *major schedule* node; error if passed a minor schedule.
@@ -1307,9 +1312,9 @@ Prints these lines for each idea node:
 
 * The ID of the idea node (all lines except this one indented by 2)
 
-* The proposal name
+* ID of canonical schedule, or `(none)`, prefixed by `canonical: `
 
-* ID of canonical schedule, or `(none)`
+* The proposal name, prefixed by `proposal: `
 
 * For `list_child_ideas` only,
   the first up-to 72 characters of the first line of the proposal text.
@@ -1328,7 +1333,6 @@ Prints these lines for each idea node:
 
     # All commands do not acquire session lock
     dh_hl view_idea -C ... {idea ID}
-
 
 Prints the referenced idea node's
 
@@ -1354,7 +1358,7 @@ Silent no-op if this exactly duplicates an existing idea side link.
 
 ### Add Warning Toggle Tool
 
-    dh_hl add_warning_toggle {schedule ID} {commentary ID}
+    dh_hl add_warning_toggle -C ... {schedule ID} {commentary ID}
 
 Add a new `WarningToggle` sub object to the referenced schedule,
 which cites the referenced commentary.
@@ -1386,7 +1390,7 @@ are probably not appropriate for this command.
 
 ### Debug Warning Toggle Tool
 
-    dh_hl debug_warning_toggle [schedule ID]
+    dh_hl debug_warning_toggle -C ... [schedule ID]
 
 By default, the tool collects all `WarningToggle` objects using the
 schedule-node-to-root algorithm specified in the `WarningToggle` state
@@ -1420,7 +1424,7 @@ This command takes further arguments:
 
 ### View Benchmark Warnings Tool
 
-    dh_hl view_benchmark_warnings {benchmark ID}
+    dh_hl view_benchmark_warnings -C ... {benchmark ID}
 
 Pretty-print the warnings embedded in the referenced benchmark sub-object.
 Takes an optional `--always-show-message` flag.
@@ -1448,7 +1452,7 @@ FUTURE: fix `max_warnings` limit in Halide profiler that silently drops warnings
 
 ### View Benchmark Stdout Tool
 
-    dh_hl view_benchmark_stdout {benchmark ID}
+    dh_hl view_benchmark_stdout -C ... {benchmark ID}
 
 Print the `stdout` captured for the named benchmark.
 
@@ -1750,9 +1754,9 @@ If `--dry-run` is not given,
 * For each joined session's output schedule node,
   add its parent idea node to the current idea list,
   with the assigned pool tag being:
-  
+
   * the existing pool tag unchanged, if the idea was already in the list
-  
+
   * the output schedule node's pool tag otherwise,
     prefixed with `{pool prefix}.` if the pool prefix is non-empty.
 
@@ -1787,7 +1791,6 @@ Useful to get rid of old abandoned sessions in the open sessions or termini list
     # Does not acquire session lock
     dh_hl view_session_prompt -s ...
 
-
 Prints the plain text prompt of the current session,
 followed by `=== Seed Ideas ===`,
 followed by the output of the `list_seed_ideas` tool.
@@ -1796,18 +1799,92 @@ followed by the output of the `list_seed_ideas` tool.
 ### List Session Private Ideas Tool
 
     dh_hl list_private_ideas -s ... [N]
-    dh_hl list_private_ideas_todo -s ... [N]
-    dh_hl list_private_ideas_done -s ... [N]
 
+IMPL TASK: rewrite tool, `_todo` and `_done` variants replaced with switches.
 
-FUTURE: add tool, nonfunctional for now.
+IMPL TASK: we need to think about how to test that this is calculated correctly.
+
+Gives a cost ranked "frontier" of session private ideas,
+grouped by pool tag (as mapped by the session private workspace state).
+The cost is calculated from the session's private benchmark set list.
+Performs automated detection of ideas "obsoleted by" lower cost child ideas.
+
+**Optional Command Line Arguments:**
+
+* `--anchor ...`, same behavior as in `json_ranking_cost`.
+
+* `--confidence {ci}`, set confidence threshold for 2-way "obsoleted by"
+  comparisons. `0 < ci < 1`.
+
+* `--max {n}`, list up to `n` ideas per pool tag. Default `n = 6`.
+
+* `--pool {name}`, enable including idea nodes with the given pool tag.
+  Unions with other `--pool` arguments.
+
+* `--pools {regex}`, enable including idea nodes with regex-matched pool tags.
+  Unions with other `--pool`, `--pools` arguments;
+  if no such arguments, it's as if `--pools "*"` was given.
+
+* `--done`, include only idea nodes with canonical schedules.
+
+* `--todo`, include only idea nodes without canonical schedules.
+
+**Outputs:**
+
+For each enabled pool tag in sorted order,
+the tool prints the banner `=== {pool tag} ===`.
+
+The private ideas with that pool tag are sorted by cost.
+This is the cost of the idea's canonical schedule, if it exists,
+otherwise the cost of the idea's parent schedule,
+calculated as in `json_ranking_cost`.
+A `null` cost is sorted as if it were `0` cost
+(they bubble to the top and prompt the agent to run benchmarks).
+
+After the `--done`/`--todo` filter, the sorted idea list is truncated
+as appropriate for the `--max` argument, and each is printed as if by
+`list_child_ideas`, with additional information:
+
+* `batch_count: ...`, number of batches used to compute cost for ranking.
+
+* `cost: ...`, computed cost (`null` if 0 batches).
+
+* one `obsoleted by: {idea ID}` line
+  for each positive "obsoleted by" check (below).
+  Note, the batch count for this check is not shown.
+
+**Obsoleted By:**
+
+This check applies only to idea nodes `P` with canonical schedules.
+
+Check each child idea `C` of `P`'s canonical schedule.
+The check is positive if all of:
+
+* `C` has a canonical schedule.
+
+* The `json_compare_cost` tool would conclude `C` is an improvement over `P`.
+
+Since the `build --profile` tool by default compares against the parent idea's
+parent schedule, info for this will usually be available.
+
+<!-- deferred task: strip when creating prompt -->
+**Implementation Notes:**
+
+If no anchor schedule was used for cost ranking, give the warning
+
+    Warning: ranking is drift-exposed until you set an anchor.
+
+If an anchor schedule was used and any cost was less than `0.5`,
+give the warning
+
+    Warning: some ranked schedules were much faster than the anchor.
+    This amplifies the effects of system noise; consider a new anchor.
 
 
 ### Session Current Anchor Schedule Tools
 
     dh_hl get_current_anchor -s ...
     dh_hl set_current_anchor -s ... [schedule ID]
-
 
 Get or set the ID of the current session's current anchor schedule node.
 The special value `none` is used for "no anchor node"
@@ -1819,7 +1896,6 @@ The special value `none` is used for "no anchor node"
     dh_hl get_pool_tag -s ... {idea ID}
     dh_hl set_pool_tag -s ... {idea ID} {pool tag}
     dh_hl hide_private_idea -s ... {idea ID}
-
 
 Gets or sets the pool tag assigned for the given idea node,
 as stored in the private idea list.
@@ -1840,7 +1916,6 @@ Also the `.` prefix won't make sense until then.
 ### Rename Pool Tag Tool
 
     dh_hl rename_pool_tag -s ... {pool tag before} {pool tag after}
-
 
 Iterates over all entries in the current session's private idea list.
 Each idea that has `{pool tag before}` as its pool tag
@@ -1897,16 +1972,13 @@ Find a certain schedule node (noun), and do something with it (verb):
 
 * `schedule`: the schedule node id'd by `[schedule ID]`.
 
-
 * `terminus_schedule`:
   the primary output schedule of the unique terminus.
   Error if there is not exactly one session node that is a terminus
   or the terminus has no output schedule.
 
-
 * `seed_schedule`:
   the canonical schedule of the current session's 0th seed idea.
-
 
 * `session_output`:
   the primary output schedule of the current session;
@@ -2068,7 +2140,7 @@ filtered as specified for the methodology.
 
 The output is a JSON object with key/value pairs on separate lines:
 
-* `batch_count`: number of batches found
+* `batch_count`: number of batches found by cost ranking algorithm
 
 * `cost`: number or null (null if no batches found)
 
@@ -2076,6 +2148,10 @@ The output is a JSON object with key/value pairs on separate lines:
 
 * `representative`: number,
   index of generator parameters object used by the representative.
+
+* `parameters_raw_cost`: list of numbers,
+  n-th entry gives the raw cost of the program generated with the
+  n-th generator parameters object, as used for representative picking.
 
 Uses either the "Cost Ranking With Anchor Schedule" methodology
 or "Cost Ranking Without Anchor Schedule" methodology,
@@ -2115,8 +2191,8 @@ is the parent of the LHS's parent idea.
 Note, if you override this, you will in most cases have to run `dh_hl build`
 with an explicit `--other`, as the default parent won't suffice.
 
-The optional `--confidence {number}` argument overrides the default
-confidence (0.95) for the confidence interval.
+The optional `--confidence {ci}` argument overrides the default
+confidence for the confidence interval; must have `0 < ci < 1`.
 
 The output is a JSON object with key/value pairs on separate lines:
 
@@ -2143,7 +2219,9 @@ The output is a JSON object with key/value pairs on separate lines:
 
 IMPL TASK: add this
 
-TODO
+IMPL TASK: need to think about how to test this.
+Maybe an internal tool (not CLI exposed) that allows injecting
+fake benchmark objects?
 
 Aggregate profiler statistics for the referenced schedule,
 considering only benchmarks reachable from the private benchmark set list.
@@ -2158,6 +2236,9 @@ The list of stats to include is given by command line arguments:
   built from the n-th generator parameters object of the schedule node.
   Mandatory if there's more than one generator parameters objects included
   in the schedule node.
+
+* `--hottest {n}`, optional, `n >= 1`.
+  Output only the `n` hottest functions (defined below)
 
 With `obj` being a benchmark sub-object, each `-p` pipeline-global
 statistic name is the key name of a number value of `obj["profiler"]`,
@@ -2179,7 +2260,8 @@ or one of the special values:
 
 * `parallel_tasks_per_run`: `parallel_tasks/runs`
 
-* `time_ratio`: function `time_ns` / pipeline `time_ns`
+* `time_ratio`: `function.time_ns/pipeline.time_ns`.
+  This is always included (i.e. `-f time_ratio` is implied).
 
 FUTURE: foot-gun-y how the default stats are not divided by `runs`
 and there's special `*_per_run` stats that are actually meaningful.
@@ -2188,16 +2270,21 @@ The output JSON object has key/value pairs
 
 * one pair for each unique pipeline-global statistic included
 
-* `funcs`: list of objects, if any per-func statistics are included
+* `funcs`: list of objects
 
-The `funcs` objects are in the same order as the original profiler data,
-and contain key/value pairs:
+The `funcs` list is sorted by highest-to-lowest median `time_ratio`,
+with all profiled functions included, unless `--hottest {n}` was given,
+in which case only the first `n`-many sorted functions are included.
 
-* one pair for each unique per-function statistic included
+The `func` list objects contain key/value pairs:
 
 * `name`: string
 
-* `parent`: number, index of parent func in this list (-1 if no parent)
+* `parent`: number, `canonical_id` of parent func in this list (-1 if no parent)
+
+* `canonical_id`: number for unique identification within pipeline
+
+* one pair for each unique per-function statistic included
 
 Each numerical statistic is reported by aggregating all relevant
 benchmarks' samples (bucketed by function, for `-f`) into a 3-list:
@@ -2207,7 +2294,7 @@ benchmarks' samples (bucketed by function, for `-f`) into a 3-list:
 `wall_time_smallest` and any other non-number statistics are not supported.
 
 <!-- deferred task: strip when creating prompt -->
-**Implementation Note:**
+**Implementation Notes:**
 Don't try to embed the list of allowed `-f`/`-p` values,
 other than the special values described above,
 so we don't have to keep updating this for profiler changes.
@@ -2217,6 +2304,9 @@ with the error being somewhat nicer than a raw Python exception
 
 Assert that all benchmarks found have the same number of "funcs"
 and the same names for each func. You don't have to test this.
+
+Make it so that `name`, `parent`, and `canonical_id` are printed
+first in the `func` object.
 
 
 ### JSON Schedule Info Tool
@@ -2404,7 +2494,7 @@ and inspect it with `dh_hl status`.
   Add a reasonable proposal (prompt for yourself) if you have more specific
   goals for the session, or just write a generic description if not.
 
-* Otherwise, use the `init_workspace` tool and start work on the 
+* Otherwise, use the `init_workspace` tool and start work on the
   existing terminus.
   Unless advised otherwise, don't use `--force`,
   and do follow any warnings given by the `init_workspace` tool.

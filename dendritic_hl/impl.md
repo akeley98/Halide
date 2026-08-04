@@ -11,6 +11,9 @@ not yet implemented in the actual code (that's the agent's job).
 When you're reasonably confident the task is done, delete the IMPL TASK paragraph.
 Leave them in if there's significant doubt,
 or clarification is required from the user.
+Avoid extra blank lines after removing IMPL TASKs
+(2 blank lines at end of markdown sections,
+1 blank line for all other paragraph breaks).
 
 NOTE: I got tired of the split of per-tool information between
 `idea.md` and `impl.md`, so now the tool-specific implementation information
@@ -304,8 +307,8 @@ Inside the `private/{session id}` sub-directory, there is
 
 * `private_benchmark_sets.json`, the session private benchmark set list.
   The keys are the set of benchmark set full IDs comprising the list.
-  The values are currently empty objects `{}` (they become cached statistics
-  once cost lands).  `SessionWorkspace.add_private_benchmark_set` is the
+  The values have cached benchmark info (documented below).
+  `SessionWorkspace.add_private_benchmark_set` is the
   centralized add helper so that value-init can hook there.
 
 * `init_build.json`, left behind by `dh_hl init_build`: the catalog-relative
@@ -322,6 +325,42 @@ initializer) or by the `restore_*` tools — session creation no longer initiali
 them, so a freshly created session's workspace is empty until `init_workspace`
 runs.  The whole `private/` tree is gitignored, so it can desync from the
 git-tracked `session/` state after a git checkout.
+
+
+### Private Benchmark Sets on Disk
+
+IMPL TASK: update `add_private_benchmark_set` to add this information.
+
+Each value stored in the `private_benchmark_sets.json` object includes
+key/value pairs:
+
+* `hostname`: string, `hostname` of each referenced benchmark.
+
+* `cpu_count`: number, `cpu_count` of each referenced benchmark.
+
+* `profiler_version`: number, `profiler_version` of each referenced benchmark.
+
+* `schedules`: object, indexed by `[schedule id][parameters index]`.
+  This gives a list of objects `{"wall_time_min": [...], "id": [...]}`,
+  each list being of length batch-count and giving the per-benchmark
+  `wall_time_min` or benchmark full ID, respectively.
+
+The `hostname`, `cpu_count`, `profiler_version` are not really
+used/tested now, but please add them as a future investment.
+Assert if the benchmarks are not all the same for this value.
+
+FUTURE: either warn or do something intelligent when mixing benchmarks
+from different computers.
+
+The caching allows quick implementations of perf critical queries:
+
+1. Find the relevant benchmark sets for a given schedule
+   (by scanning the keys in `schedules`).
+
+2. Do basic cost comparisons using the cached `wall_time_min`.
+
+Only the more detailed profiler report tools require reading the
+actual benchmark sub-objects.
 
 
 ### Current Idea State on Disk
