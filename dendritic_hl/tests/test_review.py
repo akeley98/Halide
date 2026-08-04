@@ -140,7 +140,7 @@ def test_idea_side_links(tmp_path, run_tool, capsys):
     ij = _idea_json(run_tool, capsys, cat_dir, t["I"])
     assert ij["idea_side_links"] == [{"id": t["I2"], "type": "borrows_from"}]
 
-    run_tool(tools.cmd_list_ideas, ns(catalog=cat_dir, schedule=t["R"]))
+    run_tool(tools.cmd_list_child_ideas, ns(catalog=cat_dir, schedule=t["R"]))
     listing = capsys.readouterr().out
     assert "borrowed from:" in listing
 

@@ -112,7 +112,8 @@ COMMAND_HELP = {
     "new_root": "Create a new root schedule node from the workspace.",
     "set_idea": "Set the current idea state to an existing idea node.",
     "new_idea": "Add a child idea node (proposal) to a major schedule.",
-    "list_ideas": "List the child idea nodes of a major schedule.",
+    "list_child_ideas": "List the child idea nodes of a major schedule.",
+    "list_seed_ideas": "List the current session's seed ideas.",
     "list_private_ideas": "List the current session's private idea list.",
     "list_private_ideas_todo": "List private ideas without a canonical schedule.",
     "list_private_ideas_done": "List private ideas with a canonical schedule.",
@@ -123,6 +124,7 @@ COMMAND_HELP = {
     "set_pool_tag": "Set a private idea's pool tag (adding it to the list if needed).",
     "hide_private_idea": "Prepend '.' to a private idea's pool tag.",
     "rename_pool_tag": "Retag every private idea with a given pool tag.",
+    "list_output_schedules": "List the current session's output schedules.",
     "list_sibling_schedules": "List schedules sharing a parent idea with the given schedule.",
     "list_child_schedules": "List the child schedules of an idea node.",
     "list_equal_schedules": "List schedules with the same source hash as the given one.",
@@ -172,7 +174,7 @@ COMMAND_HELP = {
     "idea_short_id": "Print an idea node's short ID.",
     "session_full_id": "Print the current session's full ID.",
     "session_handle": "Print (allocating if needed) the current session's handle.",
-    "view_session_idea": "Show the current session's seed idea.",
+    "view_session_prompt": "Show the current session's prompt and seed ideas.",
     "view_commentary": "Show a single commentary sub-object by ID.",
     "view_all_commentary": "Show all commentary of a schedule node.",
     "view_session_commentary": "Show all commentary of the current session's output schedule.",
@@ -244,8 +246,10 @@ def _build_parser():
     sp.add_argument("--pool-tag", dest="pool_tag",
                     help="pool tag (default: inherit the parent idea's)")
 
-    sp = add("list_ideas")
+    sp = add("list_child_ideas")
     sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
+
+    add("list_seed_ideas")
 
     for _name in ("list_private_ideas", "list_private_ideas_todo",
                   "list_private_ideas_done"):
@@ -276,6 +280,8 @@ def _build_parser():
     sp = add("rename_pool_tag")
     sp.add_argument("pool_tag_before", help="existing pool tag")
     sp.add_argument("pool_tag_after", help="new pool tag")
+
+    add("list_output_schedules")
 
     sp = add("list_sibling_schedules")
     sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
@@ -412,7 +418,7 @@ def _build_parser():
 
     add("session_full_id")
     add("session_handle")
-    add("view_session_idea")
+    add("view_session_prompt")
 
     sp = add("view_commentary")
     sp.add_argument("commentary", help="commentary ID")
@@ -424,7 +430,9 @@ def _build_parser():
     sp.add_argument("--brief", action="store_true",
                     help="print only the first line (up to 72 chars) of each")
 
-    add("view_session_commentary")
+    sp = add("view_session_commentary")
+    sp.add_argument("--brief", action="store_true",
+                    help="print only the first line (up to 72 chars) of each")
     add("json_session_info")
     add("json_export")
 
@@ -455,7 +463,8 @@ _DISPATCH = {
     "new_root": tools.cmd_new_root,
     "set_idea": tools.cmd_set_idea,
     "new_idea": tools.cmd_new_idea,
-    "list_ideas": tools.cmd_list_ideas,
+    "list_child_ideas": tools.cmd_list_child_ideas,
+    "list_seed_ideas": tools.cmd_list_seed_ideas,
     "list_private_ideas": tools.cmd_list_private_ideas,
     "list_private_ideas_todo": tools.cmd_list_private_ideas_todo,
     "list_private_ideas_done": tools.cmd_list_private_ideas_done,
@@ -466,6 +475,7 @@ _DISPATCH = {
     "set_pool_tag": tools.cmd_set_pool_tag,
     "hide_private_idea": tools.cmd_hide_private_idea,
     "rename_pool_tag": tools.cmd_rename_pool_tag,
+    "list_output_schedules": tools.cmd_list_output_schedules,
     "list_sibling_schedules": tools.cmd_list_sibling_schedules,
     "list_child_schedules": tools.cmd_list_child_schedules,
     "list_equal_schedules": tools.cmd_list_equal_schedules,
@@ -513,7 +523,7 @@ _DISPATCH = {
     "idea_short_id": tools.cmd_idea_short_id,
     "session_full_id": tools.cmd_session_full_id,
     "session_handle": tools.cmd_session_handle,
-    "view_session_idea": tools.cmd_view_session_idea,
+    "view_session_prompt": tools.cmd_view_session_prompt,
     "view_commentary": tools.cmd_view_commentary,
     "view_all_commentary": tools.cmd_view_all_commentary,
     "view_session_commentary": tools.cmd_view_session_commentary,

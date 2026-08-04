@@ -83,12 +83,20 @@ def test_new_sub_session(session, run_tool, capsys, tmp_path):
                            ns(catalog=session.catalog_dir, session=sub_id)))
     assert info["depth"] == 1
     assert info["parent"] == session.session_id
-    assert info["output_schedule"] is None
-    # The proposal text got the "Created for session" line appended.
-    iout = _out(run_tool, capsys, tools.cmd_view_session_idea,
+    assert info["output_schedules"] == []
+    assert info["prompt"] == "sub-agent task\n"
+    # view_session_prompt shows the prompt then the seed ideas.
+    pout = _out(run_tool, capsys, tools.cmd_view_session_prompt,
                 ns(catalog=session.catalog_dir, session=sub_id))
-    assert "sub-agent task" in iout
-    assert "Created for session: " + sub_id in iout
+    assert "sub-agent task" in pout and "=== Seed Ideas ===" in pout
+    # The seed idea's proposal text got the "Created for session" line appended.
+    cat = open_catalog(session.catalog_dir)
+    try:
+        seed = cat.get_session(sub_id).seed_idea_id
+        assert "Created for session: " + sub_id in cat.get_idea(seed).proposal_text
+    finally:
+        from dendritic_hl_lib import locks
+        locks._reset_for_tests()
 
     # The parent now lists the sub as a child.
     pinfo = json.loads(_out(run_tool, capsys, tools.cmd_json_session_info,
@@ -156,7 +164,7 @@ def test_close_then_successor(session, run_tool, capsys, tmp_path):
 
     info = json.loads(_out(run_tool, capsys, tools.cmd_json_session_info,
                            session.ns()))
-    assert info["output_schedule"] is not None
+    assert len(info["output_schedules"]) == 1
 
     # Closing again is refused.
     with pytest.raises(DhHlError, match="already has outputs"):
@@ -277,6 +285,37 @@ def test_successor_requires_self_closed(session, run_tool, tmp_path):
     with pytest.raises(DhHlError, match="self-closed"):
         run_tool(tools.cmd_new_successor_session,
                  session.ns(proposal_name="r2", proposal=prop))
+
+
+# ---- query tools: seed ideas / session commentary / output schedules ------
+
+def test_list_seed_ideas(session, run_tool, capsys, tmp_path):
+    prop = _write(tmp_path, "p.txt", "multi\n")
+    majors = _major_schedule_ids(session)
+    out = _out(run_tool, capsys, tools.cmd_new_sub_session,
+               session.ns(proposal_name="ms", proposal=prop, schedule=majors[:2]))
+    sub_id = _line_after(out, "Created sub-session ")
+    listing = _out(run_tool, capsys, tools.cmd_list_seed_ideas,
+                   ns(catalog=session.catalog_dir, session=sub_id))
+    # Two seed ideas, both named "ms"; seed listing omits the proposal text.
+    assert listing.count("ms") >= 2
+    assert "Created for session:" not in listing  # omitted for seed listings
+
+
+def test_view_session_commentary_and_outputs(session, run_tool, tmp_path, capsys):
+    # Before closing: both tools error (no outputs).
+    with pytest.raises(DhHlError, match="no output schedules"):
+        run_tool(tools.cmd_view_session_commentary, session.ns())
+    with pytest.raises(DhHlError, match="no output schedules"):
+        run_tool(tools.cmd_list_output_schedules, session.ns())
+
+    _comment(session, run_tool, tmp_path)
+    run_tool(tools.cmd_close_session, session.ns())
+
+    vc = _out(run_tool, capsys, tools.cmd_view_session_commentary, session.ns())
+    assert "OUTPUT SCHEDULE:" in vc and "session summary" in vc
+    lo = _out(run_tool, capsys, tools.cmd_list_output_schedules, session.ns())
+    assert "Schedule:" in lo
 
 
 def test_delist_session(session, run_tool, capsys):

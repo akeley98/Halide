@@ -231,6 +231,6 @@ def test_catalog_location_by_handle(session, run_tool, capsys):
 
 def test_list_ideas_shows_canonical_state(session, run_tool, tmp_path, capsys):
     _make_idea(session, run_tool, tmp_path, "nocanon")
-    out = _out(run_tool, capsys, tools.cmd_list_ideas, session.ns())
+    out = _out(run_tool, capsys, tools.cmd_list_child_ideas, session.ns())
     assert "nocanon" in out
     assert "(none)" in out  # its canonical line

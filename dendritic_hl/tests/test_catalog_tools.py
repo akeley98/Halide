@@ -77,7 +77,7 @@ def test_idea_lifecycle(session, run_tool, tmp_path, capsys):
              session.ns(proposal_name="vec_wider", proposal=prop))
     assert "Created idea" in capsys.readouterr().out
 
-    run_tool(tools.cmd_list_ideas, session.ns())  # default schedule = unambiguous
+    run_tool(tools.cmd_list_child_ideas, session.ns())  # default schedule = unambiguous
     listing = capsys.readouterr().out
     assert "vec_wider" in listing
     assert "Vectorize wider." in listing

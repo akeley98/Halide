@@ -42,9 +42,11 @@ def _last_nonempty_line(text):
     return ""
 
 
-def _print_idea_listing(ctx, idea, marker=""):
-    """The 4-5 line idea summary shared by list_ideas, history, and the
-    private-idea listings (idea.md "List Ideas Tool")."""
+def _print_idea_listing(ctx, idea, marker="", include_proposal_text=True):
+    """The idea summary shared by list_child_ideas, history, and the private-idea
+    listings (idea.md "List Ideas Tools").  *include_proposal_text* is False for
+    list_seed_ideas, which omits the proposal-text first line and the
+    Created-for-session line."""
     catalog = ctx.catalog
     print("{}{}".format(marker, catalog.format_idea_id(idea)))
     print("  " + idea.proposal_name)
@@ -54,10 +56,11 @@ def _print_idea_listing(ctx, idea, marker=""):
         print("  " + catalog.format_schedule_id(catalog.schedules[idea.canonical]))
     else:
         print("  " + idea.canonical)  # dangling (e.g. git checkout desync)
-    print("  " + _first_line_72(idea.proposal_text))
-    last = _last_nonempty_line(idea.proposal_text)
-    if last.startswith("Created for session:"):
-        print("  " + last)
+    if include_proposal_text:
+        print("  " + _first_line_72(idea.proposal_text))
+        last = _last_nonempty_line(idea.proposal_text)
+        if last.startswith("Created for session:"):
+            print("  " + last)
     for line in _side_link_lines(catalog, idea):
         print("  " + line)
 
@@ -416,7 +419,7 @@ def cmd_force_parent_idea(args):
 # list_ideas
 # ---------------------------------------------------------------------------
 
-def cmd_list_ideas(args):
+def cmd_list_child_ideas(args):
     ctx = Context.for_catalog(args)
     node = ctx.resolve_schedule_arg(args.schedule)
     if not node.is_major():
@@ -426,6 +429,12 @@ def cmd_list_ideas(args):
         print("(no child ideas)")
     for idea in sorted(ideas, key=lambda i: i.full_id):
         _print_idea_listing(ctx, idea)
+
+
+def cmd_list_seed_ideas(args):
+    # Read-only over git-tracked state (idea.md marks it session-lock-free).
+    ctx = Context.for_session(args, session_lock=False)
+    _print_seed_ideas(ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -597,6 +606,17 @@ def cmd_list_equal_schedules(args):
     _print_schedule_list(ctx, equal)
 
 
+def cmd_list_output_schedules(args):
+    # Read-only over git-tracked state (idea.md marks it session-lock-free).
+    ctx = Context.for_session(args, session_lock=False)
+    session = ctx.session
+    if not session.has_outputs():
+        raise DhHlError("the current session has no output schedules yet")
+    # Stored order (primary first) -- NOT sorted by timestamp.
+    for sid in session.output_schedule_ids:
+        _print_schedule_node(ctx, ctx.catalog.get_schedule(sid))
+
+
 # ---------------------------------------------------------------------------
 # json_schedule_info / json_idea_info
 # ---------------------------------------------------------------------------
@@ -660,8 +680,11 @@ def _session_json(catalog, session):
         "id": session.full_id,
         "parent": session.parent_id,
         "children": [c.full_id for c in catalog.child_sessions(session)],
-        "seed_idea": session.seed_idea_id,
-        "output_schedule": session.output_schedule_id,
+        "prompt": session.prompt,
+        "default_anchor_schedule": session.default_anchor_schedule_id,
+        "seed_ideas": list(session.seed_idea_ids),
+        "output_schedules": list(session.output_schedule_ids),
+        "output_benchmark_sets": list(session.output_benchmark_set_ids),
         "delisted": session.delisted,
         "depth": session.depth,
     }
@@ -1314,9 +1337,23 @@ def cmd_session_handle(args):
 
 # ---- views ----------------------------------------------------------------
 
-def cmd_view_session_idea(args):
+def _print_seed_ideas(ctx):
+    seeds = ctx.session.seed_idea_ids
+    if not seeds:
+        print("(no seed ideas)")
+    for sid in seeds:
+        _print_idea_listing(ctx, ctx.catalog.get_idea(sid),
+                            include_proposal_text=False)
+
+
+def cmd_view_session_prompt(args):
     ctx = Context.for_session(args, session_lock=False)
-    _print_idea_view(ctx.catalog, ctx.catalog.get_idea(ctx.session.seed_idea_id))
+    # The prompt text, then the seed-idea listing under a divider.
+    sys.stdout.write(ctx.session.prompt)
+    if not ctx.session.prompt.endswith("\n"):
+        print()
+    print("=== Seed Ideas ===")
+    _print_seed_ideas(ctx)
 
 
 def _format_cancel_id(catalog, node, target_local):
@@ -1368,7 +1405,16 @@ def cmd_view_all_commentary(args):
 
 def cmd_view_session_commentary(args):
     ctx = Context.for_session(args, session_lock=False)
-    _print_all_commentary(ctx.catalog, _session_output_schedule(ctx), brief=False)
+    session = ctx.session
+    if not session.has_outputs():
+        raise DhHlError("the current session has no output schedules yet")
+    brief = bool(getattr(args, "brief", False))
+    for sid in session.output_schedule_ids:
+        node = ctx.catalog.get_schedule(sid)
+        print("#" * 72)
+        print("# OUTPUT SCHEDULE: " + ctx.catalog.format_schedule_id(node))
+        print("#" * 72)
+        _print_all_commentary(ctx.catalog, node, brief=brief)
 
 
 # ---------------------------------------------------------------------------
