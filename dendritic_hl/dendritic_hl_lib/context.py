@@ -51,12 +51,12 @@ class _PrivateMapState:
     def path(self):
         return self._path
 
-    @property
-    def map(self):
-        """The live mapping (real dict) for the object's OWN mutating methods.
-        External callers must go through `view` (read-only) -- handing out the
-        raw dict would let outside code mutate without dirtying, violating the
-        'objects dirty themselves; never dirty from outside' rule."""
+    def _loaded(self):
+        """Lazy-load the backing dict once (absent file -> {}).  Deliberately a
+        method, not a public `map` property: it is the *mutable* store, so only
+        this class's own methods touch it -- reads through it, writes ONLY via
+        `_set_item`/`_remove_item` (which dirty).  External readers use `view`.
+        It can't dirty on its own access because it is also the read path."""
         if self._map is _UNLOADED:
             try:
                 with open(self._path, "r", encoding="utf-8") as f:
@@ -69,10 +69,26 @@ class _PrivateMapState:
     def view(self):
         """A read-only view of the mapping for external readers.  Mutating it
         raises TypeError (Python's nearest thing to a const reference), so state
-        can only change through the object's own dirty-tracking methods."""
-        return MappingProxyType(self.map)
+        can only change through the mutation primitives below."""
+        return MappingProxyType(self._loaded())
 
-    def _dirtied(self, catalog=None):
+    # Mutation primitives: the ONLY way to change the mapping, so a change can
+    # never skip the dirty registration (mutation and dirtying are inseparable).
+    def _set_item(self, key, value, catalog=None):
+        self._loaded()[key] = value
+        self._mark_dirty(catalog)
+
+    def _remove_item(self, key):
+        """Delete *key* if present; returns whether it was.  Dirties iff it
+        actually removed something."""
+        m = self._loaded()
+        if key not in m:
+            return False
+        del m[key]
+        self._mark_dirty()
+        return True
+
+    def _mark_dirty(self, catalog=None):
         catalog = catalog or self._catalog
         if catalog is None:
             raise DhHlError(
@@ -94,36 +110,32 @@ class PrivateIdeaList(_PrivateMapState):
     """The session private idea list: ``{idea full ID -> pool tag}``."""
 
     def contains(self, idea_id):
-        return idea_id in self.map
+        return idea_id in self._loaded()
 
     def get(self, idea_id):
         try:
-            return self.map[idea_id]
+            return self._loaded()[idea_id]
         except KeyError:
             raise DhHlError(
                 "idea is not in the session's private idea list: " + idea_id)
 
     def ids(self):
-        return list(self.map)
+        return list(self._loaded())
 
     def set(self, idea_id, pool_tag):
-        self.map[idea_id] = pool_tag
-        self._dirtied()
+        self._set_item(idea_id, pool_tag)
 
     def remove(self, idea_id):
-        self.get(idea_id)  # error if absent (idea.md close_session note)
-        del self.map[idea_id]
-        self._dirtied()
+        if not self._remove_item(idea_id):  # idea.md close_session note
+            raise DhHlError(
+                "idea is not in the session's private idea list: " + idea_id)
 
     def rename(self, before, after):
-        n = 0
-        for k, v in self.map.items():
-            if v == before:
-                self.map[k] = after
-                n += 1
-        if n:
-            self._dirtied()
-        return n
+        # Scan (read) for matches, then rewrite each through the primitive.
+        matches = [k for k, v in self._loaded().items() if v == before]
+        for k in matches:
+            self._set_item(k, after)
+        return len(matches)
 
 
 class PrivateBenchmarkSetList(_PrivateMapState):
@@ -131,17 +143,14 @@ class PrivateBenchmarkSetList(_PrivateMapState):
     cached cost stats}`` (the cache is built by `_benchmark_set_cache`)."""
 
     def ids(self):
-        return list(self.map)
+        return list(self._loaded())
 
     def add(self, set_id, catalog):
         # Caching reads the referenced benchmark sub-objects, hence a catalog.
-        self.map[set_id] = _benchmark_set_cache(catalog, set_id)
-        self._dirtied(catalog)
+        self._set_item(set_id, _benchmark_set_cache(catalog, set_id), catalog)
 
     def remove(self, set_id):
-        if set_id in self.map:
-            del self.map[set_id]
-            self._dirtied()
+        self._remove_item(set_id)  # silent no-op if absent
 
 
 class CurrentAnchor:
