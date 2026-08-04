@@ -321,6 +321,12 @@ def test_benchmark_set_created_for_full_run(session, run_tool, fake_build,
         assert len(per_param[0]) == 2     # 2 batches
         assert all(isinstance(b, str) for b in per_param[0])
 
+    # The generated set is recorded in the session's private benchmark set list.
+    import json as _json
+    priv = _json.load(open(os.path.join(session.private_dir,
+                                        "private_benchmark_sets.json")))
+    assert bs_id in priv
+
 
 def test_no_benchmark_set_without_profile(session, run_tool, fake_build, capsys):
     run_tool(build.cmd_init_build,

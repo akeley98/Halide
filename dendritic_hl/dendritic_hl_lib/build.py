@@ -469,6 +469,8 @@ def cmd_build(args):
     # guaranteed populated.
     if only_kind == "all" and profile_batches > 0 and all_ok:
         bs = catalog.create_benchmark_set(bench_index)
+        # Add it to the session's private benchmark set list (idea.md Build Tool).
+        ws.add_private_benchmark_set(bs.full_id)
         ctx.finish()
         print("dh_hl: Benchmark set ID: " + bs.full_id)
     else:
