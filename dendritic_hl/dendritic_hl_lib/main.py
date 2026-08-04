@@ -152,6 +152,7 @@ COMMAND_HELP = {
     "new_successor_session": "Start a successor to a self-closed top-level session.",
     "close_session": "Set the current session's output schedule (its final result).",
     "delist_session": "Mark the current session as delisted.",
+    "join_session": "Merge another session's outputs into the current private lists.",
     "list_open_sessions": "List all open (not-closed) sessions with handles.",
     "list_termini": "List all termini (top-level, not-delisted, no successor).",
     "copy_schedule": "Write a schedule node's C++ to a file ('-' for stdout).",
@@ -378,6 +379,14 @@ def _build_parser():
                     help="output schedule IDs (default: status)")
 
     add("delist_session")
+
+    sp = add("join_session")
+    sp.add_argument("joined", help="the joined session (handle or full ID)")
+    sp.add_argument("--dry-run", dest="dry_run", action="store_true",
+                    help="print what would be joined, mutating nothing")
+    sp.add_argument("--pool-prefix", dest="pool_prefix", default="",
+                    help="prefix for newly-added ideas' pool tags")
+
     add("list_open_sessions")
     add("list_termini")
 
@@ -501,6 +510,7 @@ _DISPATCH = {
     "new_successor_session": tools.cmd_new_successor_session,
     "close_session": tools.cmd_close_session,
     "delist_session": tools.cmd_delist_session,
+    "join_session": tools.cmd_join_session,
     "list_open_sessions": tools.cmd_list_open_sessions,
     "list_termini": tools.cmd_list_termini,
     "copy_schedule": tools.cmd_copy_schedule,

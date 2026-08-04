@@ -287,6 +287,83 @@ def test_successor_requires_self_closed(session, run_tool, tmp_path):
                  session.ns(proposal_name="r2", proposal=prop))
 
 
+# ---- join_session ---------------------------------------------------------
+
+def _build_joined_session(session, pool="jpool",
+                          bench="Host_2026-01-01T000000_000000Z"):
+    """Out-of-band: a closed sub-session J whose single output is a fresh
+    schedule under a new seed idea, tagged *pool*, with one benchmark set.
+    Returns (J_full_id, output_parent_idea_full_id)."""
+    cat = open_catalog(session.catalog_dir)
+    try:
+        s = cat.get_session(session.session_id)
+        major = next(n for n in cat.schedules.values()
+                     if n.is_major() and not n.is_root())
+        seed_i = cat.create_idea(major, "joinedseed", "joined\n")
+        dup = cat.create_schedule("joined source\n", parent_idea=seed_i)
+        seed_i.set_canonical(dup.full_id)
+        j = cat.create_session(seed_i, s, 1, prompt="joined prompt\n")
+        j.set_outputs([(dup.full_id, pool)], [bench])
+        cat.flush(); safety.commit()
+        return j.full_id, seed_i.full_id
+    finally:
+        _reset()
+
+
+def test_join_session(session, run_tool, capsys):
+    j_id, joined_idea = _build_joined_session(session)
+    out = _out(run_tool, capsys, tools.cmd_join_session,
+               session.ns(joined=j_id, dry_run=False, pool_prefix=""))
+    assert "dh_hl: add benchmark set Host_2026-01-01T000000_000000Z" in out
+    assert "dh_hl: add idea " + joined_idea in out
+    assert "dh_hl: pool tag jpool" in out
+    # The joined idea is now in S's private list at the joined pool tag.
+    assert _out(run_tool, capsys, tools.cmd_get_pool_tag,
+                session.ns(idea=joined_idea)).strip() == "jpool"
+
+
+def test_join_session_pool_prefix(session, run_tool, capsys):
+    j_id, joined_idea = _build_joined_session(session)
+    _out(run_tool, capsys, tools.cmd_join_session,
+         session.ns(joined=j_id, dry_run=False, pool_prefix="px"))
+    assert _out(run_tool, capsys, tools.cmd_get_pool_tag,
+                session.ns(idea=joined_idea)).strip() == "px.jpool"
+
+
+def test_join_session_dry_run_mutates_nothing(session, run_tool, capsys):
+    j_id, joined_idea = _build_joined_session(session)
+    out = _out(run_tool, capsys, tools.cmd_join_session,
+               session.ns(joined=j_id, dry_run=True, pool_prefix=""))
+    assert "dh_hl: add idea " + joined_idea in out  # still reports
+    # ...but the idea was NOT added (get_pool_tag errors).
+    with pytest.raises(DhHlError, match="not in the session's private idea list"):
+        run_tool(tools.cmd_get_pool_tag, session.ns(idea=joined_idea))
+
+
+def test_join_session_existing_tag_unchanged(session, run_tool, capsys):
+    j_id, joined_idea = _build_joined_session(session)
+    run_tool(tools.cmd_join_session,
+             session.ns(joined=j_id, dry_run=False, pool_prefix=""))
+    # Retag locally, then join again: the existing tag must win (unchanged).
+    run_tool(tools.cmd_set_pool_tag,
+             session.ns(idea=joined_idea, pool_tag="mine"))
+    run_tool(tools.cmd_join_session,
+             session.ns(joined=j_id, dry_run=False, pool_prefix="px"))
+    assert _out(run_tool, capsys, tools.cmd_get_pool_tag,
+                session.ns(idea=joined_idea)).strip() == "mine"
+
+
+def test_join_session_requires_outputs(session, run_tool, tmp_path, capsys):
+    # A fresh sub-session of S has no outputs.
+    prop = _write(tmp_path, "p.txt", "open sub\n")
+    out = _out(run_tool, capsys, tools.cmd_new_sub_session,
+               session.ns(proposal_name="opensub", proposal=prop))
+    sub_id = _line_after(out, "Created sub-session ")
+    with pytest.raises(DhHlError, match="no outputs to join"):
+        run_tool(tools.cmd_join_session,
+                 session.ns(joined=sub_id, dry_run=False, pool_prefix=""))
+
+
 # ---- query tools: seed ideas / session commentary / output schedules ------
 
 def test_list_seed_ideas(session, run_tool, capsys, tmp_path):

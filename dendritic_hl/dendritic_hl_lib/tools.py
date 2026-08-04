@@ -987,6 +987,62 @@ def cmd_delist_session(args):
     print("Delisted session " + ctx.session.full_id)
 
 
+# ---- join_session ---------------------------------------------------------
+
+def _resolve_other_session(catalog, spec):
+    """Resolve a SECOND session (the joined one) within *catalog*: a handle
+    (must point at this catalog) or a session full ID."""
+    if spec.startswith("tmp."):
+        cat_dir, sid = locks.resolve_handle(spec)
+        if os.path.abspath(cat_dir) != catalog.catalog_dir:
+            raise DhHlError(
+                "joined session handle {} is for a different catalog".format(spec))
+        return catalog.get_session(sid)
+    if not ids.is_session_id(spec):
+        raise DhHlError("not a session handle or valid session ID: " + spec)
+    return catalog.get_session(spec)
+
+
+def cmd_join_session(args):
+    # Locks only the CURRENT session (idea.md): the joined session's git-tracked
+    # outputs are read under the catalog lock; its private workspace is untouched.
+    ctx = Context.for_session(args, session_lock=True)
+    catalog = ctx.catalog
+    ws = ctx.workspace
+    joined = _resolve_other_session(catalog, args.joined)
+    if not joined.has_outputs():
+        raise DhHlError("the joined session has no outputs to join")
+    dry = bool(getattr(args, "dry_run", False))
+    prefix = getattr(args, "pool_prefix", "") or ""
+
+    existing = ws.read_private_ideas()  # snapshot: "already in the list" pre-join
+    joined_tags = joined.output_schedule_pool_tags()
+
+    for bs_id in joined.output_benchmark_set_ids:
+        print("dh_hl: add benchmark set " + bs_id)
+        if not dry:
+            ws.add_private_benchmark_set(bs_id)
+
+    for sid in joined.output_schedule_ids:
+        # An output's parent idea is added to the current private list.  A root
+        # output "can't happen" (close_session forbids it); a raw error is OK.
+        parent_idea_id = catalog.get_schedule(sid).parent_id
+        if parent_idea_id in existing:
+            tag = existing[parent_idea_id]                 # unchanged
+        else:
+            tag = joined_tags[sid]
+            if prefix:
+                tag = "{}.{}".format(prefix, tag)
+        print("dh_hl: add idea " + parent_idea_id)
+        print("dh_hl: pool tag " + tag)
+        if not dry:
+            ws.set_pool_tag(parent_idea_id, tag)
+
+    # --dry-run must have mutated nothing; assert that as a self-check.
+    catalog.flush()
+    safety.commit(assert_no_writes=dry)
+
+
 # ---- session private idea list --------------------------------------------
 
 def _list_private_ideas(args, *, filter_kind):
