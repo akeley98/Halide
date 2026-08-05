@@ -1247,6 +1247,7 @@ The tool
 2. (`--profile` only) runs all generated binaries with Andrew Adams's profiler,
    with new benchmark objects added to the profiled code's source schedule node.
    The new objects' IDs are printed.
+   The `stdout` of the profiling runs are redirected to the benchmark sub-object.
 
 3. Updates the result state of each built/profiled schedule node,
    monotonically (worse to better only).

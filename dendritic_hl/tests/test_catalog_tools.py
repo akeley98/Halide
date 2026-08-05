@@ -11,8 +11,9 @@ import json
 
 import pytest
 
-from dendritic_hl_lib import tools
+from dendritic_hl_lib import safety, tools
 from dendritic_hl_lib.errors import DhHlError
+from conftest import ns, open_catalog
 
 
 def _write(tmp_path, name, text):
@@ -159,6 +160,43 @@ def test_edited_workspace_is_inconsistent(session, run_tool, capsys):
     # The dramatic "workspace inconsistent" AGENTS banner was intentionally
     # removed (idea.md Status Tool); only the missing-files case advises now.
     assert "AGENTS:" not in out
+
+
+def test_view_benchmark_stdout(tmp_path, run_tool, capsys):
+    """view_benchmark_stdout prints the `stdout` stored on the benchmark verbatim
+    (a fabricated benchmark, so no Halide needed)."""
+    cat_dir = str(tmp_path / "proj.dh_hl")
+    cat = open_catalog(cat_dir)
+    cat.ensure_created()
+    R = cat.create_schedule("root", parent_idea=None)
+    captured = "histp  BEST_TIME_MSEC_PER_ITER  1.5\nBest output throughput ...\n"
+    bench = R.add_benchmark("Testbox", {
+        "hostname": "Testbox", "cpu_count": 4, "parameters": {},
+        "profiler": {"name": "p"}, "warnings": [], "stdout": captured})
+    cat.flush()
+    safety.commit()
+
+    run_tool(tools.cmd_view_benchmark_stdout,
+             ns(catalog=cat_dir, benchmark=bench.full_id))
+    assert capsys.readouterr().out == captured
+
+
+def test_view_benchmark_stdout_missing_defaults_empty(tmp_path, run_tool, capsys):
+    """A pre-stdout benchmark (no `stdout` key) prints nothing, not a crash
+    (idea.md "Benchmark Sub-object State": absent stdout defaults to "")."""
+    cat_dir = str(tmp_path / "proj.dh_hl")
+    cat = open_catalog(cat_dir)
+    cat.ensure_created()
+    R = cat.create_schedule("root", parent_idea=None)
+    bench = R.add_benchmark("Testbox", {
+        "hostname": "Testbox", "cpu_count": 4, "parameters": {},
+        "profiler": {"name": "p"}, "warnings": []})
+    cat.flush()
+    safety.commit()
+
+    run_tool(tools.cmd_view_benchmark_stdout,
+             ns(catalog=cat_dir, benchmark=bench.full_id))
+    assert capsys.readouterr().out == ""
 
 
 def tools_ns_catalog(catalog_dir, **kw):

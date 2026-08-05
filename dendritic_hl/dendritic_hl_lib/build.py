@@ -111,12 +111,15 @@ def _trace_build(phase, *detail):
 def _run_streamed(cmd, cwd=None, env=None):
     """Run *cmd*, letting its stdout/stderr flow to ours.  Returns exit code.
 
+    We deliberately do NOT echo the command itself: the toolchain invocations
+    carry long absolute include paths and would drown the `dh_hl:` banners in
+    noise (idea.md Build Tool).  Compiler/generator output still flows through.
+
     Flush our own stdout/stderr FIRST so that any `dh_hl:` lines we printed before
     this child are ordered *before* the child's output in a captured stream (our
     Python stdout is block-buffered when piped; the child writes to the same fd).
     Tests rely on this ordering (generator prints vs the `dh_hl:` generator
     banners)."""
-    print("+ " + " ".join(cmd), file=sys.stderr)
     sys.stdout.flush()
     sys.stderr.flush()
     return subprocess.run(cmd, cwd=cwd, env=env).returncode
@@ -237,20 +240,24 @@ def _link(bin_dir, basename):
 
 
 def _run_benchmark(bin_dir, rungen_bin, json_out_path, warnings_out_path):
-    """Run one benchmark binary.  Captures the binary's stdout (stored in the
-    benchmark JSON) while letting stderr flow.  Returns (rc, stdout_text)."""
+    """Run one benchmark binary.  Captures the binary's stdout -- it is redirected
+    into the benchmark sub-object (later read back by `view_benchmark_stdout`),
+    NOT echoed to the harness stdout (idea.md Build Tool) -- while letting stderr
+    flow.  Returns (rc, stdout_text)."""
     env = dict(os.environ)
     env["HL_PROFILER_JSON_OUTPUT"] = json_out_path
     # Andrew Adams's profiler doesn't put warnings in the main JSON yet; a
     # separate secret-menu env var names a file of per-pipeline warnings (see
     # reference_build_commands.md "Warnings Output").
     env["HL_PROFILER_JSON_TEMPORARY_WARNINGS"] = warnings_out_path
+    # Deliberately NOT --quiet: RunGen's `halide_print:` profiler-stats table is
+    # kept in the captured stdout.  It duplicates the parsed JSON, but the plain
+    # table is an easier read than the JSON tools for simple tasks, and it lands
+    # in the benchmark sub-object (viewable via `view_benchmark_stdout`) rather
+    # than the harness output, so it isn't noise (idea.md Build Tool).
     cmd = ["./" + rungen_bin, "--benchmarks=all", "--estimate_all"]
-    print("+ " + " ".join(cmd), file=sys.stderr)
     p = subprocess.run(cmd, cwd=bin_dir, env=env, stdout=subprocess.PIPE,
                        universal_newlines=True)
-    if p.stdout:
-        sys.stdout.write(p.stdout)  # still surface it to the caller
     return p.returncode, p.stdout or ""
 
 

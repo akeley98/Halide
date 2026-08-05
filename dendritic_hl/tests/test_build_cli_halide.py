@@ -119,6 +119,37 @@ def test_generator_print_ordered_within_banners(run_cli, tmp_path):
     assert begin < printed < end, lines
 
 
+def test_profiling_stdout_redirected_then_viewable(run_cli, tmp_path):
+    """The profiling run's stdout is redirected into the benchmark sub-object,
+    NOT echoed to the harness stdout, and comes back out via
+    `view_benchmark_stdout` (idea.md Build Tool + View Benchmark Stdout Tool).
+
+    RunGenMain prints its benchmark result to stdout ("... produces best case of
+    ... sec/iter ...", "Best output throughput is ..."); we assert that text is
+    absent from `build`'s stdout but present in the viewed benchmark stdout."""
+    cat_dir, handle = _bootstrap(run_cli, tmp_path)
+    _set_params(run_cli, handle, [{"enable_parallel": True}])
+    r = run_cli("init_build", "-s", handle, "--target", "workspace",
+                "--other", "none", "--anchor", "none")
+    assert r.returncode == 0, r.stderr
+    r = run_cli("build", "-s", handle, "--profile", "1", "--only", "all")
+    assert r.returncode == 0, r.stderr
+    # The run's stdout is redirected, so the harness output must NOT carry it.
+    assert "produces best case of" not in r.stdout
+    assert "Best output throughput is" not in r.stdout
+
+    # The `dh_hl: Benchmark ID:` line prints a resolvable (short) benchmark ID.
+    bench_id = _line(r.stdout, "dh_hl: Benchmark ID: ")
+    r = run_cli("view_benchmark_stdout", "-C", cat_dir, bench_id)
+    assert r.returncode == 0, r.stderr
+    assert "produces best case of" in r.stdout
+    assert "Best output throughput is" in r.stdout
+    # The `halide_print:` profiler-stats table is intentionally kept in the
+    # captured stdout (an easy read next to the JSON tools).
+    assert "halide_print:" in r.stdout
+    assert "total time:" in r.stdout
+
+
 def test_benchmark_set_cells_attributed(run_cli, tmp_path):
     """Each benchmark-set cell references a benchmark that actually belongs to
     that (schedule, parameters index): the benchmark full ID is prefixed by the
