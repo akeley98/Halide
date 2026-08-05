@@ -1190,14 +1190,16 @@ def cmd_join_session(args):
 
 def _pool_enable_predicate(pools_exact, pools_regex):
     """Build `enabled(tag) -> bool` from the --pool / --pools arguments.  With no
-    such arguments, every pool tag is enabled (idea.md)."""
+    such arguments, every pool tag *without a leading `.`* is enabled -- i.e.
+    hidden ideas (hide_private_idea prepends `.`) are excluded by default, but an
+    explicit --pool/--pools can still name/match a hidden pool (idea.md)."""
     exact = set(pools_exact or [])
     try:
         patterns = [re.compile(p) for p in (pools_regex or [])]
     except re.error as e:
         raise DhHlError("invalid --pools regex: {}".format(e))
     if not exact and not patterns:
-        return lambda tag: True
+        return lambda tag: not tag.startswith(".")
     return lambda tag: tag in exact or any(p.search(tag) for p in patterns)
 
 

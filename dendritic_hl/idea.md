@@ -1537,7 +1537,8 @@ Performs automated detection of ideas "obsoleted by" lower cost child ideas.
 
 * `--pools {regex}`, enable including idea nodes with regex-matched pool tags.
   Unions with other `--pool`, `--pools` arguments;
-  if no such arguments, all pool tags are enabled.
+  if no such arguments, all pool tags without a leading `.` are enabled
+  (see `hide_private_idea`).
 
 * `--done`, include only idea nodes with canonical schedules.
 
@@ -1626,8 +1627,6 @@ is not in the private idea list.
 The purpose of the pool tag is to allow the agent to enforce some
 diversity in the frontier of "best ideas" shown in `list_private_ideas`.
 Ideas are ranked only within their pools.
-
-FUTURE: use the `.` prefix
 <!-- end help -->
 
 

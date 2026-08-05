@@ -196,6 +196,28 @@ def test_pool_and_pools_filters(session, run_tool, capsys):
     assert set(rx) == {"InVec", "InTile"}      # regex union, misc/default excluded
 
 
+def test_hidden_pools_excluded_by_default_but_selectable(session, run_tool, capsys):
+    """A pool tag with a leading '.' (hide_private_idea) is excluded from the
+    default (no --pool/--pools) view, but an explicit --pool/--pools still
+    matches it (idea.md leading-'.' convention)."""
+    def build(cat, ws):
+        C0 = _seed_canonical(cat, session)
+        _idea(cat, ws, C0, "Shown", "vis", [100, 100, 100])
+        _idea(cat, ws, C0, "Hidden", ".vis", [100, 100, 100])
+    _build(session, build)
+
+    # Default: the hidden pool (and its idea) is omitted; "vis" and the seed's
+    # "default" remain.
+    default_view, _, _ = _out(run_tool, capsys, session)
+    assert "Shown" in default_view and "Hidden" not in default_view
+    # Explicit --pool names the hidden pool -> it appears.
+    picked, _, _ = _out(run_tool, capsys, session, pool=[".vis"])
+    assert set(picked) == {"Hidden"}
+    # A regex that matches the hidden tag also surfaces it.
+    rx, _, _ = _out(run_tool, capsys, session, pools=[r"\.vis"])
+    assert "Hidden" in rx
+
+
 # ---- obsoleted-by ---------------------------------------------------------
 
 def _obsoletion_setup(session, child_cost):
