@@ -1193,14 +1193,22 @@ This is the main mechanism by which new schedules enter the catalog.
 The harness (by design) can only build or profile schedules in the catalog.
 So this is the first step to building or profiling a new schedule.
 
-A `build` fails if the session's most recent `init_build` failed
-Caveat: `init_build` tools with failed CLI command parsing have no session.
+A `build` fails if the session's most recent `init_build` failed.
+Caveat: low-level `init_build` failures, and missing `-s`, slip by.
 
-Takes optional arguments specifying the up to three schedule nodes.
+Default 3 nodes: the "target node" is a copy of the current workspace files,
+the "other node" is the target node's parent (if it exists),
+and the anchor node is the session's current anchor schedule (if it exists).
+This may be overriden with optional arguments.
 <!-- help -->
 
-* `--target {schedule ID}` selects the target schedule node.
-  The special value `workspace` is the default, detailed below.
+IMPL TASK: add the lenient no `--target` case.
+
+* `--target {schedule ID}` or `{schedule ID}` alone
+  selects the target schedule node,
+  the magic `workspace` value is the default.
+  <!-- lenient no --target case added due to past agent mistakes -->
+  <!-- Probably they overgeneralize from other commands, which is understandable. -->
 
 * `--other {schedule ID}` selects the other schedule node.
   The special value `none` disables the other schedule node,
