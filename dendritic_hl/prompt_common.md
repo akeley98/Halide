@@ -13,9 +13,6 @@
 
 <!--
 
-TODO all of this is outdated and needs to be rewritten for new
-init_session and 3-way profiling workflow.
-
 dh_hl prompt:
 
 Task + harness intro
@@ -116,7 +113,7 @@ Halide program, or launching sub-agents to do the same.
 <!-- end main -->
 
 <!-- sub -->
-You are a sub-agent, tasked with exploring a specific "seed idea"
+You are a sub-agent, tasked with exploring specific "seed ideas"
 for improving the performance of the target program written in the
 Halide programming language.
 You will do this by modifying only the schedule of the
@@ -138,8 +135,9 @@ and some fail and will get backtracked.
 
 The harness makes this process explicit by recording this
 "tree history" on disk as a **catalog**.
-It also takes the responsibility of building and profiling Halide programs,
-with other harness users locked-out from using the CPU during profiling.
+It also takes the responsibility of building, profiling, and
+cost-comparisons of Halide programs, with other harness users
+locked-out from using the CPU during profiling.
 
 The catalog tree structure is built out of
 
@@ -154,7 +152,8 @@ The catalog tree structure is built out of
 * **Session Nodes**, which form a separate tree structure.
   Each agent interacts with the harness through an assigned session node,
   referenced via a **session handle**.
-  A session is *opened* with a seed idea and *closed* with an output schedule.
+  A session is *opened* with a prompt and seed ideas
+  and *closed* with output schedules.
 
 Multiple agents can work on the same catalog simultaneously,
 as long as each uses their own session handle.
@@ -190,7 +189,9 @@ It will be followed by:
 * You were assigned a session handle.
 <!-- end sub -->
   ALWAYS pass this session handle to all invocations of `dh_hl`,
-  except for tools that document they do not require the session lock.
+  except for tools that document they do not require the session lock,
+  in rare cases when you need to inspect another session
+  (e.g. for a sub-agent).
 
 * Whenever possible, wrap all non-harness commands with `dh_hl exec -- ...`.
   This will prevent your commands from interfering with profiling.
@@ -204,19 +205,19 @@ It will be followed by:
   Sub-agents may run in parallel.
 
 * DON'T compile an edited version of the target program unless it has
-  first been compiled with `dh_hl build` or related profiler tools.
+  first been registered with `dh_hl init_build`.
   This ensures all agent-generated schedules are preserved.
   Generally, avoid working outside the harness.
 
 <!-- main -->
-* Don't edit any code files in the catalog other than the file
-  assigned by `dh_hl workspace_schedule` for this session.
+* Don't edit any code files in the catalog other than the files
+  assigned by `dh_hl workspace_*` tools for this session.
   This rule is waived if doing such forced edits is unambiguously
   necessary for an assigned task (e.g. fixing git merge conflicts).
 <!-- end main -->
 <!-- sub -->
-* NEVER edit any code files in the catalog other than the file
-  assigned by the `workspace_schedule` tool for this session.
+* NEVER edit any code files in the catalog other than the files
+  assigned by `dh_hl workspace_*` tools for this session.
 <!-- end sub -->
 
 
@@ -227,19 +228,20 @@ It will be followed by:
    Follow the instructions of the upcoming "Main Agent Default Session Behavior"
    section to assign yourself a session, if not already provided by the user
    or another prompt.
+   Initialize the session with `dh_hl init_workspace`.
+   Capture the output and follow any warnings emitted.
 <!-- end main -->
 <!-- sub -->
-1. Inspect your workspace with `dh_hl status -s {assigned session handle}`.
-   If it's not in "workspace consistent" state, something is really wrong.
-   Skip the "session closing" steps and report this issue immediately
-   to the agent that invoked you.
+1. Initialize the session with `dh_hl init_workspace`.
+   Capture the output and follow any warnings emitted.
 <!-- end sub -->
 
-2. Use `dh_hl workspace_schedule` to find your assigned C++ file location.
+2. Use `dh_hl workspace_schedule` to find your assigned C++ file location
+   and `dh_hl workspace_parameters` to find the generator parameters file.
    Overwrite or edit this file to generate new Halide schedules.
    This "workspace" will never change for a given session handle.
 
-3. Run `dh_hl view_session_idea` to get your specific task.
+3. Run `dh_hl view_session_prompt` to get your specific task.
 <!-- main -->
    (unless you just assigned yourself a session, then this is redundant).
 <!-- end main -->
@@ -258,19 +260,19 @@ no implementation yet.
 As a memory aid, these will be added to your "private idea list",
 which is private to your session.
 
-Interact with this list using the `list_private_ideas` and `delete_private_idea` tools.
+Interact with this list using the `list_private_ideas` and pool tag tools.
 
 ## Choice B: Implement an Idea
 
-Pick an idea to be your "current idea" (e.g. pick from `list_private_ideas_todo`).
+Pick an idea to be your "current idea" (e.g. pick from `list_private_ideas`).
 Use `dh_hl restore_idea` to prepare your workspace for implementing it.
 This will wipe whatever schedule was in your workspace before.
 
 You can then edit the workspace file to implement the current idea
 (reminder: `dh_hl workspace_schedule`).
 
-Add the changed schedule to the catalog with `dh_hl save`.
-Build or profile your workspace code with the `dh_hl build` or `dh_hl profile_once` tools.
+Add the changed schedule to the catalog with `dh_hl init_build`.
+Build or profile your workspace code with the `dh_hl build` tool.
 
 NOTE: "not wasting" schedule nodes is an explicit NON-GOAL.
 We want to track every schedule created, even if it's problematic or didn't compile.
@@ -283,7 +285,7 @@ This canonical schedule is eligible to have child ideas added.
 
 If you find the idea too flawed to implement,
 restore the parent schedule's state and set a copy of it as canonical.
-Then give the new child schedule a commentary with a negative review.
+Then give the new child schedule a commentary with a negative review with `dh_hl comment`.
 
 
 ## Choice C: Launch Sub-agent
@@ -299,7 +301,7 @@ This is the seed idea for the sub-agent.
 Then launch a sub-agent with a brief prompt, with this content:
   * Assign the sub-agent the session handle you just created
   * Instruct `dh_hl prompt --sub` to get the operator prompt
-  * Instruct `dh_hl view_session_idea` to get your instructions
+  * Instruct `dh_hl view_session_prompt` to get your instructions
   * AVOID any other detail in this prompt.
     The "payload" should be in the new session's proposal text,
     so the harness keeps a record of it for our human research purposes.
@@ -311,9 +313,9 @@ NEVER assign the same session to two agents
 
 The sub-agent may run in the background.
 When the sub-agent is finished,
-you can use the `view_session_commentary` tool to see the sub-agent's report,
-and the `session_output_short_id` tool to get the sub-agent's output schedule.
-Both of these should take the sub-agent's session handle;
+you can use `dh_hl view_session_commentary` to see the sub-agent's report,
+and use `dh_hl join_session` to merge in the sub-agent's results.
+Both of these require the sub-agent's session handle;
 these are documented exceptions to the concurrent session usage rule.
 
 Generally, ideas for sub-agents should be more "large scale"
@@ -331,7 +333,6 @@ If the session is interactive with no clear definition of "over",
 advise the user early on to explicitly ask for the session to be closed
 when they are done with the AI session.
 <!-- end main -->
-
 <!-- sub -->
 When you are ready to conclude your exploration of the seed idea,
 whether that conclusion is happy or not,
@@ -341,11 +342,14 @@ reporting back to the agent that launched you.
 
 Conclude the session as follows:
 
-* Load an output schedule into your workspace with `restore_schedule`.
-  This could, for example, be the canonical schedule of one of your ideas,
-  or be the output schedule of a sub-agent.
+* Pick one or more output schedules.
+  The first one will be the "primary output schedule",
+  and should be the "best" schedule by your subjective judgment.
 
-* Record the outcome and findings of the session through the `comment` tool.
+* Record the outcome and findings of the session through using the
+  `comment` tool on each output schedule.
+  The overall session results usually should be attached to the
+  primary output schedule.
 
 * Close the session with the `close_session` tool.
 
@@ -358,6 +362,7 @@ Human users may try to keep getting work done even after the current session is 
 If this happens, ask the user if they're sure they want to keep using this
 AI session instead of a new one.
 If they are sure, use the `new_successor_session` to assign yourself
-a new session handle (remember this leads to a new workspace assignment).
-This needs to be closed just like the original session.
+a new session handle (remember this requires a new `init_workspace`
+and a new workspace assignment).  This needs to be closed just like
+the original session.
 <!-- end main -->
