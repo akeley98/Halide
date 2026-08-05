@@ -15,7 +15,8 @@ import shutil
 import pytest
 
 from dendritic_hl_lib import build, safety, tools
-from conftest import make_catalog_session, open_catalog, ns, Sess, _PKG_ROOT
+from conftest import (make_catalog_session, open_catalog, ns, Sess, _PKG_ROOT,
+                      branch_fresh_idea)
 
 _BRIGHTEN = os.path.join(_PKG_ROOT, "rungen_example", "brighten_generator.cpp")
 _HIST = os.path.join(_PKG_ROOT, "tests", "hist_opus_before_peeking.cpp")
@@ -45,7 +46,10 @@ def _stmt_line(path):
 def test_build_and_profile_real_halide(brighten_session, run_tool, capsys):
     S = brighten_session
     # Give the target two parameters objects, then init_build --target workspace
-    # (workspace now inconsistent -> a new child node with those params).
+    # (workspace now inconsistent -> a new child node with those params).  The
+    # seed idea already has a canonical, so branch a fresh idea first (idea.md
+    # "Init-Build Tool": init_build won't add children to a canonicalized idea).
+    branch_fresh_idea(S)
     S.write_params('[{"offset": 5}, {"offset": 30}]')
     run_tool(build.cmd_init_build,
              S.ns(target="workspace", other="none", anchor="none"))

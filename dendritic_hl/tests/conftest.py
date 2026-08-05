@@ -128,6 +128,33 @@ def make_catalog_session(cat_dir, source=DUMMY_SOURCE, idea_name="seed"):
         locks._reset_for_tests()
 
 
+def branch_fresh_idea(session, name="explore"):
+    """Move the session's current idea onto a fresh child idea that has NO
+    canonical yet, and return its full ID.  Models the real 'explore a change'
+    workflow: the seed idea already has a canonical (a copy of its parent), so
+    `init_build --target workspace` refuses to add more children to it (idea.md
+    "Init-Build Tool") -- you branch a new idea off the canonical and explore
+    there.  Tests that create a new child schedule via a perturbed workspace must
+    first land on such a canonical-less idea."""
+    from dendritic_hl_lib import locks, safety
+    from dendritic_hl_lib.catalog import Catalog
+    from dendritic_hl_lib.context import SessionWorkspace
+    locks._fake_hold_for_tests(session.catalog_dir)
+    try:
+        cat = Catalog(session.catalog_dir)
+        seed = cat.get_idea(cat.get_session(session.session_id).seed_idea_id)
+        canonical = cat.get_schedule(seed.canonical)
+        idea = cat.create_idea(canonical, name, "explore proposal\n")
+        ws = SessionWorkspace(cat.catalog_dir, session.session_id, catalog=cat)
+        ws.set_pool_tag(idea.full_id, "default")
+        ws.current_idea_state.set_idea(idea.full_id)
+        cat.flush()
+        safety.commit()
+        return idea.full_id
+    finally:
+        locks._reset_for_tests()
+
+
 def make_profiler_obj(wall_time_min, *, profiler_version=1, name="p", funcs=None,
                       **extra):
     """A minimal profiler pipeline object (idea.md "Benchmark Sub-object State")

@@ -18,8 +18,8 @@ from . import profiler_warnings
 from . import prompts
 from . import safety
 from .catalog import (Catalog, COMMENTARY_REVIEWS, DEFAULT_PARAMETERS,
-                      IDEA_SIDE_LINK_TYPES, dump_parameters,
-                      load_parameters_text)
+                      IDEA_SIDE_LINK_TYPES, canonical_block_advice,
+                      dump_parameters, load_parameters_text)
 from .context import (Context, SessionWorkspace, resolve_target,
                       _validate_catalog_dir, read_text_or_stdin)
 from .errors import DhHlError
@@ -348,7 +348,7 @@ def _minor_schedule_advice(catalog, node):
         canon = catalog.format_schedule_id(catalog.schedules[parent.canonical])
         lines.append(
             "Its parent idea's canonical schedule is {0}; branch the new idea "
-            "off that instead:\n    dh_hl new_idea {0} <name> <proposal file>"
+            "off that instead:\n    dh_hl new_idea <name> <proposal file> {0}"
             .format(canon))
     else:
         lines.append(
@@ -376,14 +376,7 @@ def cmd_canon(args):
     if idea.canonical is not None:
         if idea.canonical == node.full_id:
             raise DhHlError("this schedule is already the canonical schedule")
-        blocker = catalog.format_schedule_id(catalog.schedules[idea.canonical])
-        raise DhHlError(
-            "idea already has a canonical schedule ({0}).\n"
-            "To record the current schedule as a variation, branch a new idea "
-            "off that canonical schedule and explore under it:\n"
-            "    dh_hl new_idea {0} <name> <proposal file>\n"
-            "    dh_hl set_idea <the new idea's ID>\n"
-            "then rebuild and `dh_hl canon`.".format(blocker))
+        raise DhHlError(canonical_block_advice(catalog, idea.canonical))
     # Sanity: canon target should be a child of the current idea.
     if node.parent_id != idea.full_id:
         raise DhHlError("schedule is not a child of the current idea")
@@ -1088,6 +1081,11 @@ def cmd_close_session(args):
             raise DhHlError(
                 "an output schedule cannot be a root node: "
                 + catalog.format_schedule_id(node))
+        if not node.is_major():
+            raise DhHlError(
+                "output schedule {} is not a major schedule; only the canonical "
+                "schedule of an idea can be a session output. Make it canonical "
+                "with `dh_hl canon` first".format(catalog.format_schedule_id(node)))
         parent_idea = node.parent_idea()
         if not ws.has_private_idea(parent_idea.full_id):
             raise DhHlError(

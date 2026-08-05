@@ -40,7 +40,7 @@ from . import ids
 from . import locks
 from . import profiler_warnings
 from . import safety
-from .catalog import Catalog, best_result, validate_parameters
+from .catalog import Catalog, best_result, canonical_block_advice, validate_parameters
 from .context import Context, SessionWorkspace, resolve_target
 from .errors import DhHlError, HarnessError
 from . import ninja_syntax
@@ -372,6 +372,11 @@ def _resolve_target(ctx, spec):
             "no unambiguous schedule node and no current idea node for the "
             "workspace; use `dh_hl set_idea <idea>` to pick an idea (then this "
             "adds a child schedule), or `dh_hl new_root` to start a new root")
+    # If the current idea already has a canonical schedule, refuse rather than
+    # add another child under it, giving the same advice as `canon` (idea.md
+    # "Init-Build Tool"): branch a new idea off the canonical and explore there.
+    if idea.canonical is not None:
+        raise DhHlError(canonical_block_advice(ctx.catalog, idea.canonical))
     # Add a new child schedule node holding a copy of the workspace files.
     ws = ctx.workspace
     return ctx.catalog.create_schedule(

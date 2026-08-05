@@ -17,7 +17,8 @@ import os
 import pytest
 
 from dendritic_hl_lib import build, tools
-from dendritic_hl_lib.errors import HarnessError
+from dendritic_hl_lib.errors import DhHlError, HarnessError
+from conftest import branch_fresh_idea, open_catalog
 
 
 @pytest.fixture
@@ -130,12 +131,39 @@ def test_init_build_workspace_missing_params_errors(session, run_tool):
     """--target workspace requires generator_parameters.json (no implicit [{}]);
     a workspace with only generator.cpp is a clean error."""
     import os as _os
-    from dendritic_hl_lib.errors import DhHlError
+    branch_fresh_idea(session)  # canonical-less idea so a new child can be created
     session.write_workspace("edited source\n")           # inconsistent workspace
     _os.remove(_os.path.join(session.private_dir, "generator_parameters.json"))
     with pytest.raises(DhHlError, match="generator_parameters.json"):
         run_tool(build.cmd_init_build,
                  session.ns(target="workspace", other="none", anchor="none"))
+
+
+def test_init_build_workspace_refuses_when_idea_has_canonical(
+        session, run_tool):
+    """IMPL TASK (idea.md "Init-Build Tool"): with an ambiguous workspace and a
+    current idea that already has a canonical, init_build --target workspace
+    refuses (rather than piling another child onto a decided idea) and gives the
+    SAME advice as `canon` -- branch a new idea off the canonical."""
+    # The seed idea has a canonical; perturb the workspace so `status` is
+    # ambiguous, forcing the create-a-new-child path that the new rule blocks.
+    session.write_workspace("edited source\n")
+    # Golden lines name the blocking canonical's SHORT ID; derive it rather than
+    # hard-wiring the hash (the hashing scheme may change).
+    cat = open_catalog(session.catalog_dir)
+    try:
+        seed = cat.get_idea(cat.get_session(session.session_id).seed_idea_id)
+        canon_short = cat.format_schedule_id(cat.schedules[seed.canonical])
+    finally:
+        from dendritic_hl_lib import locks
+        locks._reset_for_tests()
+    with pytest.raises(DhHlError) as e:
+        run_tool(build.cmd_init_build,
+                 session.ns(target="workspace", other="none", anchor="none"))
+    msg = str(e.value)
+    assert "already has a canonical schedule" in msg
+    assert "dh_hl new_idea <name> <proposal file> {}".format(canon_short) in msg
+    assert "dh_hl set_idea" in msg
 
 
 def test_init_build_anchor_always_errors_without_current_anchor(session, run_tool):
@@ -293,6 +321,7 @@ def test_build_profiles_each_parameter_set(session, run_tool, fake_build,
     """A target with two parameters objects yields two benchmarks (one binary
     each) per batch.  init_build --target workspace picks up the perturbed
     workspace params by creating a new child schedule."""
+    branch_fresh_idea(session)  # canonical-less idea so a new child can be created
     session.write_params('[{"offset": 5}, {"offset": 20}]')
     _init(session, run_tool)  # workspace now inconsistent -> new child node
     assert _build(session, run_tool, profile=1) == 0

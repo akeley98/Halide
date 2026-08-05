@@ -1234,16 +1234,10 @@ This may be overriden with optional arguments.
 * Otherwise, if there is no current idea node for the session,
   give an error, and suggest the `set_idea` and `new_root` tools.
 
-IMPL TASK: add this new rule below.
-Should give the same advice as `canon`, check for expected golden lines.
-Try to use a shared variable for hard-wired short IDs,
-in case the hashing scheme changes.
-
-IMPL TASK: this `init_build` change might make the `canon`
-"already has canonical schedule" behavior impossible to reproduce.
-
 * Otherwise, if the current idea node has a canonical schedule,
-  the tool fails and suggests `new_idea` and `set_idea`.
+  the tool fails and suggests `new_idea` and `set_idea`
+  (the same advice as `canon`; you branch a new idea off the canonical
+  and explore there rather than piling more children onto a decided idea).
 
 * Otherwise, add a new child schedule node to the current idea node
   holding a copy of the workspace files. This is the target node.
@@ -1256,6 +1250,13 @@ This fixes a foot-gun where a failed `init_build` could go
 un-noticed and cause `build` to perform stale actions.
 Note private session workspace files were exempted from
 the `safety` module tool safety requirements.
+
+The "canonical schedule" refusal shares its advice text with `canon` via
+`catalog.canonical_block_advice`.  It does not make the `canon`
+"already has a canonical schedule" case unreachable: a non-canonical child of a
+canonicalized idea can still exist (e.g. two children built under one idea, then
+one made canonical), so editing the workspace to match that sibling still trips
+`canon`'s check (exercised by `tests/test_advice.py`).
 <!-- end impl -->
 
 
@@ -2000,8 +2001,6 @@ It's an error if any root nodes are given,
 or if the parent idea is not in the private idea list
 (fix with `dh_hl set_pool_tag`).
 
-IMPL TASK: implement and test major schedule requirement.
-
 All output schedules must be major schedules and must have commentary
 (the tool will remind of the `comment` tool in the latter case).
 
@@ -2200,14 +2199,12 @@ Requirements:
 There is intentionally no "change canonical schedule" tool.
 <!-- impl -->
 
-IMPL TASK: suggested `new_idea` command has wrong argument order.
-Reorder and test (a simple check for expected golden lines is good enough,
-note short IDs don't embed timestamps).
-
 If the command fails due to exiting canonical schedules:
     * If the schedule node is already the canonical schedule, the tool notes it was already done.
     * Otherwise, it advises the `dh_hl new_idea ... {canonical ID}` and `dh_hl set_idea` tools,
       where the `{canonical ID}` is the ID of the major schedule that blocked this command.
+      The advice (shared with `init_build` via `catalog.canonical_block_advice`)
+      puts the schedule ID last, matching `new_idea`'s `<name> <proposal file> [schedule]` order.
 <!-- end impl -->
 
 

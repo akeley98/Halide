@@ -76,6 +76,22 @@ def best_result(a, b):
     return a if RESULT_RANK[a] >= RESULT_RANK[b] else b
 
 
+def canonical_block_advice(catalog, canonical_id):
+    """Shared advice for tools that must refuse because the current idea already
+    has a canonical schedule: `canon` and `init_build --target workspace` (idea.md
+    "Canon Tool", "Init-Build Tool").  *canonical_id* is the blocking canonical
+    schedule's full ID; the message names its short ID and steers to `new_idea` /
+    `set_idea` to branch a new idea off it."""
+    blocker = catalog.format_schedule_id(catalog.schedules[canonical_id])
+    return (
+        "idea already has a canonical schedule ({0}).\n"
+        "To record the current schedule as a variation, branch a new idea "
+        "off that canonical schedule and explore under it:\n"
+        "    dh_hl new_idea <name> <proposal file> {0}\n"
+        "    dh_hl set_idea <the new idea's ID>\n"
+        "then rebuild and `dh_hl canon`.".format(blocker))
+
+
 # A schedule node's generator parameters are a JSON *list* of parameter objects
 # (idea.md "Schedule Node State" / "Generator Parameters JSON Object Format"),
 # stored verbatim in generator_parameters.json and hashed (with generator.cpp)

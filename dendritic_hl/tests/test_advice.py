@@ -55,8 +55,9 @@ def test_new_idea_on_minor_with_canonical_points_at_canonical(
                  S.ns(proposal_name="x", proposal=prop, schedule=t["C2"]))
     msg = str(e.value)
     assert "minor schedule" in msg
-    assert "dh_hl new_idea" in msg
-    assert "canonical" in msg  # steer to parent idea's canonical (C1), not C2
+    # steer to parent idea's canonical (C1), not C2, with correct arg order.
+    assert "dh_hl new_idea <name> <proposal file>" in msg
+    assert "canonical" in msg
 
 
 def test_new_idea_on_minor_without_canonical_suggests_canon(tmp_path, run_tool):
@@ -82,7 +83,10 @@ def test_canon_blocked_names_the_canonical(tmp_path, run_tool, capsys):
         run_tool(tools.cmd_canon, S.ns())
     msg = str(e.value)
     assert "already has a canonical schedule" in msg
-    assert "dh_hl new_idea" in msg and "dh_hl set_idea" in msg
+    # Golden line: new_idea takes <name> <proposal file> BEFORE the schedule ID
+    # (the blocking canonical), matching its argparse signature.
+    assert "dh_hl new_idea <name> <proposal file>" in msg
+    assert "dh_hl set_idea" in msg
 
 
 # ---- status: canonical-schedule status + dangling idea --------------------

@@ -243,6 +243,30 @@ def _is_root(session, sched_id):
         _reset()
 
 
+def _minor_child_of_seed(session):
+    """Create (out of band) a minor schedule -- a second, non-canonical child of
+    the seed idea, which already has a canonical -- with commentary so only the
+    major-schedule requirement can trip close_session.  Returns its full ID."""
+    cat = open_catalog(session.catalog_dir)
+    try:
+        seed = cat.get_idea(cat.get_session(session.session_id).seed_idea_id)
+        minor = cat.create_schedule("minor source\n", parent_idea=seed)
+        minor.add_commentary("summary\n", review="neutral")
+        cat.flush()
+        safety.commit()
+        return minor.full_id
+    finally:
+        _reset()
+
+
+def test_close_rejects_minor_output(session, run_tool):
+    """IMPL TASK (idea.md "Close Session Tool"): output schedules must be major
+    schedules; a minor (non-canonical) child is refused."""
+    minor_id = _minor_child_of_seed(session)
+    with pytest.raises(DhHlError, match="not a major schedule"):
+        run_tool(tools.cmd_close_session, session.ns(schedule=[minor_id]))
+
+
 def test_close_rejects_parent_not_in_list(session, run_tool, tmp_path):
     _comment(session, run_tool, tmp_path)
     cat = open_catalog(session.catalog_dir)
