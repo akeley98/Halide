@@ -1202,6 +1202,13 @@ and the anchor node is the session's current anchor schedule (if it exists).
 This may be overriden with optional arguments.
 <!-- help -->
 
+IMPL TASK: implement your suggested best-effort invalidation.
+
+IMPL TASK: add tests that low-level CLI fails still invalidate
+as long as sufficent `-s` was passed.
+However the specific other agent's mistake won't be a regression test
+of the `init_build` invalidation anymore, but rather the `--target` lenience.
+
 IMPL TASK: add the lenient no `--target` case.
 
 * `--target {schedule ID}` or `{schedule ID}` alone
