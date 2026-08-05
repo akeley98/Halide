@@ -695,7 +695,11 @@ include a trailing newline, as customary for Unix tools.
 
 With no `[command]`, lists all commands briefly;
 with a `[command]`, describes that one.
-This may be more complete than the CLI summaries provided by `dh_hl prompt`.
+
+Most complicated CLI commands are greatly sumamrized in the prompt
+(progressive discovery pattern).
+If you are confused by their usage or output format, DON'T GUESS.
+Use the `help` tool to understand their real semantics.
 <!-- impl -->
 
 
@@ -1731,7 +1735,8 @@ depending on the optional `--anchor {schedule ID}` argument:
     dh_hl json_compare_cost [LHS schedule ID] [RHS schedule ID]
 
 Do a head-to-head cost comparison between the LHS and RHS schedules,
-using the "2-way Cost Comparison" methodology.
+using the "2-way Cost Comparison" methodology,
+and try to conclude if LHS is an "improvement" or a "regression" over the RHS.
 This relies only on batches reachable from
 the current session's private benchmark set list,
 filtered as specified for the methodology.
@@ -1755,6 +1760,7 @@ The output is a JSON object with key/value pairs on separate lines:
 
 * `batch_count`: number of batches found
 
+<!-- This is not in the default prompt due to the help/end help fence. -->
 * `result`: string, "regression" if the LHS is confidently worse (higher cost)
   than the RHS, "improvement" if the LHS is confidently better (lower cost),
   "unknown" if inconclusive.
