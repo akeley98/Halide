@@ -27,6 +27,7 @@ exercised without a real Halide build.  Treat their names and signatures as a
 lightly load-bearing test contract.  See impl.md "Tests".
 """
 
+import argparse
 import json
 import os
 import random
@@ -274,6 +275,67 @@ def _run_benchmark(bin_dir, rungen_bin, json_out_path, warnings_out_path):
 _INIT_BUILD_FILE = "init_build.json"
 
 
+def _remove_selection(private_dir):
+    """Remove the session's init_build selection if present (idempotent)."""
+    try:
+        os.remove(os.path.join(private_dir, _INIT_BUILD_FILE))
+    except FileNotFoundError:
+        pass
+
+
+def invalidate_selection(catalog_dir, session_id):
+    """Drop a session's init_build selection.  See invalidate_selection_best_effort;
+    runs WITHOUT the session lock (impl.md "Lock Hierarchy")."""
+    _remove_selection(SessionWorkspace(catalog_dir, session_id).private_dir)
+
+
+def invalidate_selection_best_effort(argv):
+    """Pre-argparse footgun guard for `init_build`, called from `main()` BEFORE the
+    strict parse (*argv* is the tokens after the `init_build` command word).
+
+    A malformed `init_build` -- a stray positional, an unknown flag -- makes
+    argparse `SystemExit` before `cmd_init_build` runs, which would otherwise
+    leave an earlier successful selection on disk for `build` to silently reuse
+    (idea.md "Init-Build Tool" footgun).  So we clear the selection here, up
+    front: a lenient parse for just `-C`/`-s`, and if the session resolves, drop
+    its `init_build.json`.
+
+    Runs WITHOUT the session lock, deliberately (impl.md "Lock Hierarchy").  The
+    session lock is non-blocking and *exits with failure* when unheld, so taking
+    it here could itself fail -- exactly the kind of low-level failure that must
+    not defeat the guard.  The remove is idempotent and session-private (not
+    catalog-tracked, so no lock is load-bearing for it).  Best-effort: if `-C`/`-s`
+    is absent or won't resolve we do nothing -- a later `build` with that same
+    `-s` fails the same way, so nothing stale is used.  `init_build -h`/`--help`
+    is a help request, not a build attempt, so it is left alone."""
+    if "-h" in argv or "--help" in argv:
+        return
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("-C", "--catalog")
+    pre.add_argument("-s", "--session")
+    try:
+        known, _ = pre.parse_known_args(argv)
+        catalog_dir, session_id = resolve_target(known)
+    except (DhHlError, SystemExit, OSError):
+        return
+    if session_id is not None:
+        invalidate_selection(catalog_dir, session_id)
+
+
+def _init_build_target_spec(args):
+    """The target selection spec, accepting EITHER `--target X` or a bare
+    positional `X` (idea.md "Init-Build Tool": the positional was added because
+    agents passed the target positionally, overgeneralizing from other commands).
+    Defaults to `workspace`; giving both forms at once is an error."""
+    flag = getattr(args, "target", None)
+    pos = getattr(args, "target_pos", None)
+    if flag is not None and pos is not None:
+        raise DhHlError(
+            "give the target once: either the positional schedule ID or "
+            "--target, not both")
+    return flag if flag is not None else (pos if pos is not None else "workspace")
+
+
 def _rel_to_catalog(catalog_dir, path):
     return os.path.relpath(path, catalog_dir)
 
@@ -361,12 +423,13 @@ def cmd_init_build(args):
     # earlier success's selection lying around for `build` to silently reuse.
     # The invariant `build` relies on: init_build.json exists iff the session's
     # most recent init_build succeeded (it is rewritten on success just below).
-    # This is a per-session file, so it never affects other sessions.
-    path = os.path.join(ctx.workspace.private_dir, _INIT_BUILD_FILE)
-    if os.path.exists(path):
-        os.remove(path)
+    # This is a per-session file, so it never affects other sessions.  (Failures
+    # too early to reach here -- e.g. argparse rejecting the invocation -- are
+    # caught by main()'s pre-parse invalidate_selection_best_effort.)
+    private_dir = ctx.workspace.private_dir
+    _remove_selection(private_dir)
 
-    target = _resolve_target(ctx, getattr(args, "target", None) or "workspace")
+    target = _resolve_target(ctx, _init_build_target_spec(args))
     other = _resolve_other(ctx, getattr(args, "other", None) or "parent", target)
     anchor = _resolve_anchor(ctx, getattr(args, "anchor", None) or "auto")
 
@@ -376,6 +439,7 @@ def cmd_init_build(args):
         "anchor": _node_entry(ctx.catalog, "anchor", anchor) if anchor else None,
     }
     # Persist BEFORE finish so the new target node is flushed first.
+    path = os.path.join(private_dir, _INIT_BUILD_FILE)
     safety.write_allowed(path, json.dumps(selection, indent=1) + "\n")
     ctx.finish()
 

@@ -781,6 +781,12 @@ The locks are:
   to give a prominent warning of "concurrent session use detected".
   The agent is allowed to work in the private session workspace without this lock.
   Furthermore, the implicit translation of `[schedule ID]` args can run without the session lock.
+  So can `main()`'s pre-argparse `init_build` selection invalidation
+  (`build.invalidate_selection_best_effort`): it must run even when argparse is
+  about to reject the invocation, and taking a *non-blocking, exit-on-failure*
+  session lock there could itself fail -- exactly the low-level failure that must
+  not defeat the guard. The remove is idempotent and session-private (the catalog
+  lock, not the session lock, is the load-bearing one), so skipping it is safe.
 
 * Catalog Lock (`{catalog}/private/catalog.lock`):
   acquire exclusive access to the catalog directory,

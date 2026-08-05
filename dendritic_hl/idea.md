@@ -1193,23 +1193,18 @@ This is the main mechanism by which new schedules enter the catalog.
 The harness (by design) can only build or profile schedules in the catalog.
 So this is the first step to building or profiling a new schedule.
 
-A `build` fails if the session's most recent `init_build` failed.
-Caveat: low-level `init_build` failures, and missing `-s`, slip by.
+A `build` fails if the session's most recent `init_build` failed: a failed
+`init_build` clears any selection an earlier success left behind (even failures
+too early to reach the tool body, caught by a pre-argparse guard).
+Caveat: an `init_build` that fails before its `-s` is resolved (a missing or
+malformed `-s`) can't invalidate — but a `build` with that same `-s` fails
+likewise, so nothing stale is built.
 
 Default 3 nodes: the "target node" is a copy of the current workspace files,
 the "other node" is the target node's parent (if it exists),
 and the anchor node is the session's current anchor schedule (if it exists).
 This may be overriden with optional arguments.
 <!-- help -->
-
-IMPL TASK: implement your suggested best-effort invalidation.
-
-IMPL TASK: add tests that low-level CLI fails still invalidate
-as long as sufficent `-s` was passed.
-However the specific other agent's mistake won't be a regression test
-of the `init_build` invalidation anymore, but rather the `--target` lenience.
-
-IMPL TASK: add the lenient no `--target` case.
 
 * `--target {schedule ID}` or `{schedule ID}` alone
   selects the target schedule node,

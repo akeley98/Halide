@@ -134,6 +134,64 @@ def test_successful_command_is_not_rolled_back(run_cli, session):
     assert len(os.listdir(idea_root)) == before + 1
 
 
+def _bootstrap_cli(run_cli, tmp_path):
+    """new_catalog + init_workspace through the real CLI; return (cat_dir, handle).
+    No Halide needed -- these init_build tests never compile."""
+    cat_dir = str(tmp_path / "proj.dh_hl")
+    (tmp_path / "in.cpp").write_text("// gen\n")
+    (tmp_path / "p.txt").write_text("explore\n")
+    r = run_cli("new_catalog", "-C", cat_dir, "seed",
+                str(tmp_path / "p.txt"), str(tmp_path / "in.cpp"))
+    assert r.returncode == 0, r.stderr
+    r = run_cli("list_termini", "-C", cat_dir)
+    handle = [l.split("handle:")[1].strip() for l in r.stdout.splitlines()
+              if "handle:" in l][0]
+    r = run_cli("init_workspace", "-s", handle)
+    assert r.returncode == 0, r.stderr
+    return cat_dir, handle
+
+
+def test_init_build_positional_target(run_cli, tmp_path):
+    """The mistake that bit an agent -- passing the target positionally instead
+    of via --target -- now works (idea.md Init-Build Tool `--target` lenience)."""
+    cat_dir, handle = _bootstrap_cli(run_cli, tmp_path)
+    sid = run_cli("seed_schedule_short_id", "-s", handle).stdout.strip()
+    r = run_cli("init_build", "-s", handle, sid, "--other", "none", "--anchor", "none")
+    assert r.returncode == 0, r.stderr
+    assert "dh_hl: init_build target:" in r.stdout
+
+
+def test_init_build_positional_and_flag_conflict(run_cli, tmp_path):
+    """Giving BOTH the positional target and --target is a clean error."""
+    cat_dir, handle = _bootstrap_cli(run_cli, tmp_path)
+    sid = run_cli("seed_schedule_short_id", "-s", handle).stdout.strip()
+    r = run_cli("init_build", "-s", handle, sid, "--target", "workspace")
+    assert r.returncode == 1
+    assert "not both" in r.stderr
+    assert "Traceback" not in r.stderr
+
+
+def test_failed_init_build_cli_still_invalidates(run_cli, tmp_path):
+    """A low-level (argparse) init_build failure still clears an earlier success's
+    selection, as long as a resolvable -s was passed -- the pre-argparse guard in
+    main() (idea.md Init-Build Tool footgun).  A regression that only invalidated
+    inside cmd_init_build would leave the stale selection, and `build` would try
+    to compile it instead of reporting the missing selection."""
+    cat_dir, handle = _bootstrap_cli(run_cli, tmp_path)
+    r = run_cli("init_build", "-s", handle, "--target", "workspace",
+                "--other", "none", "--anchor", "none")
+    assert r.returncode == 0, r.stderr
+
+    # argparse rejects the unknown flag (exit 2), but -s is valid, so the
+    # pre-parse guard has already cleared the selection.
+    r = run_cli("init_build", "-s", handle, "--bogus-flag")
+    assert r.returncode == 2
+
+    r = run_cli("build", "-s", handle, "--only", "all")
+    assert r.returncode != 0
+    assert "no successful init_build" in r.stderr
+
+
 def test_review_cancels_cancelled_by_via_real_cli(run_cli, session):
     """Subprocess mirror of test_review.test_cancels_and_cancelled_by: drive the
     real `comment`/`json_schedule_info` CLI, computing the derived review and

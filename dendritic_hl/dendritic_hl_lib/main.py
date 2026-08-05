@@ -233,8 +233,13 @@ def _build_parser():
     sp.add_argument("idea", help="idea ID")
 
     sp = add("init_build")
-    sp.add_argument("--target", default="workspace",
-                    help="target schedule ID, or 'workspace' (default)")
+    # Target accepts a bare positional ID or --target (see build._init_build_target_spec);
+    # --target has no argparse default so we can tell "given" from "omitted".
+    sp.add_argument("target_pos", nargs="?", metavar="target",
+                    help="target schedule ID (positional alias for --target)")
+    sp.add_argument("--target",
+                    help="target schedule ID, or 'workspace' (default); "
+                         "alias for the positional target")
     sp.add_argument("--other", default="parent",
                     help="other schedule ID, 'parent' (default), or 'none'")
     sp.add_argument("--anchor", default="auto",
@@ -662,6 +667,11 @@ def main():
         if argv and argv[0] in ("exec", "exec_exclusive"):
             _cmd_exec(argv[0], argv[1:])
             return
+        if argv and argv[0] == "init_build":
+            # Clear any stale selection BEFORE the strict parse, so an init_build
+            # that argparse rejects still can't leave an earlier success's
+            # selection for `build` to reuse (idea.md Init-Build Tool footgun).
+            build_mod.invalidate_selection_best_effort(argv[1:])
         parser = _build_parser()
         args = parser.parse_args()
         if args.command is None:
