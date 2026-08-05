@@ -1,10 +1,5 @@
 # Dendritic Halide Harness — Harness for agentic Halide scheduling
 
-IMPL TASK: Read these docs to get a careful understanding of the `dh_hl` harness,
-then look at `../apps/resnet_50/` and think about how hard it would be to get
-the harness to be capable of dealing with that app's custom `process.cpp`.
-This comes second to the immediate work of fixing the `dh_hl help` and `dh_hl prompt` tools.
-
 The process of scheduling Halide code — whether by hand or automated — is often a sort of tree search.
 Schedules evolve over time into other schedules, and some plans don't work out and get back-tracked.
 This harness makes this process explicit as a "catalog" of schedules, organized into a historic tree structure.
@@ -635,24 +630,24 @@ The cost is the median raw cost of the representative
 This exposes the harness user to drift.
 
 
-IMPL TASK: update the FORMAT CONTRACT
-
 <!--
   FORMAT CONTRACT for the code (main.py `_parse_idea_sections`): `dh_hl help`
-  renders its docs from this "## Tools" section, so keep the shape:
-  * The prose between this "## Tools" heading and the first "###" below is
-    printed verbatim by `dh_hl help` (no argument) as the common usage notes.
+  renders its docs from this "# Tools" section, so keep the shape:
+  * The prose between this "# Tools" heading and the first heading below it
+    (a "## ..." group heading or a "### ..." tool section) is printed verbatim
+    by `dh_hl help` (no argument) as the common usage notes.
+  * Tools are grouped under "## ..." group headings; the group prose before a
+    group's first "### " tool section is NOT part of any tool's help.
   * Each tool is a "### <Name> Tool(s)" heading whose FIRST indented block is a
     synopsis with one "dh_hl <command> ..." line per command it documents;
     `dh_hl help <command>` locates the section by that command and prints it.
     One section may document several commands (they render together).
-  * "NOTE: [link ...]" lines and HTML comment lines are stripped from the
-    rendered help output.
+  * "NOTE: [link ...]" lines are stripped from the rendered help output, as are
+    all HTML comments and the `impl`/`end impl` detail regions they fence
+    (`prompts.render_idea_help`); `help`/`end help` regions are KEPT in the help
+    output but dropped from the assembled prompt.
 -->
 # Tools
-
-IMPL TASK: after reading the CLI docs, read `prompt_common.md` and see
-if it seems to reference nonexistent tools.
 
 The tools are invoked with `dh_hl {tool name} args...`.
 There are two frequest arguments:
@@ -706,29 +701,27 @@ This may be more complete than the CLI summaries provided by `dh_hl prompt`.
 <!-- impl -->
 ### Help Tool — Implementation Details
 
-IMPL TASK: fix it, the `dh_hl help` doesn't print the intro anymore.
-
-IMPL TASK: remove stuff in between `impl`/`end impl` comments,
-using a similar algorithm as `prompt` tool.
-
-IMPL TASK: update these details
-
 Both help views render from **this repo's `idea.md`** (the single source), via
 `main._parse_idea_sections()`, which returns `(intro, mapping)`:
 
 * `dh_hl help` (no arg) lists the `COMMAND_HELP` one-liners, then prints the
-  `intro` — the prose between the "## Tools" heading and the first "###" tool
-  section (the shared argument conventions).
+  `intro` — the prose between the "# Tools" heading and the first heading below
+  it (the shared argument conventions).
 * `dh_hl help <command>` prints `mapping[command]` — the detailed "### ... Tool"
   section, keyed by the commands in each section's leading indented `dh_hl <cmd>`
   synopsis block (not by heading name), so a multi-command section like "Copy
   Schedule, ID-of Schedule Tools" maps all its commands to the same shared text.
 
-Maintainer-only lines (`NOTE: [link…]`, `<!-- … -->`) are stripped from both.
-The format `_parse_idea_sections` relies on is spelled out in a FORMAT CONTRACT
-comment just above "# Tools" in `idea.md`.  `idea.md` lives one level above the
-package dir, so a copy run detached from the repo won't find it — `help` then
-degrades to the command list / one-liner (no crash).
+`_parse_idea_sections` first runs the raw idea.md through
+`prompts.render_idea_help`, which drops the `<!-- impl -->`..`<!-- end impl -->`
+detail regions (implementer notes) but keeps the `<!-- help -->` regions, and
+strips every other HTML comment — the same fence machinery the `prompt` tool
+uses (`prompts._strip_idea_fences`), just removing only `impl` instead of both.
+`NOTE: [link…]` lines are then stripped too.  The format
+`_parse_idea_sections` relies on is spelled out in a FORMAT CONTRACT comment just
+above "# Tools" in `idea.md`.  `idea.md` lives one level above the package dir,
+so a copy run detached from the repo won't find it — `help` then degrades to the
+command list / one-liner (no crash).
 
 Doc/code stay bound by a test (`tests/test_help.py`) asserting the CLI command
 set equals the set of commands `_parse_idea_help()` finds — add a command
@@ -822,10 +815,15 @@ out in a FORMAT CONTRACT comment atop `prompt_common.md`.  Like idea.md, the fil
 sits above the package dir; if missing, `prompt` errors cleanly (no fallback —
 the prompt has no default content).  Covered by `tests/test_prompt.py`.
 
-IMPL TASK: implement this.
-
 **idea.md detail removal:** Similar to `main`/`sub` comments.
-Remove all text wrapped with `help`/`end help` or `impl`/`end impl` comments.
+`load_prompt` runs idea.md through `prompts.render_idea_prompt`, which removes
+all text wrapped with `help`/`end help` or `impl`/`end impl` comments (both
+detail views) before stripping the remaining HTML comments.  The shared engine is
+`prompts._strip_idea_fences(text, remove_words)`: it drops the whole
+`<!-- word -->`..`<!-- end word -->` region for each *word* in `remove_words`,
+and for a recognized fence word not in `remove_words` drops just the fence lines
+(keeping the content).  The prompt passes both `help` and `impl`; `dh_hl help`
+passes only `impl` (see "Help Tool — Implementation Details").
 
 
 <!-- end impl -->

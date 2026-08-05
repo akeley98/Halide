@@ -7,6 +7,7 @@ import subprocess
 import sys
 
 from . import locks
+from . import prompts
 from . import safety
 from . import tools
 from . import build as build_mod
@@ -32,42 +33,59 @@ def _strip_maintainer_lines(lines):
 
 
 def _parse_idea_sections(path=_IDEA_MD):
-    """Parse the idea.md "## Tools" section.  Returns `(intro, mapping)`:
+    """Parse the idea.md "# Tools" section.  Returns `(intro, mapping)`:
 
-    * `intro` — the prose between the "## Tools" heading and the first "###"
-      tool section (the common usage notes shown by `dh_hl help` with no arg).
+    * `intro` — the prose between the "# Tools" heading and the first heading
+      below it (the common usage notes shown by `dh_hl help` with no arg).
     * `mapping` — command name -> the text of the "### ... Tool" section that
       documents it, keyed by the commands in each section's *leading* indented
       synopsis block (so a multi-command section maps all its commands to the
       same shared text).
 
-    Maintainer-only lines are stripped from both.  Returns `("", {})` if idea.md
-    can't be read.  See the FORMAT CONTRACT comment above "## Tools" in idea.md."""
+    The idea.md text is first run through `prompts.render_idea_help`, which drops
+    the `<!-- impl -->` detail regions (implementer notes) but keeps the
+    `<!-- help -->` regions, and strips all other HTML comments.  Returns
+    `("", {})` if idea.md can't be read.  See the FORMAT CONTRACT comment above
+    "# Tools" in idea.md."""
     try:
         with open(path, "r", encoding="utf-8") as f:
-            lines = f.read().split("\n")
+            raw = f.read()
     except OSError:
         return "", {}
+    lines = prompts.render_idea_help(raw).split("\n")
 
-    intro_lines = None       # collecting the "## Tools" intro (until first "###")
-    intro_captured = []      # the finished intro (saved at that first "###")
+    in_tools = False         # reached the "# Tools" section yet?
+    intro_lines = None       # collecting the "# Tools" intro (until next heading)
+    intro_captured = []      # the finished intro (saved at that first heading)
     sections = []            # list of (heading, body_lines)
     cur = None
     for line in lines:
+        if line.rstrip() == "# Tools":
+            in_tools = True
+            intro_lines = []
+            cur = None
+            continue
+        if not in_tools:
+            continue
         if line.startswith("### "):
             if intro_lines is not None:
-                intro_captured = intro_lines  # intro ends at the first tool section
-            intro_lines = None
+                intro_captured = intro_lines  # intro ends at the first heading
+                intro_lines = None
             cur = (line, [])
             sections.append(cur)
-        elif line.startswith("## "):
+        elif line.startswith("## ") or line.startswith("# "):
+            # A "## ..." group heading (or a new top-level "# ...") ends the
+            # intro; the group prose before its first "### " tool section is not
+            # part of any tool's help.
+            if intro_lines is not None:
+                intro_captured = intro_lines
+                intro_lines = None
             cur = None
-            intro_lines = [] if line.strip() == "## Tools" else None
         elif intro_lines is not None:
             intro_lines.append(line)
         elif cur is not None:
             cur[1].append(line)
-    if intro_lines is not None:  # "## Tools" had no following "###" (degenerate)
+    if intro_lines is not None:  # "# Tools" had no following heading (degenerate)
         intro_captured = intro_lines
 
     intro = "\n".join(_strip_maintainer_lines(intro_captured)).strip("\n")

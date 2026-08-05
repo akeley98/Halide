@@ -38,6 +38,12 @@ _FENCE_RE = re.compile(r"^<!--\s*(end\s+)?(\w+)\s*-->$")
 # Any HTML comment span (inline or multi-line); non-greedy, spanning newlines.
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 
+# idea.md "detail" fences: `<!-- help -->`..`<!-- end help -->` wraps text meant
+# for `dh_hl help <command>` but too verbose for the prompt, and
+# `<!-- impl -->`..`<!-- end impl -->` wraps implementer-only notes wanted by
+# neither view.  See the FORMAT CONTRACT above "# Tools" in idea.md.
+_IDEA_FENCE_WORDS = ("help", "impl")
+
 
 def parse_prompt(text, audience):
     """Return the *audience* ('main'/'sub') view of prompt-source *text*.
@@ -109,6 +115,44 @@ def strip_html_comments(text):
     return _collapse_blanks(_HTML_COMMENT_RE.sub("", text).split("\n"))
 
 
+def _strip_idea_fences(text, remove_words):
+    """Process idea.md "detail" fences (see `_IDEA_FENCE_WORDS`): drop the whole
+    `<!-- word -->`..`<!-- end word -->` region for every *word* in
+    *remove_words*, and for a recognized fence word NOT in *remove_words* drop
+    just the fence lines (keeping the region's content).  Then strip any
+    remaining HTML comments and collapse blank runs, exactly like
+    `strip_html_comments`.
+
+    The two idea.md detail views build on this: `render_idea_prompt` removes both
+    help and impl regions; `render_idea_help` removes impl but keeps help
+    content.  Fence tracking runs over the *whole* text before section parsing,
+    so a region that spans a heading boundary (e.g. an impl region wrapping an
+    entire "### ... Implementation Details" section) is handled correctly."""
+    out = []
+    skipping = False
+    for raw in text.split("\n"):
+        m = _FENCE_RE.match(raw.strip())
+        if m and m.group(2) in _IDEA_FENCE_WORDS:
+            if m.group(2) in remove_words:
+                skipping = not bool(m.group(1))  # open -> skip, close -> resume
+            continue  # drop every recognized idea fence line
+        if not skipping:
+            out.append(raw)
+    return strip_html_comments("\n".join(out))
+
+
+def render_idea_prompt(text):
+    """The idea.md view embedded in the assembled prompt: both help and impl
+    detail regions removed (idea.md "Prompt Tools" -> "idea.md detail removal")."""
+    return _strip_idea_fences(text, _IDEA_FENCE_WORDS)
+
+
+def render_idea_help(text):
+    """The idea.md view rendered by `dh_hl help`: impl regions removed, help
+    regions kept (idea.md "Help Tool -- Implementation Details")."""
+    return _strip_idea_fences(text, ("impl",))
+
+
 def _read_source(path):
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -127,7 +171,13 @@ def load_prompt(audience, path=_PROMPT_MD):
     repo_dir = os.path.dirname(os.path.abspath(path))
     parts = [parse_prompt(_read_source(path), audience)]
     for name in _PROMPT_DOCS:
-        parts.append(strip_html_comments(_read_source(os.path.join(repo_dir, name))))
+        src = _read_source(os.path.join(repo_dir, name))
+        # idea.md additionally has its help/impl detail regions removed; the
+        # other docs only need HTML comments stripped.
+        if name == "idea.md":
+            parts.append(render_idea_prompt(src))
+        else:
+            parts.append(strip_html_comments(src))
     # Single blank line between documents; exactly one trailing newline.
     return "".join(p.rstrip("\n") + "\n\n" for p in parts if p.strip()).rstrip("\n") + "\n"
 
