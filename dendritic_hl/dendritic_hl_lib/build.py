@@ -283,6 +283,12 @@ def _node_entry(catalog, role, node):
     return {
         "role": role,
         "id": node.full_id,
+        # A human-friendly short ID for `build`'s banners: `build`'s compile
+        # phase runs WITHOUT the catalog lock, so it cannot format short IDs
+        # itself -- we precompute it here (under the catalog lock) and carry it
+        # in the selection.  A display label only; harmless if it later goes
+        # slightly stale relative to the catalog.
+        "short_id": catalog.format_schedule_id(node),
         "source": _rel_to_catalog(catalog.catalog_dir,
                                   os.path.join(sch_dir, "generator.cpp")),
         "parameters": _rel_to_catalog(
@@ -396,6 +402,9 @@ class _NodeBuild:
     def __init__(self, entry, catalog_dir):
         self.role = entry["role"]
         self.full_id = entry["id"]
+        # Short display ID precomputed by init_build (see _node_entry); older
+        # selections without it fall back to the full ID.
+        self.short_id = entry.get("short_id", entry["id"])
         self.source_path = os.path.join(catalog_dir, entry["source"])
         self.params_path = os.path.join(catalog_dir, entry["parameters"])
         with open(self.source_path, "r", encoding="utf-8") as f:
@@ -516,7 +525,7 @@ def _compile_phase(bin_dir, nodes, param_indices, target_id):
     all_ok = True
     # 1a: compile each node's generator exe (and the shared RunGenMain.o).
     for n in nodes:
-        print("dh_hl: begin C++ compile: " + n.full_id)
+        print("dh_hl: begin C++ compile: " + n.short_id)
         _trace_build("cpp_compile", n.full_id)
         ninja_path = _write_ninja(bin_dir, n.full_id, n.source_path)
         gen_exe = _gen_exe_name(n.full_id)
@@ -550,7 +559,7 @@ def _compile_phase(bin_dir, nodes, param_indices, target_id):
         for i in param_indices[n.full_id]:
             with_stmt = (n.full_id == target_id)
             basename = _emit_basename(n.full_id, i)
-            print("dh_hl: begin Halide generator {}: {}".format(i, n.full_id))
+            print("dh_hl: begin Halide generator {}: {}".format(i, n.short_id))
             print("dh_hl: params={}".format(json.dumps(n.params[i])))
             _trace_build("emit", n.full_id, i)
             if _emit(bin_dir, _gen_exe_name(n.full_id), n.gen_name, basename,
@@ -616,8 +625,11 @@ def _profile_phase(bin_dir, nodes, param_indices, sched, catalog, batches):
             rc, stdout_text = _run_benchmark(
                 bin_dir, _rungen_bin_name(n.full_id, i), json_out, warnings_out)
             ok = rc == 0
+            # The profile phase holds the catalog lock, so format the short ID
+            # live from the resolved node (no need for the precomputed one).
             print("dh_hl: Profiled {}, binary {} ({})".format(
-                n.full_id, i, "success" if ok else "fail"))
+                catalog.format_schedule_id(sched[n.full_id]), i,
+                "success" if ok else "fail"))
             if not ok:
                 n.any_run_failed = True
                 all_ok = False

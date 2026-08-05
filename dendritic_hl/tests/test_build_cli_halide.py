@@ -72,6 +72,14 @@ def _per_run_ns(bench):
     return p["time_ns"] / max(p["billed_runs"], 1)
 
 
+def _workspace_short_id(run_cli, handle):
+    """The workspace schedule node's short ID, as `status` reports it (a
+    deterministic value -- hash prefix + idea path -- with no timestamp)."""
+    r = run_cli("status", "-s", handle)
+    assert r.returncode == 0, r.stderr
+    return _line(r.stdout, "Schedule node:")
+
+
 # ---------------------------------------------------------------------------
 
 def test_parallel_param_is_faster_than_serial(run_cli, tmp_path):
@@ -148,6 +156,35 @@ def test_profiling_stdout_redirected_then_viewable(run_cli, tmp_path):
     # captured stdout (an easy read next to the JSON tools).
     assert "halide_print:" in r.stdout
     assert "total time:" in r.stdout
+
+
+def test_build_banners_use_short_schedule_ids(run_cli, tmp_path):
+    """`build`'s per-node banners print the schedule's SHORT ID, not the full ID
+    (idea.md Build Tool pseudocode uses `{node.short_id}`).  The short ID is
+    deterministic (no timestamp), so we can assert exact banner lines: a
+    regression to the full ID (which starts with a creation timestamp) would
+    fail these.  Covers the compile phase (lock-free, uses the precomputed short
+    ID) and the profile phase (formats live under the catalog lock)."""
+    cat_dir, handle = _bootstrap(run_cli, tmp_path)
+    short = _workspace_short_id(run_cli, handle)
+    # A full ID is "{timestamp}_{hash}[...]"; the short form's ".seed.canon"
+    # path can't appear there, so this confirms we're asserting a short ID.
+    assert ".seed.canon" in short
+
+    # Leave the workspace params at their default so --target workspace resolves
+    # to the existing seed canonical (a stable short ID); changing params would
+    # mint a fresh node with a different short ID.
+    r = run_cli("init_build", "-s", handle, "--target", "workspace",
+                "--other", "none", "--anchor", "none")
+    assert r.returncode == 0, r.stderr
+    r = run_cli("build", "-s", handle, "--profile", "1", "--only", "all")
+    assert r.returncode == 0, r.stderr
+
+    assert "dh_hl: begin C++ compile: {}".format(short) in r.stdout
+    assert "dh_hl: begin Halide generator 0: {}".format(short) in r.stdout
+    assert "dh_hl: Profiled {}, binary 0 (success)".format(short) in r.stdout
+    # The per-benchmark ID is the short schedule ID plus a {hostname}_{ts} tail.
+    assert "dh_hl: Benchmark ID: {}.".format(short) in r.stdout
 
 
 def test_benchmark_set_cells_attributed(run_cli, tmp_path):
