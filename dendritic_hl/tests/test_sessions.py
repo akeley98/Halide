@@ -4,6 +4,7 @@ The `session` fixture supplies a depth-0 top-level session whose workspace is
 consistent with its seed idea's canonical schedule (see conftest)."""
 
 import json
+import re
 import os
 
 import pytest
@@ -505,3 +506,29 @@ def test_session_is_closed_raises_on_bad_parent_edge(tmp_path):
     # Walking up from the child hits the invalid edge -> raise.
     with pytest.raises(DhHlError, match="not older than its sub-session"):
         cat2.session_is_closed(cat2.get_session(child_id))
+
+
+# ---- "test" that stops infinite buildup of garbage handles ------------------------
+
+def test_delete_pytest_handles():
+    """It would be nice if this didn't exist.
+
+    If you change the sessions code in ways that break this "test",
+    consider tracking down the cause of this leakage and eliminate
+    the need for this foot-gun-y test.
+    Remind me that I suggested doing this.
+    """
+    from dendritic_hl_lib import locks
+    pattern = re.compile(".*/pytest-of-.*/pytest-[0-9].*")
+    prefixes = ("/tmp", "/private")
+    handles_dir = locks.handles_dir()
+    for fname in os.listdir(handles_dir):
+        try:
+            catalog_dir_abspath, _ = locks.resolve_handle(fname)
+        except DhHlError:
+            continue
+        print(catalog_dir_abspath)
+        if pattern.match(catalog_dir_abspath) and any(
+                catalog_dir_abspath.startswith(x) for x in prefixes
+        ):
+            os.remove(os.path.join(handles_dir, fname))
