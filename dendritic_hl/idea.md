@@ -1234,6 +1234,17 @@ This may be overriden with optional arguments.
 * Otherwise, if there is no current idea node for the session,
   give an error, and suggest the `set_idea` and `new_root` tools.
 
+IMPL TASK: add this new rule below.
+Should give the same advice as `canon`, check for expected golden lines.
+Try to use a shared variable for hard-wired short IDs,
+in case the hashing scheme changes.
+
+IMPL TASK: this `init_build` change might make the `canon`
+"already has canonical schedule" behavior impossible to reproduce.
+
+* Otherwise, if the current idea node has a canonical schedule,
+  the tool fails and suggests `new_idea` and `set_idea`.
+
 * Otherwise, add a new child schedule node to the current idea node
   holding a copy of the workspace files. This is the target node.
 <!-- end help -->
@@ -1975,7 +1986,6 @@ Give both full session IDs and session handles.
 Add outputs to the current session, making it self-closed.
 This promotes a fair amount of private (not git tracked)
 session state to public (git tracked) session node state.
-<!-- help -->
 
 **Output Schedules:**
 The `[schedule IDs...]` is a list of schedule node IDs
@@ -1990,8 +2000,10 @@ It's an error if any root nodes are given,
 or if the parent idea is not in the private idea list
 (fix with `dh_hl set_pool_tag`).
 
-If any schedule node given has no commentary,
-the tool gives an error and reminds of the `dh_hl comment` tool.
+IMPL TASK: implement and test major schedule requirement.
+
+All output schedules must be major schedules and must have commentary
+(the tool will remind of the `comment` tool in the latter case).
 
 **Output Benchmark Sets:**
 Same as the current session's private benchmark set list.
@@ -2002,7 +2014,6 @@ that would be found by `dh_hl session_root_of O`.
 Add a superseded-by idea side link from `R`'s parent to `O`'s parent.
 This step is silently skipped for output schedules
 where `session_root_of` would fail.
-<!-- end help -->
 
 
 ### Join Session Tool
@@ -2184,14 +2195,20 @@ Requirements:
     * Current idea node must exist
     * `dh_hl status` would give an unambiguous schedule node ID
     * Referenced schedule must have a `success` result state.
-    * The current idea node must not already have a canonical schedule
-
-If the command fails due to the last requirement:
-    * If the schedule node is already the canonical schedule, the tool notes it was already done.
-    * Otherwise, it advises the `dh_hl new_idea {canonical ID}` and `dh_hl set_idea` tools,
-      where the `{canonical ID}` is the ID of the major schedule that blocked this command.
+    * The current idea node must not already have a canonical schedule.
 
 There is intentionally no "change canonical schedule" tool.
+<!-- impl -->
+
+IMPL TASK: suggested `new_idea` command has wrong argument order.
+Reorder and test (a simple check for expected golden lines is good enough,
+note short IDs don't embed timestamps).
+
+If the command fails due to exiting canonical schedules:
+    * If the schedule node is already the canonical schedule, the tool notes it was already done.
+    * Otherwise, it advises the `dh_hl new_idea ... {canonical ID}` and `dh_hl set_idea` tools,
+      where the `{canonical ID}` is the ID of the major schedule that blocked this command.
+<!-- end impl -->
 
 
 ### List Ideas Tools

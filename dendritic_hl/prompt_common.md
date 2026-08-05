@@ -252,6 +252,7 @@ It will be followed by:
 At the start and end of a step in steady state, your workspace must be in "consistent state".
 It will replicate the state of an "unambiguous schedule node" in the catalog.
 
+
 ## Choice A: Generate New Ideas
 
 Use the `dh_hl new_idea` tool to add a new child idea node.
@@ -261,6 +262,7 @@ As a memory aid, these will be added to your "private idea list",
 which is private to your session.
 
 Interact with this list using the `list_private_ideas` and pool tag tools.
+
 
 ## Choice B: Implement an Idea
 
@@ -286,6 +288,14 @@ This canonical schedule is eligible to have child ideas added.
 If you find the idea too flawed to implement,
 restore the parent schedule's state and set a copy of it as canonical.
 Then give the new child schedule a commentary with a negative review with `dh_hl comment`.
+
+NOTE: you cannot implement ideas that already have a canonical schedule.
+Generate new ideas in that case.
+This applies ESPECIALLY for the seed ideas,
+which all come with a canonical schedule (that don't implement the seed idea).
+
+The harness will add special "superseded by" links to paper over this
+semantic gap upon closing the session.
 
 
 ## Choice C: Launch Sub-agent
