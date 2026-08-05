@@ -1189,6 +1189,12 @@ This is the main mechanism by which new schedules enter the catalog.
 The harness (by design) can only build or profile schedules in the catalog.
 So this is the first step to building or profiling a new schedule.
 
+IMPL TASK: prevent `build` from working after failed `init_build` even
+if there were successful `init_build` tools before that in the same
+session. Test this, also test no leakage between different sessions.
+
+Future `build` commands will fail if the last `init_build` failed.
+
 Takes optional arguments specifying the up to three schedule nodes.
 <!-- help -->
 
@@ -1220,6 +1226,15 @@ Takes optional arguments specifying the up to three schedule nodes.
 * Otherwise, add a new child schedule node to the current idea node
   holding a copy of the workspace files. This is the target node.
 <!-- end help -->
+<!-- impl -->
+
+Delete any existing `init_build.json` first to ensure future
+`build` commands won't run in case of failure.
+This fixes a foot-gun where a failed `init_build` could go
+un-noticed and cause `build` to perform stale actions.
+Note private session workspace files were exempted from
+the `safety` module tool safety requirements.
+<!-- end impl -->
 
 
 ### Build Tool
