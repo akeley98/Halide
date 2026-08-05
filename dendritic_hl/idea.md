@@ -1674,14 +1674,14 @@ Prints `{count} idea nodes updated`.
 
     dh_hl add_private_benchmark_set -s ...
     dh_hl remove_private_benchmark_set -s ...
+
+This is currently not so useful, as benchmark sets are not really discoverable.
 <!-- help -->
 
 Add or remove benchmark sets from the current session's private
 benchmark set list.
 They are passed as a list of benchmark set IDs (`...`),
 which could be an empty list.
-
-This is currently not so useful, as benchmark sets are not really discoverable.
 <!-- end help -->
 
 
