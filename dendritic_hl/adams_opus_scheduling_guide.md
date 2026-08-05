@@ -417,7 +417,14 @@ ones.
 the profile-driven half of the pre-flight checklist.
 
 The profiler emits to `stdout` a per-Func table plus explicit warnings
-for known antipatterns.  Detailed JSON statistics are captured by `dh_hl`.
+for known antipatterns, along with JSON statistics.
+The `dh_hl` harness captures these information, accessed with tools
+
+* `dh_hl view_benchmark_stdout`
+
+* `dh_hl view_benchmark_warnings`
+
+* `dh_hl json_profiler_stats`
 
 Sample (max_filter):
 
@@ -441,6 +448,8 @@ Performance warnings:
 ```
 
 Make improving the worst column of the hottest func a priority.
+As an alternative, you may use `dh_hl json_profiler_stats`
+to aggregate information across multiple benchmark runs.
 Use `dh_hl new_idea` to save ideas for fixing these bottlenecks.
 
 ### Top-line stats
