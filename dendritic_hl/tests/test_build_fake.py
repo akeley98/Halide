@@ -161,6 +161,49 @@ def test_init_build_anchor_auto_uses_current_anchor(session, run_tool, capsys):
     assert sel["anchor"] is not None and sel["anchor"]["role"] == "anchor"
 
 
+def test_failed_init_build_clears_prior_selection(session, run_tool):
+    """Footgun guard (idea.md Init-Build Tool): a failed init_build must not
+    leave an earlier success's selection lying around for `build` to reuse."""
+    from dendritic_hl_lib.errors import DhHlError
+    _init(session, run_tool)                       # success -> writes selection
+    sel = os.path.join(session.private_dir, "init_build.json")
+    assert os.path.exists(sel)
+
+    # A later init_build that fails (--anchor always with no current anchor)
+    # clears the stale selection, even though a prior init_build succeeded.
+    with pytest.raises(DhHlError):
+        run_tool(build.cmd_init_build,
+                 session.ns(target="workspace", other="none", anchor="always"))
+    assert not os.path.exists(sel)
+
+    # So build refuses instead of silently reusing the earlier selection.
+    with pytest.raises(DhHlError, match="no successful init_build"):
+        run_tool(build.cmd_build, session.ns(profile=0, only="all"))
+
+
+def test_failed_init_build_isolated_between_sessions(session, run_tool, fake_build,
+                                                     tmp_path):
+    """The selection is a per-session private-workspace file: a failed
+    init_build in one session must not disturb another session's selection."""
+    from dendritic_hl_lib.errors import DhHlError
+    from conftest import make_catalog_session, Sess
+    # Session A (the fixture): a successful init_build.
+    _init(session, run_tool)
+    sel_a = os.path.join(session.private_dir, "init_build.json")
+    assert os.path.exists(sel_a)
+
+    # Session B: an independent catalog+session whose init_build fails.
+    b_dir, b_id = make_catalog_session(str(tmp_path / "projB.dh_hl"))
+    sess_b = Sess(b_dir, b_id)
+    with pytest.raises(DhHlError):
+        run_tool(build.cmd_init_build,
+                 sess_b.ns(target="workspace", other="none", anchor="always"))
+
+    # A's selection is untouched, and A's build still runs off it.
+    assert os.path.exists(sel_a)
+    assert _build(session, run_tool) == 0
+
+
 # ---------------------------------------------------------------------------
 # build: result states
 # ---------------------------------------------------------------------------

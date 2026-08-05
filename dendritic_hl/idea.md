@@ -1189,11 +1189,10 @@ This is the main mechanism by which new schedules enter the catalog.
 The harness (by design) can only build or profile schedules in the catalog.
 So this is the first step to building or profiling a new schedule.
 
-IMPL TASK: prevent `build` from working after failed `init_build` even
-if there were successful `init_build` tools before that in the same
-session. Test this, also test no leakage between different sessions.
-
-Future `build` commands will fail if the last `init_build` failed.
+A `build` fails if the session's most recent `init_build` failed: a failed
+`init_build` clears any selection left by an earlier successful one, so `build`
+never silently reuses a stale selection. This is per-session; a failed
+`init_build` in one session does not disturb another session's selection.
 
 Takes optional arguments specifying the up to three schedule nodes.
 <!-- help -->

@@ -356,6 +356,16 @@ def cmd_init_build(args):
     ctx = Context.for_session(args, session_lock=True)
     ctx.workspace.ensure_private_dir()
 
+    # Footgun guard (idea.md Init-Build Tool): invalidate any prior selection
+    # BEFORE the fallible resolution below, so a failed init_build can't leave an
+    # earlier success's selection lying around for `build` to silently reuse.
+    # The invariant `build` relies on: init_build.json exists iff the session's
+    # most recent init_build succeeded (it is rewritten on success just below).
+    # This is a per-session file, so it never affects other sessions.
+    path = os.path.join(ctx.workspace.private_dir, _INIT_BUILD_FILE)
+    if os.path.exists(path):
+        os.remove(path)
+
     target = _resolve_target(ctx, getattr(args, "target", None) or "workspace")
     other = _resolve_other(ctx, getattr(args, "other", None) or "parent", target)
     anchor = _resolve_anchor(ctx, getattr(args, "anchor", None) or "auto")
@@ -366,7 +376,6 @@ def cmd_init_build(args):
         "anchor": _node_entry(ctx.catalog, "anchor", anchor) if anchor else None,
     }
     # Persist BEFORE finish so the new target node is flushed first.
-    path = os.path.join(ctx.workspace.private_dir, _INIT_BUILD_FILE)
     safety.write_allowed(path, json.dumps(selection, indent=1) + "\n")
     ctx.finish()
 
@@ -432,7 +441,9 @@ def _load_selection(ws):
             return json.load(f)
     except FileNotFoundError:
         raise DhHlError(
-            "no init_build.json for this session; run `dh_hl init_build` first")
+            "no successful init_build for this session; run `dh_hl init_build` "
+            "first (a failed init_build clears any earlier selection, so re-run "
+            "it after fixing the failure)")
 
 
 def cmd_build(args):
