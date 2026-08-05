@@ -1029,7 +1029,15 @@ still the idea-node collision check, so it does not use the mint helper.)
   `CurrentAnchor` (see "Private-workspace state objects"); `_benchmark_set_cache`
   builds a benchmark set's cached cost stats; `finish()` = `catalog.flush()` +
   `safety.commit()`; `read_text_or_stdin` handles `-` and turns a missing file
-  into a clean `DhHlError`.
+  into a clean `DhHlError`.  `resolve_schedule_arg` resolves an optional
+  `[schedule ID]`: an explicit ID hits the catalog directly (no session needed,
+  so a `-C`-only tool works without `-s`), while the omitted default is the
+  session workspace's unambiguous schedule and therefore needs `-s`.  That
+  missing-session case is caught in `resolve_schedule_arg` itself with an
+  argument-specific message ("-s required to resolve the default schedule node
+  argument ...") rather than letting the generic `self.workspace` "need -s" error
+  surface — the generic message misled a reader into thinking the tool required
+  `-s` unconditionally.
 * `tools.py` — every non-build `cmd_*` (catalog/idea/session queries + session
   lifecycle, the JSON cost query tools, the private-benchmark-set tools) plus
   shared print/JSON helpers and the profiler-stats reachability walk.

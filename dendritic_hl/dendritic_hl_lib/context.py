@@ -634,6 +634,16 @@ class Context:
         unambiguous schedule node (which requires a current session)."""
         if arg is not None:
             return self.catalog.resolve_schedule(arg)
+        # The default (omitted [schedule ID]) is the session workspace's
+        # unambiguous schedule -- so a -C-only tool needs -s to resolve it.  Catch
+        # the missing session HERE with an argument-specific message, rather than
+        # letting the generic `self.workspace` "need -s" error surface (idea.md /
+        # impl.md "Default [schedule ID] argument").
+        if self.session_id is None:
+            raise DhHlError(
+                "-s required to resolve the default schedule node argument "
+                "(pass an explicit [schedule ID], or -s to use the session "
+                "workspace's schedule)")
         return self.require_unambiguous_schedule()
 
     # -- current idea node ----------------------------------------------

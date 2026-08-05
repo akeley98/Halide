@@ -203,3 +203,28 @@ def tools_ns_catalog(catalog_dir, **kw):
     from conftest import ns
     kw.setdefault("catalog", catalog_dir)
     return ns(**kw)
+
+
+def test_default_schedule_arg_without_session_errors_clearly(session, run_tool):
+    """A -C-only tool with the [schedule ID] omitted needs -s to resolve the
+    default (the session workspace's schedule).  The error names the argument
+    rather than leaking the generic workspace 'need -s' message (idea.md /
+    impl.md "Default [schedule ID] argument")."""
+    with pytest.raises(DhHlError,
+                       match="resolve the default schedule node argument"):
+        run_tool(tools.cmd_view_generator_parameters,
+                 ns(catalog=session.catalog_dir, session=None, schedule=None))
+
+
+def test_explicit_schedule_arg_without_session_ok(session, run_tool, capsys):
+    """The same -C-only tool needs no -s when given an explicit [schedule ID]:
+    it resolves against the catalog and never touches the session workspace."""
+    cat = open_catalog(session.catalog_dir)
+    try:
+        sid = next(iter(cat.schedules))
+    finally:
+        from dendritic_hl_lib import locks
+        locks._reset_for_tests()
+    run_tool(tools.cmd_view_generator_parameters,
+             ns(catalog=session.catalog_dir, session=None, schedule=sid))
+    assert capsys.readouterr().out.strip()
