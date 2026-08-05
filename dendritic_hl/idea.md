@@ -1752,7 +1752,7 @@ depending on the optional `--anchor {schedule ID}` argument:
 
 ### JSON Compare Cost Tool
 
-    dh_hl json_compare_cost [LHS schedule ID] [RHS schedule ID]
+    dh_hl json_compare_cost -s ... [LHS schedule ID] [RHS schedule ID]
 
 Do a head-to-head cost comparison between the LHS and RHS schedules,
 using the "2-way Cost Comparison" methodology,
@@ -1802,7 +1802,7 @@ The output is a JSON object with key/value pairs on separate lines:
 
 ### JSON Profiler Statistics Tool
 
-    dh_hl json_profiler_stats [schedule ID]
+    dh_hl json_profiler_stats -s ... [schedule ID]
 
 Aggregate profiler statistics for the referenced schedule,
 considering only benchmarks reachable from the private benchmark set list.
@@ -2405,7 +2405,7 @@ NB see also `schedule_full_id`, `schedule_short_id`, `restore_schedule` tools.
 
 ### View Generator Parameters Tool
 
-    dh_hl view_generator_parameters [schedule ID]
+    dh_hl view_generator_parameters -C ... [schedule ID]
 
 Pretty-print the `generator_parameters.json` stored in the named schedule node.
 Each generator parameters object is printed as a single line
