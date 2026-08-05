@@ -1,5 +1,10 @@
 # Dendritic Halide Harness — Harness for agentic Halide scheduling
 
+IMPL TASK: Read these docs to get a careful understanding of the `dh_hl` harness,
+then look at `../apps/resnet_50/` and think about how hard it would be to get
+the harness to be capable of dealing with that app's custom `process.cpp`.
+This comes second to the immediate work of fixing the `dh_hl help` and `dh_hl prompt` tools.
+
 The process of scheduling Halide code — whether by hand or automated — is often a sort of tree search.
 Schedules evolve over time into other schedules, and some plans don't work out and get back-tracked.
 This harness makes this process explicit as a "catalog" of schedules, organized into a historic tree structure.
@@ -48,7 +53,7 @@ AGENTS: if you are **implementing** this harness,
 see the companion [Implementation Notes](impl.md).
 
 
-## Conceptual State
+# Conceptual State
 
 The catalog is stored in a directory whose name ends with `.dh_hl`.
 
@@ -75,16 +80,14 @@ Finally, the `build` (profiler) tool creates **benchmark set objects**
 that group "batches" of benchmarks across different schedule nodes.
 This is for comparison tools, which only compare within batches to fight noise.
 
-FUTURE: comparison tool not yet specified. Ignore `three_way_bench.md`
-and other files not referenced transitively by `idea.md` (this file).
-
 
 ### Schedule Node Terminology
 
 A schedule node is a **root node** if it has 0 parents.
 The "tree" is technically a forest as multiple roots are possible.
 
-A schedule node is a **major schedule** if it is a root node or it is a canonical schedule of some idea node.
+A schedule node is a **major schedule** if it is a root node or it is
+a canonical schedule of some idea node.
 
 A schedule node is a **minor schedule** if it's not a major schedule.
 The point of this is mainly to track "failed or flawed attempts" to implement the idea.
@@ -124,7 +127,7 @@ We assume these increase monotonically even though leap seconds screw us.
 sha256, lowercase hex digits.
 
 
-### Schedule Node State
+## Schedule Node State
 
 * **C++ source code:** `generator.cpp`
 
@@ -165,7 +168,7 @@ Each value can be bool, number, or string.
 All pairs go to the Halide generator as `key=value`.
 
 
-### Idea Node State
+## Idea Node State
 
 * **Proposal Name:** String of length in `[1, 72]`, containing only alphanumeric characters and underscore.
 
@@ -190,7 +193,7 @@ All pairs go to the Halide generator as `key=value`.
   and is either a `borrows_from` link, or a `superseded_by` link.
 
 
-### Session Node State
+## Session Node State
 
 * **Session Node Full ID:** `{depth}_{timestamp}_{username}@{hostname}`.
   This is, for now, intentionally de-anonymizing.
@@ -241,7 +244,7 @@ The session lock (see "Locking") will catch many such violations,
 but will not prevent observing a partial edit to the workspace C++ file.
 
 
-### Commentary Sub-object State
+## Commentary Sub-object State
 
 * **Text of commentary**
 
@@ -270,7 +273,7 @@ commentary sub-objects:
 * Otherwise, `neutral`
 
 
-### WarningToggle Sub-object State
+## WarningToggle Sub-object State
 
 * **WarningToggle Full ID:**
   `{parent schedule full ID}_{timestamp}`
@@ -300,7 +303,7 @@ blocks and `WarningToggle` cancellations -- to the subtree of the
 schedule node.
 
 
-### Benchmark Sub-object State
+## Benchmark Sub-object State
 
 **Benchmark Full ID:** `{parent schedule node full ID}_{hostname}_{timestamp}`.
 
@@ -330,18 +333,18 @@ FUTURE: once profile tool accepts explicit input sizes etc.
 we need to embed that in here.
 
 
-### Benchmark Set State
+## Benchmark Set State
 
 **Benchmark Set Full ID:** `{sanitized hostname}_{timestamp}`
 
-<!-- deferred task: strip when creating prompt -->
+<!-- impl -->
 Rationale: timestamp alone would be reasonable for one machine
 (would uniquify even on collisions due to minted timestamp behavior).
 Minting will fail if we parallelize across multiple machines.
 Using the computer name to unique-ify makes sense since it's unreasonable
 to expect comparing profiler runs on different machines to make sense.
 (I hope I don't live to eat these words -- but breaking changes are AOK for now).
-<!-- end strip -->
+<!-- end impl -->
 
 3-level JSON object, created by `build` tool profiler feature.
 
@@ -359,7 +362,7 @@ So, the set of all IDs `object[*][*][i]` references the set of benchmarks
 created on the i-th batch of the tool usage.
 
 
-### Current Idea State
+## Current Idea State
 
 We need to keep track of which idea the schedule in the workspace should be parented to.
 The "current idea state" stored in the current session is a tagged union of
@@ -370,7 +373,7 @@ The "current idea state" stored in the current session is a tagged union of
 * **Some current idea state**: contains full ID of an idea node.
 
 
-### Current Anchor Schedule
+## Current Anchor Schedule
 
 Each session may reference a single "anchor schedule", or none at all,
 as part of its session private workspace state.
@@ -378,25 +381,19 @@ Wall time costs are based on relative comparison to the anchor schedule,
 except for direct 2-way comparisons.
 
 
-### Private Idea List
+## Private Idea List
 
 List of idea nodes stored in session private workspace state.
 Each is associated with a string "pool tag" and a cost.
-
-FUTURE: This is used to build a "frontier" of ideas for the
+This is used to build a "frontier" of ideas for the
 session's agent to explore (`list_private_ideas` tool).
 
 
-### Private Benchmark Set List
+## Private Benchmark Set List
 
 List of benchmark sets stored in session private workspace state.
 These are the benchmarks considered for schedule cost and comparison.
 This is technically a set: duplicate benchmark sets are eliminated.
-
-FUTURE: actually use this, but for now this state already has to
-be implemented because of `dh_hl join_session`.
-
-FUTURE: explicit manipulation of the list.
 
 
 ## Session Tree Concepts
@@ -419,8 +416,7 @@ From this there's two derived states:
   Generally, there should be exactly one terminus, and futher progress should start from there.
 
 
-### Terminus Schedule ("Final Result")
-
+## Terminus Schedule ("Final Result")
 
 The catalog is a tree of schedules,
 so it's not necessarily clear which one is the "final" schedule.
@@ -437,7 +433,7 @@ This serializes creation of top-level sessions,
 preventing unexpected multiple termini.
 
 
-## Full and Short IDs
+# Full and Short IDs
 
 The IDs previously defined for idea and schedule nodes are the full IDs.
 Only full IDs are stored in the catalog, because they are stable over time.
@@ -517,7 +513,7 @@ and not long-term identification (e.g. in commentary text).
 Currently benchmark sets don't have short IDs.
 
 
-## Session Handles
+# Session Handles
 
 Session full IDs don't get a short ID form like schedules and ideas.
 Instead, since almost every `dh_hl` tool invocation requires both the catalog directory and current session,
@@ -536,7 +532,7 @@ use the full session ID.
 NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
 
 
-## The Machine Directory
+# The Machine Directory
 
 This directory stores the machine lock (for profiling)
 and the state needed for session handle translation.
@@ -545,7 +541,7 @@ It is in `~/.cache/dendritic_hl/`,
 with the `~/.cache` portion overridable with the `XDG_CACHE_HOME` environment variable.
 
 
-### Locking
+## Locking
 
 All tools acquire the **machine lock**, usually concurrently.
 The profiling step of `build` and any `exec_exclusive` command
@@ -561,7 +557,7 @@ This locking *never* fails for correct usage: failure to acquire is diagnosed as
 NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
 
 
-## Cost Comparison Methodology
+# Cost Comparison Methodology
 
 For now, we will use real runtime performance as the cost model.
 This exposes us to a various real-world noise.
@@ -585,7 +581,7 @@ considering only the batches relevant for the method.
 Ties are broken arbitrarily.
 
 
-### 2-way Cost Comparison
+## 2-way Cost Comparison
 
 When comparing two schedules head-to-head
 (e.g. to answer "is there a performance regression?"),
@@ -607,7 +603,7 @@ If neither is the case, then the comparison is inconclusive.
 See impl.md "Cost Model Core" for the precise bootstrap procedure.
 
 
-### Cost Ranking With Anchor Schedule
+## Cost Ranking With Anchor Schedule
 
 We use a different method to rank arbitrarily lists of schedules,
 because it would be cost prohibitive to require profiling all of them
@@ -627,7 +623,7 @@ bound); however, this is better than nothing, and we don't use the
 anchor schedule technique for high-stakes "is regression" 2-way comparisons.
 
 
-### Cost Ranking Without Anchor Schedule
+## Cost Ranking Without Anchor Schedule
 
 If there is no anchor schedule, the cost ranking falls back to raw time,
 rather than dimensionless ratios.
@@ -639,13 +635,7 @@ The cost is the median raw cost of the representative
 This exposes the harness user to drift.
 
 
-<!--
-deferred task: move tools to new cli.md.
-I decided to stop storing tool implementation details in impl.md
-since it was getting annoying how each tool was documented in two places.
-Source help text from cli.md instead of idea.md with "impl" sections removed.
-Future skill will get an even smaller version of cli.md, as idea.md is too verbose now.
--->
+IMPL TASK: update the FORMAT CONTRACT
 
 <!--
   FORMAT CONTRACT for the code (main.py `_parse_idea_sections`): `dh_hl help`
@@ -659,7 +649,10 @@ Future skill will get an even smaller version of cli.md, as idea.md is too verbo
   * "NOTE: [link ...]" lines and HTML comment lines are stripped from the
     rendered help output.
 -->
-## Tools
+# Tools
+
+IMPL TASK: after reading the CLI docs, read `prompt_common.md` and see
+if it seems to reference nonexistent tools.
 
 The tools are invoked with `dh_hl {tool name} args...`.
 There are two frequest arguments:
@@ -699,15 +692,26 @@ Tools that print an ID or such with no other output still
 include a trailing newline, as customary for Unix tools.
 
 
+## Harness Usage Help Tools
+
 ### Help Tool
 
     dh_hl help [command]
 
-With no `[command]`, lists all commands briefly; with a `[command]`, describes that one.
+With no `[command]`, lists all commands briefly;
+with a `[command]`, describes that one.
+This may be more complete than the CLI summaries provided by `dh_hl prompt`.
 
 
+<!-- impl -->
 ### Help Tool — Implementation Details
-<!-- deferred task: strip when creating prompt -->
+
+IMPL TASK: fix it, the `dh_hl help` doesn't print the intro anymore.
+
+IMPL TASK: remove stuff in between `impl`/`end impl` comments,
+using a similar algorithm as `prompt` tool.
+
+IMPL TASK: update these details
 
 Both help views render from **this repo's `idea.md`** (the single source), via
 `main._parse_idea_sections()`, which returns `(intro, mapping)`:
@@ -722,7 +726,7 @@ Both help views render from **this repo's `idea.md`** (the single source), via
 
 Maintainer-only lines (`NOTE: [link…]`, `<!-- … -->`) are stripped from both.
 The format `_parse_idea_sections` relies on is spelled out in a FORMAT CONTRACT
-comment just above "## Tools" in `idea.md`.  `idea.md` lives one level above the
+comment just above "# Tools" in `idea.md`.  `idea.md` lives one level above the
 package dir, so a copy run detached from the repo won't find it — `help` then
 degrades to the command list / one-liner (no crash).
 
@@ -731,35 +735,31 @@ set equals the set of commands `_parse_idea_help()` finds — add a command
 without an idea.md tool section (or vice versa) and it fails.
 
 
-### Prompt Tools
+<!-- end impl -->
+### Harness Prompt Tools
 
     dh_hl prompt --main
     dh_hl prompt --sub
-    dh_hl detail name
-    dh_hl examples name
+    dh_hl detail {name}
+    dh_hl examples {name}
 
 The `prompt` tool prints the standing agent prompt,
 for either the main-agent (`--main`) or sub-agent (`--sub`) audience.
+
+<!-- help -->
 Exactly one of `--main`/`--sub` is required.
 The audience is deliberately **not** inferred from the current session,
 so the prompt can double-check that the agent is running with the role it thinks
 it is (e.g. that a spawned sub-agent wasn't handed a main-agent's session).
 
+<!-- end help -->
 The prompt mentions supplemental documents in the `detail/` or
 `examples/` directory, which are part of the harness source repo.
 The `detail` and `examples` tools fetch a named file from those
 respective directories and prints it to `stdout`.
 
-NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
-
-
-### Prompt Tools — Implementation Details
-<!-- deferred task: strip when creating prompt -->
-
-    dh_hl prompt --main
-    dh_hl prompt --sub
-    dh_hl detail name
-    dh_hl examples name
+<!-- impl -->
+### Harness Prompt Tools — Implementation Details
 
 All three live in `prompts.py` (the assembly logic) with thin `cmd_*` wrappers
 in `tools.py`; none needs a catalog or session (they read the harness *source*
@@ -771,7 +771,7 @@ separated by a single blank line:
 * `prompt_common.md`, with main/sub-agent specialization applied AND HTML
   comments removed (`parse_prompt`, below).
 
-* `idea.md`, with HTML comments removed
+* `idea.md`, with HTML comments removed and with details removed
 
 * `loopdoc.md`, with HTML comments removed
 
@@ -822,6 +822,202 @@ out in a FORMAT CONTRACT comment atop `prompt_common.md`.  Like idea.md, the fil
 sits above the package dir; if missing, `prompt` errors cleanly (no fallback —
 the prompt has no default content).  Covered by `tests/test_prompt.py`.
 
+IMPL TASK: implement this.
+
+**idea.md detail removal:** Similar to `main`/`sub` comments.
+Remove all text wrapped with `help`/`end help` or `impl`/`end impl` comments.
+
+
+<!-- end impl -->
+## Session Creation Tools
+
+Each session creation tool requires (or implies) an input proposal name,
+prompt file, and list of parent schedule nodes.
+
+The tools perform the steps:
+
+* A new session ID is allocated.
+
+* For each parent schedule node,
+  a new idea node is created from the proposal name and prompt file,
+  in the same manner as
+  `dh_hl new_idea {proposal name} {prompt file} {parent schedule ID}`,
+  except that,
+  (a) the pool tag of the new idea is `session.{proposal name}`
+  (b) the proposal text has the line `Created for session: {session_id}` appended.
+
+* Create a new session seeded with the new idea nodes created above,
+  and with the prompt from the prompt file.
+  The session private workspace is not initialized.
+  The new session's parent session and default anchor node is defined per-tool.
+
+* For each seed idea, a new schedule node is created,
+  holding a copy of the seed idea's parent's C++ and parameters files.
+  This is immediately set as the canonical schedule of the new idea node.
+
+* Allocate a session handle for the new session, and print it.
+
+The duplicate schedule node is somewhat hacky,
+but ensures that a new session can immediately assume it's given
+an exclusive sub-tree to explore.
+It's expected the prompt will be fairly "high level",
+and not comparable to most idea nodes in complexity.
+So, the agent can start generating more short-term ideas
+for a parent schedule that's exclusively its own.
+
+
+### New Catalog Tool
+
+    dh_hl new_catalog -C ... {proposal name} {prompt file} {input C++ file} [input generator parameters]
+
+Creates a new catalog directory with the bare minimum state to get started:
+
+* Two schedule nodes, both holding a copy of the input C++ file and
+  input generator parameters file.
+  If the optional parameters aren't given, default to `[{}]`
+  ("benchmark once with no parameters").
+
+* One idea node connecting the two schedule nodes.
+
+* One top-level session node (terminus) seeded with that idea node.
+
+<!-- help -->
+The new catalog directory is named by the `-C` argument.
+The requirement for `-C` is *opposite* all other commands:
+it is an error if the named directory *does* exist.
+
+The behavior is as-if a single schedule node were created,
+then a new session is created with that schedule as the only parent schedule.
+The new session node has no parent session and has no default anchor node.
+This is because the user-provided schedule may be very poor,
+so it's not a reasonable default as an anchor (profiling may never terminate)
+
+
+<!-- end help -->
+### New Sub Session Tool
+
+    dh_hl new_sub_session -s ... {proposal name} {prompt file} [schedule IDs...]
+
+Create a new sub-session,
+which is a child of the current session with 1 greater depth.
+
+The `[schedule IDs...]` is a list of schedule node IDs
+(each ID is a separate `argv` argument);
+these are the parent schedules for new session creation.
+An empty list behaves like the default `[schedule ID]` argument.
+
+The default anchor is the current anchor of the current session
+(which could be none).
+
+
+### New Successor Session Tool
+
+    dh_hl new_successor_session -s ... {proposal name} {prompt file}
+
+The current session must be self-closed and have depth 0.
+
+Create a new successor session (depth = 0) with
+
+* the current session as its parent.
+
+* the output schedules of the current session as
+  the parent schedules for session creation.
+
+* the primary output of the current session as
+  its default anchor.
+
+
+## Session Workspace Files Tools
+
+### Init Workspace Tool
+
+    dh_hl init_workspace -s ...
+
+Initialize the session private workspace state to defaults.
+Unless the optional `--force` flag is given, the tool fails if any
+existing state would be overwritten.
+
+<!-- help -->
+**Defaults:**
+
+* **Generator, Generator Parameters, Current Idea State:**
+  initialized as if by `dh_hl restore_idea` done on the 0th seed idea.
+
+* **Current Anchor Schedule:**
+  initialized from the current session's default anchor schedule;
+  no current anchor if no default anchor schedule.
+
+* **Private Idea List:** initialized from the current session's seed ideas,
+  each with pool tag `default`.
+  This is intentionally different from the parent session's pool tags;
+  the new agent can make their own decisions what to prioritize.
+
+* **Private Benchmark Set List:** empty.
+
+The session lock is low-level state that is not exclusive to this tool;
+it is implicitly created without any user action.
+<!-- end help -->
+
+<!-- impl -->
+### Init Workspace Tool -- Implementation Details
+
+(Implemented by writing each file via
+`safety.write_allowed(..., allow=<--force>)`: with `--force` off, an existing
+target hits `new_file`'s `O_EXCL` create and raises, which the tool catches to
+print the AGENTS warning below.)
+
+Direct reads of the workspace files (`generator.cpp`, `generator_parameters.json`)
+are funneled through a helper that, on a missing file, gives a friendly
+"run `init_workspace`" notice naming the missing path rather than a raw
+Python traceback.
+
+If the tool fails because some workspace state already exists (without
+`--force`), it prints one of the following AGENTS warnings:
+
+    # Session depth == 0
+    AGENTS: the session seems to already be initialized,
+    as if in use by (or previously used by) another agent.
+    Things will fail badly if this session is used concurrently.
+    If you can speak with the user interactively, ask for a decision:
+
+    1. the user finds the conversation that was for this session
+    and asks that agent to close the session (preferred)
+
+    2. inspect the current session workspace and try to pick up
+    where the previous agent left off.
+
+    3. restart the session from scratch (re-run this tool with --force)
+
+    If you can't ask (e.g. automated workflow),
+    don't continue, unless other prompting provides an expected fix.
+
+    # Session depth != 0
+    AGENTS: the session seems to already be initialized,
+    as if it's in use by (or previously used by) another agent.
+    STOP IMMEDIATELY and report to the main agent or user what happened.
+    You can do so normally, not via `dh_hl close_session`.
+
+
+<!-- end impl -->
+### Workspace Location Tools
+
+    dh_hl workspace_schedule -s ...
+    dh_hl workspace_parameters -s ...
+    dh_hl workspace_bin -s ...
+
+Respectively, get the filename of the
+
+* workspace C++ file
+
+* workspace generator parameters JSON file
+
+* bin directory
+
+AGENTS: use `init_workspace` and not these tools to create the
+new generator and parameters files.
+Nevertheless, these tools do not enforce this in case extenuating
+circumstances require a deviation.
+
 
 ### Status Tool
 
@@ -829,14 +1025,15 @@ the prompt has no default content).  Covered by `tests/test_prompt.py`.
     dh_hl status -s ...
 
 This is a purely read-only command.
-<!-- Agents used to have to run this on startup,
-but the safety this provided got replaced with init_workspace. -->
+<!-- Agents used to have to run this on startup. -->
+<!-- The safety this provided got replaced with init_workspace. -->
 
 If there was no current session given, the tool errors.
 Otherwise, the tool tries to find a schedule node that already holds
 a copy of the workspace files,
 and give basic information on the current catalog state.
 
+<!-- help -->
 **Outputs:**
 
 * The full IDs of the current session and its parent session (if any)
@@ -884,8 +1081,9 @@ since we have no idea otherwise as soon as the schedule hash changes.
 it's possible heavy-handed git actions could cause the current idea
 state to desync from the real catalog.
 This is why the command is robust to nonexistent current idea node IDs.
-
-**Search Implementation Details:**  <!-- deferred task: strip when creating prompt -->
+<!-- end help -->
+<!-- impl -->
+**Search Implementation Details:**
 
 Hash the workspace files and look for schedule nodes with matching hashes.
 
@@ -913,7 +1111,7 @@ and the status is "workspace consistent".
 
 Otherwise, the status is "workspace inconsistent, unexpected current idea state".
 
-**Output Implementation Details:**  <!-- deferred task: strip when creating prompt -->
+**Output Implementation Details:**
 
 * The full IDs of the current session and its parent session (if any)
 
@@ -937,31 +1135,36 @@ Otherwise, the status is "workspace inconsistent, unexpected current idea state"
 * If the workspace is consistent, print the ID of the unambiguous schedule node.
 
 
+<!-- end impl -->
 ### Restore Schedule Tool
 
     dh_hl restore_schedule -s ... {schedule ID}
 
 Copies the schedule node's C++ schedule and generator parameters to
-the workspace, and updates the current idea state as follows,
-depending on the number of parent idea nodes of the referenced
-schedule node.
+the workspace, and resets the current idea state.
+
+<!-- help -->
+The current idea state depends on the schedule node's parents:
 
 * **No parents:** set to "no current idea" state, embedding the timestamp of the schedule node.
 
 * **One parent:** set to "some current idea" state, embedding the ID of the parent idea node.
 
 
+<!-- end help -->
 ### Restore Idea Tool
 
     dh_hl restore_idea -s ... {idea ID}
 
+Restores the private workspace to a state where you are ready
+to begin *implementing* the idea.
+
+<!-- help -->
 Copies the idea's parent schedule's C++ code and
 generator parameters to the workspace,
 and updates the current idea state to "some current idea" state,
 embedding the idea referenced in the command.
 
-This restores the private workspace to a state where you are ready
-to begin *implementing* the idea.
 Note; the workspace will probably be inconsistent according to
 `dh_hl status` after this command. This is normal.
 
@@ -972,6 +1175,9 @@ The warning includes
 * A suggestion to use `restore_schedule` instead.
 
 
+<!-- end help -->
+## Build, Benchmark, and Warning Tools
+
 ### Init-Build Tool
 
     dh_hl init_build -s ...
@@ -979,8 +1185,13 @@ The warning includes
 Prepare for an up-to-3-way comparison between Halide schedules,
 including possibly a new schedule node made from current workspace files.
 
+This is the main mechanism by which new schedules enter the catalog.
+The harness (by design) can only build or profile schedules in the catalog.
+So this is the first step to building or profiling a new schedule.
+
 Takes optional arguments specifying the up to three schedule nodes.
 
+<!-- help -->
 * `--target {schedule ID}` selects the target schedule node.
   The special value `workspace` is the default, detailed below.
 
@@ -1009,24 +1220,22 @@ Takes optional arguments specifying the up to three schedule nodes.
 * Otherwise, add a new child schedule node to the current idea node
   holding a copy of the workspace files. This is the target node.
 
-This is the main mechanism by which new schedules enter the catalog.
-The harness (by design) can only build or profile schedules in the catalog.
-So this is the first step to building or profiling a new schedule.
 
-
+<!-- end help -->
 ### Build Tool
 
     dh_hl build -s ...
 
-
 Builds the schedule nodes selected by the latest `dh_hl init_build`
-done with the current session (state stored in the session private workspace).
-Optionally profiles them, generating new benchmark or benchmark set objects.
+done with the current session (state stored in the session private workspace)
+Optionally profiles them in batches (`--profile [N]`),
+generating new benchmark or benchmark set objects.
 Generated benchmark sets are added to the private benchmark set list.
 
 By default, if a schedule has `N`-many generator parameters objects,
 then `N` binaries are built, one for each parameters object.
 It's an error if any schedule node being built has 0 parameters objects.
+<!-- help -->
 
 The tool
 
@@ -1068,14 +1277,14 @@ and all subprocesses succeeded.
 A new benchmark set is generated, containing all benchmark objects
 made by this tool run, iff `--only all` or `--only target` are in effect,
 profiler batch count is at least 1, and no subprocesses failed.
+<!-- end help -->
 
 Important lines emitted by the harness itself are prefixed with
 `dh_hl: ` for grep-ability.
 
 
+<!-- impl -->
 ### Build Tool Implementation Details
-
-<!-- deferred task: strip when creating prompt -->
 
 It's crucial that the catalog lock is not acquired during the
 compilation phase. This prevents locking out other agents
@@ -1181,175 +1390,7 @@ never a rollback); the generator-count harness error skips the node's compile
 without updating its result.
 
 
-### Canon Tool (Make Canonical Tool)
-
-    dh_hl canon -s ...
-
-Sets the canonical schedule of the current idea node to the schedule node named by `dh_hl status`.
-This is a schedule node that holds a copy of the workspace schedule.
-
-Requirements:
-    * Current idea node must exist
-    * `dh_hl status` would give an unambiguous schedule node ID
-    * Referenced schedule must have a `success` result state.
-    * The current idea node must not already have a canonical schedule
-
-If the command fails due to the last requirement:
-    * If the schedule node is already the canonical schedule, the tool notes it was already done.
-    * Otherwise, it advises the `dh_hl new_idea {canonical ID}` and `dh_hl set_idea` tools,
-      where the `{canonical ID}` is the ID of the major schedule that blocked this command.
-
-There is intentionally no "change canonical schedule" tool.
-
-
-### Comment Tool
-
-    dh_hl comment -C ... {commentary file} [schedule ID]
-
-Adds a new commentary sub-object to the referenced schedule node,
-with the commentary text copied from the passed `commentary file`.
-Prints the ID of the new commentary sub-object.
-
-Use the optional `--review [review]` arguments to override
-the review from the default `neutral` value.
-This must be a valid review type other than `mixed`.
-
-Use the optional `--cancels [commentary ID]` arguments to add to
-the cancels list of the new commentary.
-Use multiple `--cancels` to create a longer list.
-It's an error if any commentary object that isn't parented
-to the referenced schedule node is passed.
-
-
-### New Root Tool
-
-    dh_hl new_root -s ...
-
-Hashes the workspace files and looks for existing schedule nodes with the same hash.
-If any of them are major schedules, the tool errors,
-giving IDs of all such schedule nodes.
-
-Otherwise, it creates a new root schedule node containing a
-copy of the workspace file, and sets the current idea state to
-"no current idea", embedding the timestamp of the new schedule node.
-
-This tool succeeds regardless of the contents of the current idea
-state on disk. If parsing the existing file yields multiple
-encoded current idea states, it additionally adds
-commentary to the new schedule node of the form:
-
-        dh_hl new_root tool: automated merge conflict recovery
-        [one line for each encoded current idea state parsed,
-        in any order and the same format as the current idea state file]
-
-and with the default `neutral` review.
-This is just a temporary "bare minimum" merge conflict resolution.
-
-FUTURE: probably remove this extra merge conflict recovery functionality later.
-Or just do it now if it's naturally part of the current batch of changes.
-
-
-### Set Idea Tool
-
-    dh_hl set_idea -s ... {idea ID}
-
-Updates the current idea state to "some current idea",
-embedding the given idea node ID.
-It is an error if the ID doesn't resolve to a single existing idea node.
-
-This leaves the workspace C++ file and generator parameters alone.
-To reset both the workspace files and the current idea state,
-consider `restore_schedule` or `restore_idea`.
-
-
-### New Idea Tool
-
-    dh_hl new_idea -s ... {proposal name} {proposal file} [schedule ID]
-
-Adds a new child idea node to the referenced schedule node,
-which must be a major schedule.
-Furthermore, the idea node is added to the current session's
-private idea list, with pool tag:
-
-* given by `--pool-tag {pool tag}` if this argument is given
-
-* otherwise, the pool tag of the referenced schedule node's parent.
-  This fails (`--pool-tag` required) if either the referenced schedule node
-  is a root node, or if its parent idea node is not in the private idea list.
-
-It is an error if this would cause an ID collision
-(i.e. the proposal name is already used).
-
-Gives back the ID of the new idea node.
-
-If the schedule node is a minor schedule, the tool advises:
-* If its parent idea node already has a canonical schedule,
-  give its ID and advise passing it explicitly to the `new_idea` tool
-* If its parent idea node has no canonical schedule,
-  advise `dh_hl canon` tool is appropriate if the current schedule builds
-  and you are happy it correctly implements the idea.
-* (no other cases: minor schedules are not root nodes by definition)
-
-
-### List Ideas Tools
-
-    # All commands do not acquire session lock
-    dh_hl list_child_ideas -C ... [schedule ID]
-    dh_hl list_seed_ideas -s ...
-
-`list_child_ideas` prints a summary of each child idea node of
-the referenced *major schedule* node; error if passed a minor schedule.
-
-`list_seed_ideas` prints a summary of each seed idea of the current session.
-
-Prints these lines for each idea node:
-
-* The ID of the idea node (all lines except this one indented by 2)
-
-* ID of canonical schedule, or `(none)`, prefixed by `canonical: `
-
-* The proposal name, prefixed by `proposal: `
-
-* For `list_child_ideas` only,
-  the first up-to 72 characters of the first line of the proposal text.
-
-* For `list_child_ideas` only,
-  if the last non-empty line of the proposal text starts with
-  `Created for session:`, print that line.
-  (See "Session Creation Tools: Common Information").
-
-* For each idea side link,
-  print `borrowed from: {idea short ID}`
-  or `superseded by: {idea short ID}` as appropriate.
-
-
-### View Idea Tools
-
-    # All commands do not acquire session lock
-    dh_hl view_idea -C ... {idea ID}
-
-Prints the referenced idea node's
-
-* proposal name
-
-* full proposal text
-
-* list of child schedule IDs, one line each
-
-* idea side links, in the same format as `list_child_ideas`
-
-
-### Add Idea Side Link Tool
-
-    # Reads like a sentence, e.g. abcdef.foo borrows_from 123456.bar
-    dh_hl add_idea_side_link -C ... {idea ID lhs} {type} {idea ID rhs}
-
-Add an idea side link from the LHS idea to the RHS idea,
-of type `borrows_from` or `superseded_by`.
-Silent no-op if this exactly duplicates an existing idea side link.
-(i.e. same LHS, RHS, and type).
-
-
+<!-- end impl -->
 ### Add Warning Toggle Tool
 
     dh_hl add_warning_toggle -C ... {schedule ID} {commentary ID}
@@ -1357,7 +1398,7 @@ Silent no-op if this exactly duplicates an existing idea side link.
 Add a new `WarningToggle` sub object to the referenced schedule,
 which cites the referenced commentary.
 
-This command takes further arguments:
+Takes exactly one of:
 
 * `--block {rule} {func}` makes the new `WarningToggle` block
   warnings with the given rule name and function name.
@@ -1365,27 +1406,29 @@ This command takes further arguments:
 * `--cancel {WarningToggle ID}` makes the `WarningToggle`
   cancel the effects of the given other object (i.e. un-block).
 
-Exactly one of `--block` / `--cancel` must be given, since a `WarningToggle`'s
-value is a tagged union (see "WarningToggle State").
-
-
 The schedule given by `dh_hl session_root_of` is a reasonable
 default for the `{schedule ID}` argument.
+<!-- help -->
 This scopes the "lesson" that the warning is to be ignored mostly to
 schedules worked on in this session, but not to those from other
 sessions, which may be working on schedules completely different from
 this one.
+<!-- end help -->
 
+<!-- impl -->
 FUTURE: warning for unknown warning rule name or func name.
 
 FUTURE: automate schedule ID, but the defaults for `[schedule ID]`
 are probably not appropriate for this command.
 
 
+<!-- end impl -->
 ### Debug Warning Toggle Tool
 
     dh_hl debug_warning_toggle -C ... [schedule ID]
 
+Investigate `WarningToggle` sub-objects of the schedule and its indirect parents.
+<!-- help -->
 By default, the tool collects all `WarningToggle` objects using the
 schedule-node-to-root algorithm specified in the `WarningToggle` state
 documentation, then prints for each object:
@@ -1416,11 +1459,14 @@ This command takes further arguments:
   It is not an error if the named object does not exist.
 
 
+<!-- end help -->
 ### View Benchmark Warnings Tool
 
     dh_hl view_benchmark_warnings -C ... {benchmark ID}
 
 Pretty-print the warnings embedded in the referenced benchmark sub-object.
+
+<!-- help -->
 Takes an optional `--always-show-message` flag.
 
 For each warning, the tool prints:
@@ -1444,6 +1490,7 @@ There are dividers between printed warnings.
 FUTURE: fix `max_warnings` limit in Halide profiler that silently drops warnings.
 
 
+<!-- end help -->
 ### View Benchmark Stdout Tool
 
     dh_hl view_benchmark_stdout -C ... {benchmark ID}
@@ -1451,344 +1498,21 @@ FUTURE: fix `max_warnings` limit in Halide profiler that silently drops warnings
 Print the `stdout` captured for the named benchmark.
 
 
-### History Tool
+### JSON Benchmark Info Tool
 
-    dh_hl history -C ... [schedule ID]
+    dh_hl json_benchmark_info -C ... {benchmark ID}
 
-Walks the branch of the tree from the referenced schedule node
-up toward a root node.
-For each schedule node, prints:
+Prints the identified benchmark in benchmark sub-object JSON format.
 
 
-* Its ID
-* Its child idea nodes in the same format as `dh_hl list_child_ideas`,
-  marking the child idea node that is the parent of the previously printed schedule node.
-* For each commentary file, its timestamp on one line,
-  and the first up-to-72 characters of the first line of the commentary text.
+### JSON Benchmark Set Info Tool
 
+    dh_hl json_benchmark_set_info -C ... {benchmark set ID}
 
-### List Schedules Tools
+Prints the state of the referenced benchmark set as a JSON object.
 
-    # Does not acquire session lock
-    dh_hl list_output_schedules -s ...
-    dh_hl list_sibling_schedules -C ... [schedule ID]
-    dh_hl list_child_schedules -C ... {idea ID}
-    dh_hl list_equal_schedules -C ... [schedule ID]
 
-Lists all schedule nodes matching some criterion:
-
-* `list_output_schedules`:
-  list all output schedules of the current session.
-  Error if the current session has no outputs yet.
-
-* `list_sibling_schedules`:
-  list all schedule nodes that have the same parent as the given schedule.
-  Error if a root node is given.
-
-* `list_child_schedules`:
-  list all children of the given idea node.
-  (This partially overlaps the `view_idea` tool, with different verbosity).
-
-* `list_equal_schedules`:
-  list all schedule nodes with the same hash as the given schedule.
-
-Each schedule is printed in the same manner as `dh_hl history`
-(ignoring the "marking the child idea node" part),
-with a clear separator between each.
-There is no predefined order of the schedules,
-except for `list_output_schedules` (ordered as stored in session output).
-
-
-### View Commentary Tool
-
-    dh_hl view_commentary -C ... {commentary ID}
-    dh_hl view_all_commentary -C ... [schedule ID]
-
-Prints either the referenced commentary sub-object (`view_commentary`),
-or all commentary sub-objects of the schedule (`view_all_commentary`),
-with each commentary separated by a divider.
-
-Takes an optional `--brief` argument.
-
-Each commentary is printed as
-
-* `timestamp: [timestamp]`
-
-* `review: [review]`
-
-* `cancelled: [true|false]`
-
-* One `cancels: [commentary ID]` for each entry is the cancels list
-
-* full text, unless `--brief` is passed, in which case only the first up to
-  72 characters of the first line is printed.
-
-
-### View Session Commentary Tool
-
-    # Does not acquire session lock
-    dh_hl view_session_commentary -s ...
-
-
-Takes an optional `--brief` argument.
-
-For each output schedule node of the current session, prints:
-
-* A prominent banner with the schedule node's ID.
-
-* The outputs of `view_all_commentary` for the schedule node,
-  inheriting the `--brief` behavior.
-
-Error if the current session has no output yet.
-
-
-### Root Query Tools
-
-    # Does not acquire session lock
-    dh_hl root_of -C ... [schedule ID]
-    dh_hl session_root_of -s ... [schedule ID]
-
-
-Starts at the referenced schedule node and starts walking the tree
-towards the root.
-For each schedule node,
-
-* for `root_of`, print the ID of the node and exit if it's a root node.
-
-* for `session_root_of`, print the ID of the node and exit if its parent
-  idea exists and is a child of a seed idea of the current session.
-
-The `session_root_of` search may fail.
-The `root_of` search won't fail for a non-corrupt catalog.
-
-
-### Force Parent Idea Tool
-
-    dh_hl force_parent_idea -C ... {idea ID} [schedule ID]
-
-Adds the referenced schedule node as a child and the canonical
-schedule of the referenced idea node.
-
-This fails if:
-* The referenced schedule node is not a root node.
-* The referenced idea node already has a canonical schedule.
-* The new edge would cause a tree structure invariant violation.
-
-Rarely needed, mostly for when a new root node was created and you regret it.
-
-
-### Session Creation Tools: Common Information
-
-
-Each session creation tool requires (or implies) an input proposal name,
-prompt file, and list of parent schedule nodes.
-
-The tools perform the steps:
-
-* A new session ID is allocated.
-
-* For each parent schedule node,
-  a new idea node is created from the proposal name and prompt file,
-  in the same manner as
-  `dh_hl new_idea {proposal name} {prompt file} {parent schedule ID}`,
-  except that,
-  (a) the pool tag of the new idea is `session.{proposal name}`
-  (b) the proposal text has the line `Created for session: {session_id}` appended.
-
-* Create a new session seeded with the new idea nodes created above,
-  and with the prompt from the prompt file.
-  The session private workspace is not initialized.
-  The new session's parent session and default anchor node is defined per-tool.
-
-* For each seed idea, a new schedule node is created,
-  holding a copy of the seed idea's parent's C++ and parameters files.
-  This is immediately set as the canonical schedule of the new idea node.
-
-* Allocate a session handle for the new session, and print it.
-
-The duplicate schedule node is somewhat hacky,
-but ensures that a new session can immediately assume it's given
-an exclusive sub-tree to explore.
-It's expected the prompt will be fairly "high level",
-and not comparable to most idea nodes in complexity.
-So, the agent can start generating more short-term ideas
-for a parent schedule that's exclusively its own.
-
-
-### New Catalog Tool
-
-    dh_hl new_catalog -C ... {proposal name} {prompt file} {input C++ file} [input generator parameters]
-
-Creates a new catalog directory with the bare minimum state to get started:
-
-* Two schedule nodes, both holding a copy of the input C++ file and
-  input generator parameters file.
-  If the optional parameters aren't given, default to `[{}]`
-  ("benchmark once with no parameters").
-
-* One idea node connecting the two schedule nodes.
-
-* One top-level session node (terminus) seeded with that idea node.
-
-The new catalog directory is named by the `-C` argument.
-The requirement for `-C` is *opposite* all other commands:
-it is an error if the named directory *does* exist.
-
-The behavior is as-if a single schedule node were created,
-then a new session is created with that schedule as the only parent schedule.
-The new session node has no parent session and has no default anchor node.
-This is because the user-provided schedule may be very poor,
-so it's not a reasonable default as an anchor (profiling may never terminate)
-
-
-### New Sub Session Tool
-
-    dh_hl new_sub_session -s ... {proposal name} {prompt file} [schedule IDs...]
-
-
-Create a new sub-session,
-which is a child of the current session with 1 greater depth.
-
-The `[schedule IDs...]` is a list of schedule node IDs
-(each ID is a separate `argv` argument);
-these are the parent schedules for new session creation.
-An empty list behaves like the default `[schedule ID]` argument.
-
-The default anchor is the current anchor of the current session
-(which could be none).
-
-
-### New Successor Session Tool
-
-    dh_hl new_successor_session -s ... {proposal name} {prompt file}
-
-The current session must be self-closed and have depth 0.
-
-Create a new successor session (depth = 0) with
-
-* the current session as its parent.
-
-* the output schedules of the current session as
-  the parent schedules for session creation.
-
-* the primary output of the current session as
-  its default anchor.
-
-
-### Catalog Location Tool
-
-    dh_hl catalog_location -C ...
-
-Print the path to the catalog directory.
-Non-trivial when the `-s {session handle}` option is used.
-
-
-### List Sessions Tools
-
-    dh_hl list_open_sessions -C ...
-    dh_hl list_termini -C ...
-
-List all open session nodes or all termini ("terminuses") of the current catalog.
-Give both full session IDs and session handles.
-
-
-### Close Session Tool
-
-    dh_hl close_session -s ... [schedule IDs...]
-
-
-Add outputs to the current session, making it self-closed.
-This promotes a fair amount of private (not git tracked)
-session state to public (git tracked) session node state.
-
-**Output Schedules:**
-The `[schedule IDs...]` is a list of schedule node IDs
-(each ID is a separate `argv` argument);
-these are added as the output schedules of the current session.
-An empty list behaves like the default `[schedule ID]` argument.
-Recall the first one given becomes the primary output schedule.
-
-Each output schedule's pool tag is the pool tag of its parent idea,
-as defined by the current session's private idea list.
-It's an error if any root nodes are given,
-or if the parent idea is not in the private idea list
-(fix with `dh_hl set_pool_tag`).
-
-If any schedule node given has no commentary,
-the tool gives an error and reminds of the `dh_hl comment` tool.
-
-**Output Benchmark Sets:**
-Same as the current session's private benchmark set list.
-
-
-**Added superseded-by Links:**
-For each output schedule `O`, find the schedule node `R`
-that would be found by `dh_hl session_root_of O`.
-Add a superseded-by idea side link from `R`'s parent to `O`'s parent.
-This step is silently skipped for output schedules
-where `session_root_of` would fail.
-
-
-### Join Session Tool
-
-    # Acquires session lock of the current session only.
-    dh_hl join_session -s {current session handle/ID} {joined session handle/ID}
-
-
-Adds joined session outputs to the current session's private idea list
-and private benchmark sets; error if the joined session lacks outputs.
-Accepts `--dry-run` and `--pool-prefix {pool prefix}` arguments.
-The default `pool prefix` is an empty string.
-
-If `--dry-run` is not given,
-
-* Add all benchmark sets from the joined session's output to the
-  current session's private benchmark set list.
-
-* For each joined session's output schedule node,
-  add its parent idea node to the current idea list,
-  with the assigned pool tag being:
-
-  * the existing pool tag unchanged, if the idea was already in the list
-
-  * the output schedule node's pool tag otherwise,
-    prefixed with `{pool prefix}.` if the pool prefix is non-empty.
-
-Whether or not `--dry-run` was given, this prints out
-
-* The benchmark sets (that would be) added,
-  each on a line of the form `dh_hl: add benchmark set {id}`
-
-* The idea nodes (that would be) added, as two lines of the form
-  `dh_hl: add idea {id}`, `dh_hl: pool tag {pool tag}`.
-  The pool tag given includes the added prefix.
-
-These are designed to be greppable,
-in case the agent wants to undo some of this later.
-
-<!-- deferred task: strip when creating prompt -->
-An unfriendly raw Python exception is acceptable for the root-schedule case
-(a root output) since `close_session` forbids it, so it can't happen without
-manually corrupting the catalog files.
-
-
-### Delist Session Tool
-
-    dh_hl delist_session -s ...
-
-Set the is-delisted flag of the current session to true.
-Useful to get rid of old abandoned sessions in the open sessions or termini list.
-
-
-### View Session Prompt Tool
-
-    # Does not acquire session lock
-    dh_hl view_session_prompt -s ...
-
-Prints the plain text prompt of the current session,
-followed by `=== Seed Ideas ===`,
-followed by the output of the `list_seed_ideas` tool.
-
+## Cost Model and Private Idea List Tools
 
 ### List Session Private Ideas Tool
 
@@ -1819,6 +1543,7 @@ Performs automated detection of ideas "obsoleted by" lower cost child ideas.
 
 * `--todo`, include only idea nodes without canonical schedules.
 
+<!-- help -->
 **Outputs:**
 
 For each enabled pool tag in sorted order,
@@ -1857,7 +1582,8 @@ The check is positive if all of:
 Since the `build --profile` tool by default compares against the parent idea's
 parent schedule, info for this will usually be available.
 
-<!-- deferred task: strip when creating prompt -->
+<!-- end help -->
+<!-- impl -->
 **Implementation Notes:**
 
 If no anchor schedule was used for cost ranking, give the warning
@@ -1871,6 +1597,7 @@ give the warning
     This amplifies the effects of system noise; consider a new anchor.
 
 
+<!-- end impl -->
 ### Session Current Anchor Schedule Tools
 
     dh_hl get_current_anchor -s ...
@@ -1892,6 +1619,7 @@ as stored in the private idea list.
 `set_pool_tag` implicitly adds to the list if necessary.
 `hide_private_idea` simply prepends a `.` to the idea node's pool tag.
 
+<!-- help -->
 `get_pool_tag` and `hide_private_idea` error out if the idea node
 is not in the private idea list.
 
@@ -1899,14 +1627,15 @@ The purpose of the pool tag is to allow the agent to enforce some
 diversity in the frontier of "best ideas" shown in `list_private_ideas`.
 Ideas are ranked only within their pools.
 
-FUTURE: actually implement the last paragraph in a later turn.
-Also the `.` prefix won't make sense until then.
+FUTURE: use the `.` prefix
 
 
+<!-- end help -->
 ### Rename Pool Tag Tool
 
     dh_hl rename_pool_tag -s ... {pool tag before} {pool tag after}
 
+<!-- help -->
 Iterates over all entries in the current session's private idea list.
 Each idea that has `{pool tag before}` as its pool tag
 gets its pool tag updated to `{pool tag after}`.
@@ -1914,11 +1643,13 @@ gets its pool tag updated to `{pool tag after}`.
 Prints `{count} idea nodes updated`.
 
 
+<!-- end help -->
 ### Add/Remove Private Benchmark Set Tools
 
     dh_hl add_private_benchmark_set -s ...
     dh_hl remove_private_benchmark_set -s ...
 
+<!-- help -->
 Add or remove benchmark sets from the current session's private
 benchmark set list.
 They are passed as a list of benchmark set IDs (`...`),
@@ -1927,192 +1658,18 @@ which could be an empty list.
 This is currently not so useful, as benchmark sets are not really discoverable.
 
 
+<!-- end help -->
 ### List Private Benchmark Sets Tool
 
     dh_hl list_private_benchmark_sets -s ...
 
+<!-- help -->
 Print the full IDs of all benchmark sets in the current session's
 private benchmark set list.
 IDs are sorted lexicographically, one per line, with no other `stdout` output.
 
 
-### Copy Schedule, ID-of Schedule Tools
-
-    # All commands do not acquire the session lock
-    dh_hl copy_schedule -C ... {output file} [schedule ID]
-    dh_hl copy_terminus_schedule -C ... {output file}
-    dh_hl copy_seed_schedule -s ... {output file}
-    dh_hl copy_session_output -s ... {output file}
-
-    dh_hl terminus_schedule_short_id -C ...
-    dh_hl seed_schedule_short_id -s ...
-    dh_hl session_output_short_id -s ...
-
-    dh_hl terminus_schedule_full_id -C ...
-    dh_hl seed_schedule_full_id -s ...
-    dh_hl session_output_full_id -s ...
-
-Find a certain schedule node (noun), and do something with it (verb):
-
-**Nouns:**
-
-* `schedule`: the schedule node id'd by `[schedule ID]`.
-
-* `terminus_schedule`:
-  the primary output schedule of the unique terminus.
-  Error if there is not exactly one session node that is a terminus
-  or the terminus has no output schedule.
-
-* `seed_schedule`:
-  the canonical schedule of the current session's 0th seed idea.
-
-* `session_output`:
-  the primary output schedule of the current session;
-  error if there is no output has been defined yet.
-
-**Verbs:**
-
-* `copy`: write the C++ schedule to the given `{output file}`.
-
-* `full_id`: give the full ID of the schedule node
-
-* `short_id`: give a short ID of the schedule node (may fall back to full ID)
-
-NB see also `schedule_full_id`, `schedule_short_id`, `restore_schedule` tools.
-
-
-### View Generator Parameters Tool
-
-    dh_hl view_generator_parameters [schedule ID]
-
-Pretty-print the `generator_parameters.json` stored in the named schedule node.
-Each generator parameters object is printed as a single line
-
-    [0-based index] [JSON object as one line]
-
-
-### Init Workspace Tools
-
-    dh_hl init_workspace -s ...
-
-Takes an optional `--force` flag.
-
-Initialize the session private workspace state to defaults:
-
-* **Generator, Generator Parameters, Current Idea State:**
-  initialized as if by `dh_hl restore_idea` done on the 0th seed idea.
-
-* **Current Anchor Schedule:**
-  initialized from the current session's default anchor schedule;
-  no current anchor if no default anchor schedule.
-
-* **Private Idea List:** initialized from the current session's seed ideas,
-  each with pool tag `default`.
-  This is intentionally different from the parent session's pool tags;
-  the new agent can make their own decisions what to prioritize.
-
-* **Private Benchmark Set List:** empty.
-
-The session lock is low-level state that is not exclusive to this tool;
-it is implicitly created without any user action.
-
-Unless `--force` is given, the tool fails if any existing state would
-be overwritten.
-
-<!-- deferred task: strip when creating prompt -->
-(Implemented by writing each file via
-`safety.write_allowed(..., allow=<--force>)`: with `--force` off, an existing
-target hits `new_file`'s `O_EXCL` create and raises, which the tool catches to
-print the AGENTS warning below.)
-
-Direct reads of the workspace files (`generator.cpp`, `generator_parameters.json`)
-are funneled through a helper that, on a missing file, gives a friendly
-"run `init_workspace`" notice naming the missing path rather than a raw
-Python traceback.
-
-If the tool fails because some workspace state already exists (without
-`--force`), it prints one of the following AGENTS warnings:
-
-    # Session depth == 0
-    AGENTS: the session seems to already be initialized,
-    as if in use by (or previously used by) another agent.
-    Things will fail badly if this session is used concurrently.
-    If you can speak with the user interactively, ask for a decision:
-
-    1. the user finds the conversation that was for this session
-    and asks that agent to close the session (preferred)
-
-    2. inspect the current session workspace and try to pick up
-    where the previous agent left off.
-
-    3. restart the session from scratch (re-run this tool with --force)
-
-    If you can't ask (e.g. automated workflow),
-    don't continue, unless other prompting provides an expected fix.
-
-    # Session depth != 0
-    AGENTS: the session seems to already be initialized,
-    as if it's in use by (or previously used by) another agent.
-    STOP IMMEDIATELY and report to the main agent or user what happened.
-    You can do so normally, not via `dh_hl close_session`.
-
-
-### Workspace Location Tools
-
-    dh_hl workspace_schedule -s ...
-    dh_hl workspace_parameters -s ...
-    dh_hl workspace_bin -s ...
-
-Respectively, get the filename of the
-
-* workspace C++ file
-
-* workspace generator parameters JSON file
-
-* bin directory
-
-AGENTS: use `init_workspace` and not these tools to create the
-new generator and parameters files.
-Nevertheless, these tools do not enforce this in case extenuating
-circumstances require a deviation.
-
-
-### Locked Execution Tools
-
-    dh_hl exec --
-    dh_hl exec_exclusive --
-
-Execute a CLI command with the machine lock held,
-in concurrent mode for `exec` and exclusive mode for `exec_exclusive`.
-This is necessary for executing non-harness commands without interfering with other agents' profiling.
-
-The executed command is formed from all the arguments passed after `--`.
-The N-th argument after `--` is the N-th `argv` value for the CLI command,
-e.g. the following prints a single file `hello world.txt` with the exclusive lock held:
-
-    dh_hl exec_exclusive -s tmp.abc123 -- cat "hello world.txt"
-
-The `-s` session argument is not needed, but is accepted here for consistency.
-
-
-### ID Translation Tools
-
-    # All commands do not acquire session lock
-    dh_hl schedule_full_id -C ... [schedule ID]  # Print the full ID of the given schedule node
-    dh_hl schedule_short_id -C ... [schedule ID] # Print a short ID for the given schedule node
-    dh_hl idea_full_id -C ... {idea ID}          # Print the full ID of the given idea node
-    dh_hl idea_short_id -C ... {idea ID}         # Print a short ID for the given idea node
-    dh_hl session_full_id -s ...                 # Print the full ID of the current session
-    dh_hl session_handle -s ...                  # Print the session handle for the current session
-
-On success: print out the ID/handle with a newline, and no other `stdout` output.
-
-Short ID getters may silently fall back to giving a full ID.
-However, the `session_handle` getter will never give back a session full ID:
-this is load bearing for correctness, since it encodes more than a session full ID
-(namely, the catalog directory location).
-
-
+<!-- end help -->
 ### JSON Ranking Cost Query Tool
 
     dh_hl json_ranking_cost -s ... [schedule ID]
@@ -2122,6 +1679,7 @@ This relies only on batches reachable from
 the current session's private benchmark set list,
 filtered as specified for the methodology.
 
+<!-- help -->
 The output is a JSON object with key/value pairs on separate lines:
 
 * `batch_count`: number of batches found by cost ranking algorithm
@@ -2153,6 +1711,7 @@ depending on the optional `--anchor {schedule ID}` argument:
   otherwise without anchor schedule.
 
 
+<!-- end help -->
 ### JSON Compare Cost Tool
 
     dh_hl json_compare_cost [LHS schedule ID] [RHS schedule ID]
@@ -2167,6 +1726,7 @@ The LHS schedule, if not explicitly given, has default `[schedule ID]` behavior.
 
 The RHS schedule, if not explicitly given,
 is the parent of the LHS's parent idea.
+<!-- help -->
 (Error if the parent idea doesn't exist).
 Note, if you override this, you will in most cases have to run `dh_hl build`
 with an explicit `--other`, as the default parent won't suffice.
@@ -2199,13 +1759,15 @@ The output is a JSON object with key/value pairs on separate lines:
   index of generator parameters object used by the RHS representative.
 
 
+<!-- end help -->
 ### JSON Profiler Statistics Tool
 
     dh_hl json_profiler_stats [schedule ID]
 
 Aggregate profiler statistics for the referenced schedule,
 considering only benchmarks reachable from the private benchmark set list.
-The list of stats to include is given by command line arguments:
+<!-- help -->
+The list of stats to include is given by command line arguments.
 
 * `-f {name}`, include a per-function statistic (e.g. `-f recompute_ratio`)
 
@@ -2273,7 +1835,8 @@ benchmarks' samples (bucketed by function, for `-f`) into a 3-list:
 
 `wall_time_smallest` and any other non-number statistics are not supported.
 
-<!-- deferred task: strip when creating prompt -->
+<!-- end help -->
+<!-- impl -->
 **Implementation Notes:**
 Don't try to embed the list of allowed `-f`/`-p` values,
 other than the special values described above,
@@ -2289,10 +1852,556 @@ Make it so that `name`, `parent`, and `canonical_id` are printed
 first in the `func` object.
 
 
+<!-- end impl -->
+## Commentary Tools
+
+### Comment Tool
+
+    dh_hl comment -C ... {commentary file} [schedule ID]
+
+Adds a new commentary sub-object to the referenced schedule node,
+with the commentary text copied from the passed `commentary file`.
+Prints the ID of the new commentary sub-object.
+
+Use the optional `--review [review]` arguments to override
+the review from the default `neutral` value.
+This must be a valid review type other than `mixed`.
+
+Use the optional `--cancels [commentary ID]` arguments to add to
+the cancels list of the new commentary.
+Use multiple `--cancels` to create a longer list.
+It's an error if any commentary object that isn't parented
+to the referenced schedule node is passed.
+
+
+### View Commentary Tool
+
+    dh_hl view_commentary -C ... {commentary ID}
+    dh_hl view_all_commentary -C ... [schedule ID]
+
+Prints either the referenced commentary sub-object (`view_commentary`),
+or all commentary sub-objects of the schedule (`view_all_commentary`),
+with each commentary separated by a divider.
+
+Takes an optional `--brief` argument.
+
+Each commentary is printed as
+
+* `timestamp: [timestamp]`
+
+* `review: [review]`
+
+* `cancelled: [true|false]`
+
+* One `cancels: [commentary ID]` for each entry is the cancels list
+
+* full text, unless `--brief` is passed, in which case only the first up to
+  72 characters of the first line is printed.
+
+
+### View Session Commentary Tool
+
+    # Does not acquire session lock
+    dh_hl view_session_commentary -s ...
+
+Takes an optional `--brief` argument.
+
+For each output schedule node of the current session, prints:
+
+* A prominent banner with the schedule node's ID.
+
+* The outputs of `view_all_commentary` for the schedule node,
+  inheriting the `--brief` behavior.
+
+Error if the current session has no output yet.
+
+
+## Other Session Tools
+
+### Set Idea Tool
+
+    dh_hl set_idea -s ... {idea ID}
+
+Updates the current idea state to "some current idea",
+embedding the given idea node ID.
+It is an error if the ID doesn't resolve to a single existing idea node.
+
+This leaves the workspace C++ file and generator parameters alone.
+To reset both the workspace files and the current idea state,
+consider `restore_schedule` or `restore_idea`.
+
+
+### List Sessions Tools
+
+    dh_hl list_open_sessions -C ...
+    dh_hl list_termini -C ...
+
+List all open session nodes or all termini ("terminuses") of the current catalog.
+Give both full session IDs and session handles.
+
+
+### Close Session Tool
+
+    dh_hl close_session -s ... [schedule IDs...]
+
+Add outputs to the current session, making it self-closed.
+This promotes a fair amount of private (not git tracked)
+session state to public (git tracked) session node state.
+
+<!-- help -->
+**Output Schedules:**
+The `[schedule IDs...]` is a list of schedule node IDs
+(each ID is a separate `argv` argument);
+these are added as the output schedules of the current session.
+An empty list behaves like the default `[schedule ID]` argument.
+Recall the first one given becomes the primary output schedule.
+
+Each output schedule's pool tag is the pool tag of its parent idea,
+as defined by the current session's private idea list.
+It's an error if any root nodes are given,
+or if the parent idea is not in the private idea list
+(fix with `dh_hl set_pool_tag`).
+
+If any schedule node given has no commentary,
+the tool gives an error and reminds of the `dh_hl comment` tool.
+
+**Output Benchmark Sets:**
+Same as the current session's private benchmark set list.
+
+**Added superseded-by Links:**
+For each output schedule `O`, find the schedule node `R`
+that would be found by `dh_hl session_root_of O`.
+Add a superseded-by idea side link from `R`'s parent to `O`'s parent.
+This step is silently skipped for output schedules
+where `session_root_of` would fail.
+
+
+<!-- end help -->
+### Join Session Tool
+
+    # Acquires session lock of the current session only.
+    dh_hl join_session -s {current session handle/ID} {joined session handle/ID}
+
+Adds joined session outputs to the current session's private idea list
+and private benchmark sets; error if the joined session lacks outputs.
+Accepts `--dry-run` (print only) and `--pool-prefix {pool prefix}` arguments.
+The default `pool prefix` is an empty string.
+
+<!-- help -->
+If `--dry-run` is not given,
+
+* Add all benchmark sets from the joined session's output to the
+  current session's private benchmark set list.
+
+* For each joined session's output schedule node,
+  add its parent idea node to the current idea list,
+  with the assigned pool tag being:
+
+  * the existing pool tag unchanged, if the idea was already in the list
+
+  * the output schedule node's pool tag otherwise,
+    prefixed with `{pool prefix}.` if the pool prefix is non-empty.
+
+Whether or not `--dry-run` was given, this prints out
+
+* The benchmark sets (that would be) added,
+  each on a line of the form `dh_hl: add benchmark set {id}`
+
+* The idea nodes (that would be) added, as two lines of the form
+  `dh_hl: add idea {id}`, `dh_hl: pool tag {pool tag}`.
+  The pool tag given includes the added prefix.
+
+These are designed to be greppable,
+in case the agent wants to undo some of this later.
+
+<!-- end help -->
+<!-- impl -->
+An unfriendly raw Python exception is acceptable for the root-schedule case
+(a root output) since `close_session` forbids it, so it can't happen without
+manually corrupting the catalog files.
+
+
+<!-- end impl -->
+### Delist Session Tool
+
+    dh_hl delist_session -s ...
+
+<!-- help -->
+Set the is-delisted flag of the current session to true.
+Useful to get rid of old abandoned sessions in the open sessions or termini list.
+
+
+<!-- end help -->
+### View Session Prompt Tool
+
+    # Does not acquire session lock
+    dh_hl view_session_prompt -s ...
+
+<!-- help -->
+Prints the plain text prompt of the current session,
+followed by `=== Seed Ideas ===`,
+followed by the output of the `list_seed_ideas` tool.
+
+
+<!-- end help -->
+### JSON Session Info Tool
+
+    # Does not acquire session lock
+    dh_hl json_session_info -s ...
+
+<!-- help -->
+Prints the state of the current session as a JSON object, with key/value pairs
+
+* `id`: full ID of node
+
+* `parent`: string or null, full ID of parent session
+
+* `children`: list of strings, each a full ID of a session node
+
+* `prompt`: string
+
+* `default_anchor_schedule`: string or null,
+  full ID of default anchor schedule node
+
+* `seed_ideas`: list of strings, full ID of seed idea nodes
+
+* `output_schedules`: list of strings or null,
+  full ID of output schedule nodes
+
+* `output_benchmark_sets`: list of strings or null,
+  full IDs of output benchmark sets
+
+* `delisted`: bool
+
+* `depth`: number
+
+
+<!-- end help -->
+## Other Idea Node and Schedule Node Tools
+
+### New Idea Tool
+
+    dh_hl new_idea -s ... {proposal name} {proposal file} [schedule ID]
+
+Adds a new child idea node to the referenced schedule node,
+which must be a major schedule.
+Furthermore, the idea node is added to the current session's
+private idea list.
+<!-- help -->
+The pool tag is:
+
+* given by `--pool-tag {pool tag}` if this argument is given
+
+* otherwise, the pool tag of the referenced schedule node's parent.
+  This fails (`--pool-tag` required) if either the referenced schedule node
+  is a root node, or if its parent idea node is not in the private idea list.
+
+It is an error if this would cause an ID collision
+(i.e. the proposal name is already used).
+
+Gives back the ID of the new idea node.
+
+<!-- end help -->
+<!-- impl -->
+If the schedule node is a minor schedule, the tool advises:
+* If its parent idea node already has a canonical schedule,
+  give its ID and advise passing it explicitly to the `new_idea` tool
+* If its parent idea node has no canonical schedule,
+  advise `dh_hl canon` tool is appropriate if the current schedule builds
+  and you are happy it correctly implements the idea.
+* (no other cases: minor schedules are not root nodes by definition)
+
+
+<!-- end impl -->
+### New Root Tool
+
+    dh_hl new_root -s ...
+
+Create new root schedule node from workspace files.
+Generally this should be avoided.
+
+<!-- help -->
+Hashes the workspace files and looks for existing schedule nodes with the same hash.
+If any of them are major schedules, the tool errors,
+giving IDs of all such schedule nodes.
+
+Otherwise, it creates a new root schedule node containing a
+copy of the workspace file, and sets the current idea state to
+"no current idea", embedding the timestamp of the new schedule node.
+
+This tool succeeds regardless of the contents of the current idea
+state on disk. If parsing the existing file yields multiple
+encoded current idea states, it additionally adds
+commentary to the new schedule node of the form:
+
+        dh_hl new_root tool: automated merge conflict recovery
+        [one line for each encoded current idea state parsed,
+        in any order and the same format as the current idea state file]
+
+and with the default `neutral` review.
+This is just a temporary "bare minimum" merge conflict resolution.
+
+FUTURE: probably remove this extra merge conflict recovery functionality later.
+
+
+<!-- end help -->
+### Canon Tool (Make Canonical Tool)
+
+    dh_hl canon -s ...
+
+Sets the canonical schedule of the current idea node to the schedule node named by `dh_hl status`.
+This is a schedule node that holds a copy of the workspace schedule.
+
+Requirements:
+    * Current idea node must exist
+    * `dh_hl status` would give an unambiguous schedule node ID
+    * Referenced schedule must have a `success` result state.
+    * The current idea node must not already have a canonical schedule
+
+If the command fails due to the last requirement:
+    * If the schedule node is already the canonical schedule, the tool notes it was already done.
+    * Otherwise, it advises the `dh_hl new_idea {canonical ID}` and `dh_hl set_idea` tools,
+      where the `{canonical ID}` is the ID of the major schedule that blocked this command.
+
+There is intentionally no "change canonical schedule" tool.
+
+
+### List Ideas Tools
+
+    # All commands do not acquire session lock
+    dh_hl list_child_ideas -C ... [schedule ID]
+    dh_hl list_seed_ideas -s ...
+
+<!-- help -->
+`list_child_ideas` prints a summary of each child idea node of
+the referenced *major schedule* node; error if passed a minor schedule.
+
+`list_seed_ideas` prints a summary of each seed idea of the current session.
+
+Prints these lines for each idea node:
+
+* The ID of the idea node (all lines except this one indented by 2)
+
+* ID of canonical schedule, or `(none)`, prefixed by `canonical: `
+
+* The proposal name, prefixed by `proposal: `
+
+* For `list_child_ideas` only,
+  the first up-to 72 characters of the first line of the proposal text.
+
+* For `list_child_ideas` only,
+  if the last non-empty line of the proposal text starts with
+  `Created for session:`, print that line.
+  (See "Session Creation Tools: Common Information").
+
+* For each idea side link,
+  print `borrowed from: {idea short ID}`
+  or `superseded by: {idea short ID}` as appropriate.
+
+
+<!-- end help -->
+### View Idea Tools
+
+    # All commands do not acquire session lock
+    dh_hl view_idea -C ... {idea ID}
+
+Prints the referenced idea node's
+
+* proposal name
+
+* full proposal text
+
+* list of child schedule IDs, one line each
+
+* idea side links, in the same format as `list_child_ideas`
+
+
+### Add Idea Side Link Tool
+
+    # Reads like a sentence, e.g. abcdef.foo borrows_from 123456.bar
+    dh_hl add_idea_side_link -C ... {idea ID lhs} {type} {idea ID rhs}
+
+Add an idea side link from the LHS idea to the RHS idea,
+of type `borrows_from` or `superseded_by`.
+Silent no-op if this exactly duplicates an existing idea side link.
+(i.e. same LHS, RHS, and type).
+
+
+### History Tool
+
+    dh_hl history -C ... [schedule ID]
+
+Walks the branch of the tree from the referenced schedule node
+up toward a root node.
+<!-- help -->
+For each schedule node, prints:
+
+* Its ID
+* Its child idea nodes in the same format as `dh_hl list_child_ideas`,
+  marking the child idea node that is the parent of the previously printed schedule node.
+* For each commentary file, its timestamp on one line,
+  and the first up-to-72 characters of the first line of the commentary text.
+
+
+<!-- end help -->
+### List Schedules Tools
+
+    # Does not acquire session lock
+    dh_hl list_output_schedules -s ...
+    dh_hl list_sibling_schedules -C ... [schedule ID]
+    dh_hl list_child_schedules -C ... {idea ID}
+    dh_hl list_equal_schedules -C ... [schedule ID]
+
+<!-- help -->
+Lists all schedule nodes matching some criterion:
+
+* `list_output_schedules`:
+  list all output schedules of the current session.
+  Error if the current session has no outputs yet.
+
+* `list_sibling_schedules`:
+  list all schedule nodes that have the same parent as the given schedule.
+  Error if a root node is given.
+
+* `list_child_schedules`:
+  list all children of the given idea node.
+  (This partially overlaps the `view_idea` tool, with different verbosity).
+
+* `list_equal_schedules`:
+  list all schedule nodes with the same hash as the given schedule.
+
+Each schedule is printed in the same manner as `dh_hl history`
+(ignoring the "marking the child idea node" part),
+with a clear separator between each.
+There is no predefined order of the schedules,
+except for `list_output_schedules` (ordered as stored in session output).
+
+
+<!-- end help -->
+### Root Query Tools
+
+    # Does not acquire session lock
+    dh_hl root_of -C ... [schedule ID]
+    dh_hl session_root_of -s ... [schedule ID]
+
+Starts at the referenced schedule node and starts walking the tree
+towards the root.
+For each schedule node,
+
+* for `root_of`, print the ID of the node and exit if it's a root node.
+
+* for `session_root_of`, print the ID of the node and exit if its parent
+  idea exists and is a child of a seed idea of the current session.
+
+The `session_root_of` search may fail.
+The `root_of` search won't fail for a non-corrupt catalog.
+
+
+### Force Parent Idea Tool
+
+    dh_hl force_parent_idea -C ... {idea ID} [schedule ID]
+
+Rarely needed, mostly for when a new root node was created and you regret it.
+
+<!-- help -->
+Adds the referenced schedule node as a child and the canonical
+schedule of the referenced idea node.
+
+This fails if:
+* The referenced schedule node is not a root node.
+* The referenced idea node already has a canonical schedule.
+* The new edge would cause a tree structure invariant violation.
+
+
+<!-- end help -->
+### Copy Schedule, ID-of Schedule Tools
+
+    # All commands do not acquire the session lock
+    dh_hl copy_schedule -C ... {output file} [schedule ID]
+    dh_hl copy_terminus_schedule -C ... {output file}
+    dh_hl copy_seed_schedule -s ... {output file}
+    dh_hl copy_session_output -s ... {output file}
+
+    dh_hl terminus_schedule_short_id -C ...
+    dh_hl seed_schedule_short_id -s ...
+    dh_hl session_output_short_id -s ...
+
+    dh_hl terminus_schedule_full_id -C ...
+    dh_hl seed_schedule_full_id -s ...
+    dh_hl session_output_full_id -s ...
+
+<!-- help -->
+Find a certain schedule node (noun), and do something with it (verb):
+
+**Nouns:**
+
+* `schedule`: the schedule node id'd by `[schedule ID]`.
+
+* `terminus_schedule`:
+  the primary output schedule of the unique terminus.
+  Error if there is not exactly one session node that is a terminus
+  or the terminus has no output schedule.
+
+* `seed_schedule`:
+  the canonical schedule of the current session's 0th seed idea.
+
+* `session_output`:
+  the primary output schedule of the current session;
+  error if there is no output has been defined yet.
+
+**Verbs:**
+
+* `copy`: write the C++ schedule to the given `{output file}`.
+
+* `full_id`: give the full ID of the schedule node
+
+* `short_id`: give a short ID of the schedule node (may fall back to full ID)
+
+NB see also `schedule_full_id`, `schedule_short_id`, `restore_schedule` tools.
+
+
+<!-- end help -->
+### View Generator Parameters Tool
+
+    dh_hl view_generator_parameters [schedule ID]
+
+Pretty-print the `generator_parameters.json` stored in the named schedule node.
+Each generator parameters object is printed as a single line
+
+    [0-based index] [JSON object as one line]
+
+
+### Fix Canonical Tool
+
+    dh_hl fix_canonical -C ... {idea ID}
+
+Fix competing idea node canonical schedule after merge conflict.
+
+<!-- help -->
+After a merge conflict, the referenced idea node's canonical schedule may
+record two competing IDs. This tool resolves that by modifying the catalog
+graph so that:
+
+* The older canonical schedule becomes the canonical schedule
+  of the referenced idea node.
+* That canonical schedule gains a new child idea node whose
+  canonical schedule is the newer of the two competing schedules.
+* The new child idea node has proposal name `fix_canonical_{timestamp}`
+  and a proposal text noting it was auto-generated by `fix_canonical`.
+
+**Warning:** this tool is AFAIK the only case where a
+short ID can silently *change meaning*
+(as opposed to become ambiguous, with a diagnostic).
+However, this tool should be very rarely used,
+only needed for dealing with regrettable git merges.
+
+
+<!-- end help -->
 ### JSON Schedule Info Tool
 
     dh_hl json_schedule_info -C ... [schedule ID]
 
+<!-- help -->
 Prints the state of the referenced schedule node as a JSON object, with key/value pairs
 
 * `id`: full ID of node
@@ -2341,10 +2450,12 @@ Prints the state of the referenced schedule node as a JSON object, with key/valu
     * `cancels`: full ID of `WarningToggle` object; null if not applicable
 
 
+<!-- end help -->
 ### JSON Idea Info Tool
 
     dh_hl json_idea_info -C ... {idea ID}
 
+<!-- help -->
 Prints the state of the referenced idea node as a JSON object, with key/value pairs
 
 * `id`: full ID of node
@@ -2366,56 +2477,60 @@ Prints the state of the referenced idea node as a JSON object, with key/value pa
 * `review`: string value derived from commentary
 
 
-### JSON Session Info Tool
+<!-- end help -->
+## Misc Tools
 
-    # Does not acquire session lock
-    dh_hl json_session_info -s ...
+### Locked Execution Tools
 
+    dh_hl exec --
+    dh_hl exec_exclusive --
 
-Prints the state of the current session as a JSON object, with key/value pairs
+Execute a CLI command with the machine lock held,
+in concurrent mode for `exec` and exclusive mode for `exec_exclusive`.
+This is necessary for executing non-harness commands without interfering with other agents' profiling.
 
-* `id`: full ID of node
+The executed command is formed from all the arguments passed after `--`.
+The N-th argument after `--` is the N-th `argv` value for the CLI command,
+e.g. the following prints a single file `hello world.txt` with the exclusive lock held:
 
-* `parent`: string or null, full ID of parent session
+    dh_hl exec_exclusive -s tmp.abc123 -- cat "hello world.txt"
 
-* `children`: list of strings, each a full ID of a session node
-
-* `prompt`: string
-
-* `default_anchor_schedule`: string or null,
-  full ID of default anchor schedule node
-
-* `seed_ideas`: list of strings, full ID of seed idea nodes
-
-* `output_schedules`: list of strings or null,
-  full ID of output schedule nodes
-
-* `output_benchmark_sets`: list of strings or null,
-  full IDs of output benchmark sets
-
-* `delisted`: bool
-
-* `depth`: number
+The `-s` session argument is not needed, but is accepted here for consistency.
 
 
-### JSON Benchmark Info Tool
+### Catalog Location Tool
 
-    dh_hl json_benchmark_info -C ... {benchmark ID}
+    dh_hl catalog_location -C ...
 
-Prints the identified benchmark in benchmark sub-object JSON format.
-
-
-### JSON Benchmark Set Info Tool
-
-    dh_hl json_benchmark_set_info -C ... {benchmark set ID}
-
-Prints the state of the referenced benchmark set as a JSON object.
+<!-- help -->
+Print the path to the catalog directory.
+Non-trivial when the `-s {session handle}` option is used.
 
 
-### JSON Export Tool
+<!-- end help -->
+### ID Translation Tools
+
+    # All commands do not acquire session lock
+    dh_hl schedule_full_id -C ... [schedule ID]  # Print the full ID of the given schedule node
+    dh_hl schedule_short_id -C ... [schedule ID] # Print a short ID for the given schedule node
+    dh_hl idea_full_id -C ... {idea ID}          # Print the full ID of the given idea node
+    dh_hl idea_short_id -C ... {idea ID}         # Print a short ID for the given idea node
+    dh_hl session_full_id -s ...                 # Print the full ID of the current session
+    dh_hl session_handle -s ...                  # Print the session handle for the current session
+
+On success: print out the ID/handle with a newline, and no other `stdout` output.
+
+Short ID getters may silently fall back to giving a full ID.
+However, the `session_handle` getter will never give back a session full ID:
+this is load bearing for correctness, since it encodes more than a session full ID
+(namely, the catalog directory location).
+
+
+### JSON Export Entire Catalog Tool
 
     dh_hl json_export -C ...
 
+<!-- help -->
 Exports the entire catalog as a JSON object, with key/value pairs
 
 * `ideas`: idea nodes
@@ -2434,29 +2549,9 @@ FUTURE: holds the exclusive catalog lock despite being conceptually read-only.
 Optimize this if needed, but this shouldn't be in the agent hot loop.
 
 
-### Fix Canonical Tool
-
-    dh_hl fix_canonical -C ... {idea ID}
-
-After a merge conflict, the referenced idea node's canonical schedule may
-record two competing IDs. This tool resolves that by modifying the catalog
-graph so that:
-
-* The older canonical schedule becomes the canonical schedule
-  of the referenced idea node.
-* That canonical schedule gains a new child idea node whose
-  canonical schedule is the newer of the two competing schedules.
-* The new child idea node has proposal name `fix_canonical_{timestamp}`
-  and a proposal text noting it was auto-generated by `fix_canonical`.
-
-**Warning:** this tool is AFAIK the only case where a
-short ID can silently *change meaning*
-(as opposed to become ambiguous, with a diagnostic).
-However, this tool should be very rarely used,
-only needed for dealing with regrettable git merges.
-
-
-## Main Agent Default Session Behavior
+<!-- end help -->
+<!-- main -->
+# Main Agent Default Session Behavior
 
 This step gives reasonable defaults, which take second priority to the
 user's instructions or more authoritative prompts.
@@ -2483,3 +2578,4 @@ If none of these cases (e.g. multiple termini),
 then the user needs to provide more specific intentions.
 The user may not be familiar with the harness.
 Try to advise of the implications of various actions.
+<!-- end main -->
