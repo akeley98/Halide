@@ -14,7 +14,7 @@ import shutil
 import pytest
 
 from dendritic_hl_lib import build
-from conftest import make_catalog_session, Sess
+from conftest import make_catalog_session, Sess, branch_fresh_idea
 
 pytestmark = [
     pytest.mark.halide,
@@ -78,7 +78,12 @@ def _set_params(S, text):
 
 
 def _init_and_build(run_cli, S, profile=1):
-    """init_build the (perturbed) workspace as target-only, then build."""
+    """init_build the (perturbed) workspace as target-only, then build.  First
+    branch a fresh, canonical-less idea (the seed idea has a canonical, so
+    init_build --target workspace would otherwise refuse to add a child under it
+    -- idea.md "Init-Build Tool").  branch_fresh_idea reads the catalog, not the
+    workspace, so it works even after the params have been perturbed."""
+    branch_fresh_idea(S)
     r = run_cli("init_build", *_cli(S), "--other", "none", "--anchor", "none")
     assert r.returncode == 0, r.stderr
     args = ["build", *_cli(S)]
@@ -116,6 +121,7 @@ def test_parameters_list(run_cli, tiled_session):
 def test_view_generator_parameters(run_cli, tiled_session):
     """view_generator_parameters prints one line per params object."""
     _set_params(tiled_session, '[{"split_factor": 8}, {"split_factor": 16}]')
+    branch_fresh_idea(tiled_session)  # canonical-less idea so init_build adds a child
     r = run_cli("init_build", *_cli(tiled_session), "--other", "none",
                 "--anchor", "none")
     assert r.returncode == 0, r.stderr

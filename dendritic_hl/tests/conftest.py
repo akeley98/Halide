@@ -18,6 +18,7 @@ see impl.md "Tests" for the full explanation:
 The `_reset_lock_state` autouse fixture returns to lock level NONE between tests.
 """
 
+import itertools
 import os
 import subprocess
 import sys
@@ -128,14 +129,23 @@ def make_catalog_session(cat_dir, source=DUMMY_SOURCE, idea_name="seed"):
         locks._reset_for_tests()
 
 
-def branch_fresh_idea(session, name="explore"):
+_branch_idea_counter = itertools.count()
+
+
+def branch_fresh_idea(session, name=None):
     """Move the session's current idea onto a fresh child idea that has NO
     canonical yet, and return its full ID.  Models the real 'explore a change'
     workflow: the seed idea already has a canonical (a copy of its parent), so
     `init_build --target workspace` refuses to add more children to it (idea.md
     "Init-Build Tool") -- you branch a new idea off the canonical and explore
     there.  Tests that create a new child schedule via a perturbed workspace must
-    first land on such a canonical-less idea."""
+    first land on such a canonical-less idea.
+
+    *name* defaults to a per-call-unique proposal name, so branching repeatedly
+    off the same canonical (e.g. a test that rebuilds several times) never
+    collides on the proposal name."""
+    if name is None:
+        name = "explore_{}".format(next(_branch_idea_counter))
     from dendritic_hl_lib import locks, safety
     from dendritic_hl_lib.catalog import Catalog
     from dendritic_hl_lib.context import SessionWorkspace

@@ -157,8 +157,12 @@ def test_view_benchmark_warnings_real_halide(hist_session, run_tool, capsys):
 def test_build_command_trace_and_shuffle(brighten_session, run_tool, capsys):
     from dendritic_hl_lib import locks
     S = brighten_session
-    # A target with THREE parameters objects (+ the root as `other`) gives four
-    # binaries, so a per-batch profiling order has 4! = 24 possibilities.
+    # Branch a fresh, canonical-less idea so init_build can add a child (the seed
+    # idea already has a canonical -- idea.md "Init-Build Tool").
+    branch_fresh_idea(S)
+    # A target with THREE parameters objects (+ the seed canonical as `other`)
+    # gives four binaries, so a per-batch profiling order has 4! = 24
+    # possibilities.
     S.write_params('[{"offset": 1}, {"offset": 2}, {"offset": 3}]')
     run_tool(build.cmd_init_build,
              S.ns(target="workspace", other="parent", anchor="none"))

@@ -53,6 +53,22 @@ def _bootstrap(run_cli, tmp_path):
     return cat_dir, handle
 
 
+def _branch_fresh_idea(run_cli, handle):
+    """Real explore-a-change workflow: the seed idea already has a canonical, so
+    branch a fresh idea off it (the workspace is still consistent right after
+    bootstrap, so new_idea's default schedule is the seed canonical) and make it
+    current.  A later perturbed `init_build --target workspace` then creates a
+    child under the new, canonical-less idea -- init_build refuses to add children
+    to an idea that already has a canonical (idea.md "Init-Build Tool").  Call
+    this BEFORE perturbing the workspace params."""
+    r = run_cli("new_idea", "-s", handle, "explore", "-",
+                input="explore variation\n")
+    assert r.returncode == 0, r.stderr
+    idea = _line(r.stdout, "Created idea ")
+    r = run_cli("set_idea", "-s", handle, idea)
+    assert r.returncode == 0, r.stderr
+
+
 def _set_params(run_cli, handle, params):
     """Overwrite the workspace generator_parameters.json (list of objects)."""
     r = run_cli("workspace_parameters", "-s", handle)
@@ -86,6 +102,7 @@ def test_parallel_param_is_faster_than_serial(run_cli, tmp_path):
     """The profiler stats must track the parameters object: the enable_parallel
     variant is meaningfully faster than the serial one."""
     cat_dir, handle = _bootstrap(run_cli, tmp_path)
+    _branch_fresh_idea(run_cli, handle)
     _set_params(run_cli, handle,
                 [{"enable_parallel": True}, {"enable_parallel": False}])
     r = run_cli("init_build", "-s", handle, "--target", "workspace",
@@ -111,6 +128,7 @@ def test_generator_print_ordered_within_banners(run_cli, tmp_path):
     """The generator's stdout appears between the harness's begin/end generator
     banners (the flush ordering in build.py must hold under a piped CLI)."""
     cat_dir, handle = _bootstrap(run_cli, tmp_path)
+    _branch_fresh_idea(run_cli, handle)
     _set_params(run_cli, handle, [{"print_me": "HELLOWORLD"}])
     r = run_cli("init_build", "-s", handle, "--target", "workspace",
                 "--other", "none", "--anchor", "none")
@@ -136,6 +154,7 @@ def test_profiling_stdout_redirected_then_viewable(run_cli, tmp_path):
     ... sec/iter ...", "Best output throughput is ..."); we assert that text is
     absent from `build`'s stdout but present in the viewed benchmark stdout."""
     cat_dir, handle = _bootstrap(run_cli, tmp_path)
+    _branch_fresh_idea(run_cli, handle)
     _set_params(run_cli, handle, [{"enable_parallel": True}])
     r = run_cli("init_build", "-s", handle, "--target", "workspace",
                 "--other", "none", "--anchor", "none")
@@ -192,9 +211,10 @@ def test_benchmark_set_cells_attributed(run_cli, tmp_path):
     that (schedule, parameters index): the benchmark full ID is prefixed by the
     schedule full ID, and its recorded parameters match the node's params[i]."""
     cat_dir, handle = _bootstrap(run_cli, tmp_path)
+    _branch_fresh_idea(run_cli, handle)
     _set_params(run_cli, handle,
                 [{"enable_parallel": True}, {"enable_parallel": False}])
-    # target (2 params) + other = the root (1 param) -> a 2-node set.
+    # target (2 params) + other = the seed canonical (1 param) -> a 2-node set.
     r = run_cli("init_build", "-s", handle, "--target", "workspace",
                 "--other", "parent", "--anchor", "none")
     assert r.returncode == 0, r.stderr
@@ -228,6 +248,7 @@ def test_failed_generator_no_benchmark_set(run_cli, tmp_path):
     fail banner for it), the node result caps at `halide error`, the run exits
     nonzero, and NO benchmark set is produced."""
     cat_dir, handle = _bootstrap(run_cli, tmp_path)
+    _branch_fresh_idea(run_cli, handle)
     _set_params(run_cli, handle,
                 [{"enable_parallel": True}, {"should_fail": True}])
     r = run_cli("init_build", "-s", handle, "--target", "workspace",
@@ -251,9 +272,12 @@ def test_failed_generator_no_benchmark_set(run_cli, tmp_path):
 # ---------------------------------------------------------------------------
 
 def _profile_target(run_cli, handle, params, *, other="none", batches=3):
-    """Set the workspace params, init_build, and `build --profile` the target
-    (a fresh node, since non-default params change its hash).  Returns nothing;
-    the produced benchmark set lands in the session's private list."""
+    """Branch a fresh idea (so init_build may create a child), set the workspace
+    params, init_build, and `build --profile` the target (a fresh node, since
+    non-default params change its hash).  Returns nothing; the produced benchmark
+    set lands in the session's private list.  With other='parent' the target's
+    'other' node is the seed canonical (the new idea's parent schedule)."""
+    _branch_fresh_idea(run_cli, handle)
     _set_params(run_cli, handle, params)
     r = run_cli("init_build", "-s", handle, "--target", "workspace",
                 "--other", other, "--anchor", "none")
@@ -333,14 +357,18 @@ def test_json_profiler_stats_parameters_selects_parallelism(run_cli, tmp_path):
 
 
 def test_json_compare_cost_detects_regression(run_cli, tmp_path):
-    """A serial target vs the parallel (default) root: the 2-way comparison
-    confidently reports a regression (LHS is the dearer serial schedule)."""
+    """A serial target vs the parallel (default) seed canonical: the 2-way
+    comparison confidently reports a regression (LHS is the dearer serial
+    schedule)."""
     cat_dir, handle = _bootstrap(run_cli, tmp_path)
-    # Serial target; other=parent pulls in the root (default params -> parallel),
-    # so both are profiled in the same batches (the paired comparison needs that).
+    # Serial target; other=parent pulls in the seed canonical (default params ->
+    # parallel), so both are profiled in the same batches (the paired comparison
+    # needs that).  The seed canonical is also json_compare_cost's default RHS
+    # (the parent schedule of the LHS's parent idea).
     _profile_target(run_cli, handle, [{"enable_parallel": False}], other="parent")
 
-    # LHS defaults to the workspace (serial target); RHS defaults to the root.
+    # LHS defaults to the workspace (serial target); RHS defaults to the seed
+    # canonical (parent of the LHS's parent idea).
     r = run_cli("json_compare_cost", "-s", handle)
     assert r.returncode == 0, r.stderr
     obj = json.loads(r.stdout)

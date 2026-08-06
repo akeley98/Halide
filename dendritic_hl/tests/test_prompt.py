@@ -132,6 +132,16 @@ def test_load_doc_cpp_is_verbatim():
     assert prompts.load_doc("examples", "tile_basic.cpp") == raw
 
 
+def test_load_doc_real_hpp_example_is_verbatim():
+    """A real examples/*.hpp resolves as-is: the .cpp fallback must NOT rewrite an
+    explicit, resolvable .hpp name (idea.md "Prompt Tools")."""
+    import os
+    name = "compute_at_inline_dependence.hpp"
+    raw = open(os.path.join(prompts._REPO_DIR, "examples", name),
+               encoding="utf-8").read()
+    assert prompts.load_doc("examples", name) == raw
+
+
 @pytest.mark.parametrize("bad", ["../idea.md", "sub/x.md", "/etc/passwd", "a/b/c"])
 def test_load_doc_rejects_directory_components(bad):
     with pytest.raises(DhHlError, match="must be a bare filename"):
