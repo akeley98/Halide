@@ -756,6 +756,19 @@ The `detail` and `examples` tools fetch a named file from those
 respective directories and prints it to `stdout`.
 <!-- impl -->
 
+IMPL TASK: implement and test, including case of looking for `.hpp` file.
+
+The `detail` tool quietly retries with `.md` appended if the file was not found.
+The `examples` tool quietly retries with `.cpp` appended if the file was not found.
+Agents claim that some docs omit the extension in example commands,
+and I can't find the offenders (which may not even exist)
+so I just have this workaround.
+Note: you cannot just blindly append the extension;
+sometimes you really want a non `.md`/`.cpp` file (e.g. `.hpp`).
+
+<!-- end impl -->
+<!-- impl -->
+
 
 ### Harness Prompt Tools — Implementation Details
 
@@ -1329,6 +1342,10 @@ It's crucial that the catalog lock is not acquired during the
 compilation phase. This prevents locking out other agents
 needlessly (despite they will be locked out soon by profiling).
 
+IMPL TASK: the `...` in the `Benchmark ID` print.
+This was needed to fix agent confusion about whether the ID
+matches with the profiler printf above or below.
+
 Pseudocode:
 
     # 1a. C++ compilation: relies on state from init_build
@@ -1388,7 +1405,7 @@ Pseudocode:
                 if success:
                     Add benchmark sub-object to binary's source schedule node
                     Timestamp could be taken before or after profiling, unimportant
-                    print "dh_hl: Benchmark ID: {benchmark id}"
+                    print "dh_hl: ... with Benchmark ID: {benchmark id}"
 
     # 3. Save results
     for node in nodes:
@@ -1748,6 +1765,17 @@ depending on the optional `--anchor {schedule ID}` argument:
   using the session's current anchor schedule if it exists,
   otherwise without anchor schedule.
 <!-- end help -->
+<!-- impl -->
+
+IMPL TASK: add this behavior and test.
+Test that the suggested output command is correct.
+Test the special `--anchor` suggestion.
+
+Print a warning to `stderr` if 0 batches were found,
+and suggest `dh_hl init_build --target ... --anchor ...`
+and `dh_hl build --profile ...`.
+Omit the `--anchor` part of the suggestion if `--anchor auto` was in effect.
+<!-- end impl -->
 
 
 ### JSON Compare Cost Tool
