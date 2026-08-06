@@ -108,6 +108,53 @@ def test_ranking_cost_null_when_no_batches(session, run_tool, capsys):
                    "representative": None, "parameters_raw_cost": [None]}
 
 
+def _short_id(session, full_id):
+    from dendritic_hl_lib import locks
+    cat = open_catalog(session.catalog_dir)
+    try:
+        return cat.format_schedule_id(cat.get_schedule(full_id))
+    finally:
+        locks._reset_for_tests()
+
+
+def test_ranking_cost_zero_batches_warns_to_profile(session, run_tool, capsys):
+    """idea.md: 0 batches -> a stderr warning suggesting a correct init_build +
+    build --profile sequence targeting the schedule.  With --anchor auto (the
+    default) the suggestion omits --anchor."""
+    t = _seed_children(session)
+    _setup(session, {t["A"]: [[100, 101, 99]]})  # B is never benchmarked
+    capsys.readouterr()
+    run_tool(tools.cmd_json_ranking_cost, session.ns(schedule=t["B"]))  # default anchor
+    err = capsys.readouterr().err
+    short_b = _short_id(session, t["B"])
+    assert "no benchmark batches" in err
+    assert "dh_hl init_build --target {}".format(short_b) in err
+    assert "dh_hl build --profile" in err
+    assert "--anchor" not in err  # auto in effect -> omitted
+
+
+def test_ranking_cost_zero_batches_warning_echoes_explicit_anchor(
+        session, run_tool, capsys):
+    """An explicit (non-auto) --anchor is echoed in the suggestion."""
+    t = _seed_children(session)
+    _setup(session, {t["A"]: [[100, 101, 99]]})
+    capsys.readouterr()
+    run_tool(tools.cmd_json_ranking_cost,
+             session.ns(schedule=t["B"], anchor="none"))
+    err = capsys.readouterr().err
+    assert "--anchor none" in err
+
+
+def test_ranking_cost_with_batches_gives_no_warning(session, run_tool, capsys):
+    """The warning is only for the 0-batch case."""
+    t = _seed_children(session)
+    _setup(session, {t["A"]: [[100, 101, 99]]})
+    capsys.readouterr()
+    run_tool(tools.cmd_json_ranking_cost,
+             session.ns(schedule=t["A"], anchor="none"))
+    assert capsys.readouterr().err == ""
+
+
 # ---- json_compare_cost ----------------------------------------------------
 
 def test_compare_explicit_lhs_rhs(session, run_tool, capsys):

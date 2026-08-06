@@ -30,6 +30,12 @@ _PROMPT_MD = os.path.join(_REPO_DIR, "prompt_common.md")
 # order, each with HTML comments removed (idea.md "Prompt Tools").
 _PROMPT_DOCS = ("idea.md", "loopdoc.md", "adams_opus_scheduling_guide.md")
 
+# The extension `load_doc` quietly appends as a fallback when a bare name does
+# not resolve (idea.md "Prompt Tools"): some docs cite these files without their
+# extension.  Only a fallback -- an explicit, resolvable name (e.g. a detail
+# `.hpp`) is honored as-is and never rewritten.
+_DEFAULT_DOC_EXT = {"detail": ".md", "examples": ".cpp"}
+
 AUDIENCES = ("main", "sub")
 
 # A fence line: an HTML comment whose only content is "<word>" or "end <word>".
@@ -194,12 +200,33 @@ def load_doc(kind, name, repo_dir=_REPO_DIR):
         raise DhHlError(
             "invalid {} name {!r}: must be a bare filename with no directory "
             "component".format(kind, name))
-    path = os.path.join(repo_dir, kind, name)
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            text = f.read()
-    except OSError as e:
-        raise DhHlError("cannot read {} file {!r}: {}".format(kind, name, e))
-    if name.endswith(".md"):
+    # Try the name as given; only if it is NOT FOUND, retry with the kind's
+    # default extension appended (idea.md "Prompt Tools").  This is a pure
+    # fallback: an explicit resolvable name wins, so a non-default extension
+    # (e.g. a detail `.hpp`) is never rewritten to `.md`.  Non-not-found errors
+    # (a directory read for a bare `.`/`..`, permissions) surface immediately and
+    # are NOT retried.
+    default_ext = _DEFAULT_DOC_EXT.get(kind, "")
+    candidates = [name]
+    if default_ext and not name.endswith(default_ext):
+        candidates.append(name + default_ext)
+    text = resolved = None
+    for cand in candidates:
+        try:
+            with open(os.path.join(repo_dir, kind, cand), "r",
+                      encoding="utf-8") as f:
+                text = f.read()
+            resolved = cand
+            break
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            raise DhHlError("cannot read {} file {!r}: {}".format(kind, cand, e))
+    if resolved is None:
+        also = ("" if len(candidates) == 1
+                else " (also tried {!r})".format(candidates[-1]))
+        raise DhHlError(
+            "cannot read {} file {!r}: no such file{}".format(kind, name, also))
+    if resolved.endswith(".md"):
         text = strip_html_comments(text)
     return text

@@ -725,7 +725,11 @@ def _profile_phase(bin_dir, nodes, param_indices, sched, catalog, batches):
                 continue
             bench = sched[n.full_id].add_benchmark(file_hostname, bench_obj)
             bench_index[n.full_id][slot][batch] = bench.full_id
-            print("dh_hl: Benchmark ID: " + catalog.format_benchmark_id(bench))
+            # "... with" ties this line to the "Profiled ..." line just above, so
+            # the benchmark ID isn't misread as belonging to the profiler's own
+            # stdout printed around it (idea.md Build Tool pseudocode).
+            print("dh_hl: ... with Benchmark ID: "
+                  + catalog.format_benchmark_id(bench))
     return bench_index, all_ok
 
 

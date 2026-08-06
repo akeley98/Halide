@@ -771,11 +771,28 @@ def _cost_data(ctx):
         ctx.workspace.read_private_benchmark_sets())
 
 
+def _warn_no_ranking_batches(ctx, node, anchor_spec):
+    """stderr guidance when `json_ranking_cost` finds 0 batches: the schedule
+    isn't profiled into any set reachable from the private benchmark set list, so
+    its cost is null.  Suggest profiling it (idea.md "JSON Ranking Cost Query
+    Tool").  The `--anchor` part of the suggestion echoes the effective anchor
+    spec, and is omitted when `--anchor auto` (the default) was in effect."""
+    short = ctx.catalog.format_schedule_id(node)
+    auto = anchor_spec is None or anchor_spec == "auto"
+    anchor_part = "" if auto else " --anchor {}".format(anchor_spec)
+    print("dh_hl: warning: no benchmark batches for {0} in this session's "
+          "private benchmark set list (its cost is null). Profile it, e.g.:\n"
+          "    dh_hl init_build --target {0}{1}\n"
+          "    dh_hl build --profile 4".format(short, anchor_part),
+          file=sys.stderr)
+
+
 def cmd_json_ranking_cost(args):
     # Reads the private benchmark set list (private workspace) -> session lock.
     ctx = Context.for_session(args, session_lock=True)
     node = ctx.resolve_schedule_arg(args.schedule)
-    anchor_id = _resolve_anchor_arg(ctx, getattr(args, "anchor", None))
+    anchor_spec = getattr(args, "anchor", None)
+    anchor_id = _resolve_anchor_arg(ctx, anchor_spec)
     r = _cost_data(ctx).ranking_cost(node.full_id, anchor_id)
     raw = r["raw_costs"]
     out = {
@@ -787,6 +804,8 @@ def cmd_json_ranking_cost(args):
         "parameters_raw_cost": [raw.get(i) for i in range(len(node.parameters))],
     }
     print(json.dumps(out, indent=1))
+    if r["batch_count"] == 0:
+        _warn_no_ranking_batches(ctx, node, anchor_spec)
 
 
 def cmd_json_compare_cost(args):

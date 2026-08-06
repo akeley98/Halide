@@ -146,8 +146,8 @@ def test_profiling_stdout_redirected_then_viewable(run_cli, tmp_path):
     assert "produces best case of" not in r.stdout
     assert "Best output throughput is" not in r.stdout
 
-    # The `dh_hl: Benchmark ID:` line prints a resolvable (short) benchmark ID.
-    bench_id = _line(r.stdout, "dh_hl: Benchmark ID: ")
+    # The `dh_hl: ... with Benchmark ID:` line prints a resolvable (short) ID.
+    bench_id = _line(r.stdout, "dh_hl: ... with Benchmark ID: ")
     r = run_cli("view_benchmark_stdout", "-C", cat_dir, bench_id)
     assert r.returncode == 0, r.stderr
     assert "produces best case of" in r.stdout
@@ -184,7 +184,7 @@ def test_build_banners_use_short_schedule_ids(run_cli, tmp_path):
     assert "dh_hl: begin Halide generator 0: {}".format(short) in r.stdout
     assert "dh_hl: Profiled {}, binary 0 (success)".format(short) in r.stdout
     # The per-benchmark ID is the short schedule ID plus a {hostname}_{ts} tail.
-    assert "dh_hl: Benchmark ID: {}.".format(short) in r.stdout
+    assert "dh_hl: ... with Benchmark ID: {}.".format(short) in r.stdout
 
 
 def test_benchmark_set_cells_attributed(run_cli, tmp_path):

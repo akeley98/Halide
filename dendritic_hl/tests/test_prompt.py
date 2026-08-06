@@ -150,6 +150,52 @@ def test_load_doc_dotdot_is_clean_directory_error():
         prompts.load_doc("detail", "..")
 
 
+# ---- load_doc: quiet extension fallback (idea.md "Prompt Tools") -----------
+
+def test_load_doc_appends_md_for_detail_when_missing():
+    # 'specialize' (no extension) quietly falls back to 'specialize.md'.
+    out = prompts.load_doc("detail", "specialize")
+    assert out == prompts.load_doc("detail", "specialize.md")
+
+
+def test_load_doc_appends_cpp_for_examples_when_missing():
+    out = prompts.load_doc("examples", "tile_basic")
+    assert out == prompts.load_doc("examples", "tile_basic.cpp")
+
+
+def _doc_repo(tmp_path, kind, files):
+    d = tmp_path / kind
+    d.mkdir()
+    for name, text in files.items():
+        (d / name).write_text(text, encoding="utf-8")
+    return str(tmp_path)
+
+
+def test_load_doc_explicit_hpp_is_not_rewritten(tmp_path):
+    """The fallback must NOT blindly append .md: an explicit, resolvable name
+    (e.g. a detail `.hpp`) is honored verbatim, even when a same-stem `.md`
+    exists alongside it."""
+    repo = _doc_repo(tmp_path, "detail", {
+        "helper.hpp": "#pragma once  <!-- keep -->\n",
+        "helper.md": "# the markdown one\n"})
+    out = prompts.load_doc("detail", "helper.hpp", repo_dir=repo)
+    assert out == "#pragma once  <!-- keep -->\n"  # verbatim: NOT the .md, NOT stripped
+
+
+def test_load_doc_explicit_extensionless_wins_over_default(tmp_path):
+    """An explicit name that resolves as-is is never rewritten, even if
+    `name + default_ext` also exists."""
+    repo = _doc_repo(tmp_path, "detail", {
+        "note": "raw note\n", "note.md": "# other\n"})
+    assert prompts.load_doc("detail", "note", repo_dir=repo) == "raw note\n"
+
+
+def test_load_doc_fallback_error_names_both_tries(tmp_path):
+    repo = _doc_repo(tmp_path, "detail", {})
+    with pytest.raises(DhHlError, match=r"cannot read detail file 'ghost'.*also tried 'ghost\.md'"):
+        prompts.load_doc("detail", "ghost", repo_dir=repo)
+
+
 # ---- the commands ---------------------------------------------------------
 
 def _ns(main=False, sub=False):

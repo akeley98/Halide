@@ -102,7 +102,7 @@ def test_view_benchmark_warnings_real_halide(hist_session, run_tool, capsys):
     with pytest.raises(SystemExit) as e:
         run_tool(build.cmd_build, S.ns(profile=1, only="all"))
     assert e.value.code == 0
-    # build prints "dh_hl: Benchmark ID: <id>" for each saved benchmark.
+    # build prints "dh_hl: ... with Benchmark ID: <id>" for each saved benchmark.
     bench_ids = [ln.split("Benchmark ID: ", 1)[1]
                  for ln in capsys.readouterr().out.splitlines()
                  if "Benchmark ID: " in ln]

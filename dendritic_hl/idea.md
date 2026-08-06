@@ -756,8 +756,6 @@ The `detail` and `examples` tools fetch a named file from those
 respective directories and prints it to `stdout`.
 <!-- impl -->
 
-IMPL TASK: implement and test, including case of looking for `.hpp` file.
-
 The `detail` tool quietly retries with `.md` appended if the file was not found.
 The `examples` tool quietly retries with `.cpp` appended if the file was not found.
 Agents claim that some docs omit the extension in example commands,
@@ -1342,9 +1340,9 @@ It's crucial that the catalog lock is not acquired during the
 compilation phase. This prevents locking out other agents
 needlessly (despite they will be locked out soon by profiling).
 
-IMPL TASK: the `...` in the `Benchmark ID` print.
-This was needed to fix agent confusion about whether the ID
-matches with the profiler printf above or below.
+The `... with Benchmark ID:` line leads with `...` to tie it to the preceding
+`Profiled ...` line, so agents don't misread the ID as belonging to the
+profiler's own printf output printed nearby.
 
 Pseudocode:
 
@@ -1766,10 +1764,6 @@ depending on the optional `--anchor {schedule ID}` argument:
   otherwise without anchor schedule.
 <!-- end help -->
 <!-- impl -->
-
-IMPL TASK: add this behavior and test.
-Test that the suggested output command is correct.
-Test the special `--anchor` suggestion.
 
 Print a warning to `stderr` if 0 batches were found,
 and suggest `dh_hl init_build --target ... --anchor ...`
