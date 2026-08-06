@@ -1807,7 +1807,6 @@ The output is a JSON object with key/value pairs on separate lines:
 Aggregate profiler statistics for the referenced schedule,
 considering only benchmarks reachable from the private benchmark set list.
 The list of stats to include is given by command line arguments.
-<!-- help -->
 
 * `-f {name}`, include a per-function statistic (e.g. `-f recompute_ratio`)
 
@@ -1822,6 +1821,7 @@ The list of stats to include is given by command line arguments.
 * `--hottest {n}`, optional, `n >= 1`.
   Output only the `n` hottest functions (defined below)
 
+<!-- help -->
 With `obj` being a benchmark sub-object, each `-p` pipeline-global
 statistic name is the key name of a number value of `obj["profiler"]`,
 or one of the special values:
@@ -1867,6 +1867,7 @@ The `func` list objects contain key/value pairs:
 * `canonical_id`: number for unique identification within pipeline
 
 * one pair for each unique per-function statistic included
+<!-- end help -->
 
 Each numerical statistic is reported by aggregating all relevant
 benchmarks' samples (bucketed by function, for `-f`) into a 3-list:
@@ -1874,7 +1875,6 @@ benchmarks' samples (bucketed by function, for `-f`) into a 3-list:
     [25th percentile, median, 75th percentile]
 
 `wall_time_smallest` and any other non-number statistics are not supported.
-<!-- end help -->
 <!-- impl -->
 
 **Implementation Notes:**
