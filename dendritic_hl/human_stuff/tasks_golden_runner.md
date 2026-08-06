@@ -36,14 +36,46 @@ List of command line arguments, with special values
 
 * Any other `<...>` is forbidden
 
-Each can be enabled or disabled (stored in separate file).
+Tri-state: `enabled`, `disabled`, `main` (stored in separate file), mutable
+
+Short name (stored in separate file), mutable
 
 If you don't use `<RunGenMain>` as `argv[0]`,
 then the build tool generates a shared library passed by filename as `<Lib>`.
 
-ID'd by hash.
+Full ID'd by hash.
 
-NB don't know yet how to deal with cost model stuff with multiple problems.
+Short ID `problem.{short name}` only for enabled problems.
+
+
+# Cost Model
+
+Private benchmark set objects now need to include cached problem ID.
+
+Cost based on one problem only, by default `main`.
+
+Two-way comparison can be done for multiple problems,
+by default all enabled problems.
+
+Output is now list of comparisons, with additional object values
+
+* `problem_full_id`: string
+
+* `problem_short_id`: string
+
+Boolean Form:
+
+    {"any_improvement": bool, "any_regression": bool, "any_unknown": bool}
+
+===
+
+Verbose warning for benchmark objects when 0 found:
+
+* Filter by target node
+
+* Filter by second node (anchor, RHS)
+
+* Filter by problem
 
 
 # Build
@@ -101,6 +133,10 @@ Benchmark full ID tool (no short ID tool)
 
 WarningToggle full/short ID tool
 
+Problem full/short ID
+
+No short IDs for golden objects, benchmark set objects
+
 
 # Session Open
 
@@ -126,9 +162,16 @@ its `algorithm_hlpipe` compared to the given schedule node's.
 If `algorithm_hlpipe` not found, give warnings.
 If they differ, require `--allow-failed-golden`.
 
+If there exists a problem in the session open state that is now disabled,
+require `--allow-deleted-problems`.
+
+If there exists a golden schedule node in the session open state that is now changed,
+require `--allow-changed-golden`.
+
 
 # Close Session
 
 Takes warning-override flags accepted by `should_accept`.
 
-If `should_accept` for the primary output schedule 
+If `should_accept` for the primary output schedule would give
+warning flags, and those flags were not passed, the command fails.
