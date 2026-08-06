@@ -1806,8 +1806,8 @@ The output is a JSON object with key/value pairs on separate lines:
 
 Aggregate profiler statistics for the referenced schedule,
 considering only benchmarks reachable from the private benchmark set list.
-<!-- help -->
 The list of stats to include is given by command line arguments.
+<!-- help -->
 
 * `-f {name}`, include a per-function statistic (e.g. `-f recompute_ratio`)
 
