@@ -71,6 +71,10 @@ This tree contains pointers to the primary schedule/idea tree.
 Multiple agents can work on the same catalog in parallel,
 but each must have its own session.
 
+For correctness testing, the catalog maintains **problem objects**
+giving command line args for a "runner" process, and **golden objects**,
+which reference a schedule node giving the expected Halide *algorithm*.
+
 Finally, the `build` (profiler) tool creates **benchmark set objects**
 that group "batches" of benchmarks across different schedule nodes.
 This is for comparison tools, which only compare within batches to fight noise.
@@ -136,14 +140,14 @@ sha256, lowercase hex digits.
 
 * **Edges:** 0 or 1 parent idea nodes, 0 or more child idea nodes.
 
+IMPL TASK: remove `runtime error` and update `impl.md` to match.
+
 * **Result:** one of:
   * `unknown`: Did not attempt any compilation (worst).
   * `c++ error`: C++ generator did not compile successfully.
   * `halide error`: C++ generator compiled, but not known *yet*
     that all generator parameters lead to a valid Halide binary.
-  * `runtime error`: All generator parameters led to successful Halide binary
-    generation, but not known *yet* that all binaries execute successfully.
-  * `success`: All Halide binaries known to run successfully (best).
+  * `success`: All Halide binaries built successfully (best).
 
 * **Benchmark Sub-objects:** JSON format, documented later.
 
@@ -209,6 +213,13 @@ All pairs go to the Halide generator as `key=value`.
 * **Default Anchor Schedule:** Optional reference to schedule node;
   see "Cost Comparison Methodology".
 
+* **Golden Schedule Node on Opening:**
+  Optional reference to schedule node;
+  this is the golden schedule node at the time the session was created.
+
+* **Enabled Problems on Opening:**
+  Saved list of the enabled problem objects that existed when the session was created.
+
 * **Outputs:** Optional, added when a session is closed.
   This is the "final result" of the session.
   It consists of an ordered list of output schedule nodes
@@ -233,8 +244,10 @@ and the full ID of a session node within the catalog.
 The pair can be succinctly communicated using "session handles",
 described a few sections later.
 
-**Session Golden Rule:** two concurrent agents must never have the same
-current session, unless the tool is marked as an exception (`does not acquire session lock`)
+**Session Top-Priority Rule:**
+two concurrent agents must never have the same
+current session, unless the tool is marked as an exception
+(`does not acquire session lock`).
 The session lock (see "Locking") will catch many such violations,
 but will not prevent observing a partial edit to the workspace C++ file.
 
@@ -355,6 +368,48 @@ Each element is a string: benchmark sub-object full ID.
 
 So, the set of all IDs `object[*][*][i]` references the set of benchmarks
 created on the i-th batch of the tool usage.
+
+
+## Problem Object State
+
+IMPL TASK: test `Cannot give both <Lib> and <RunGenMain>` and `unknown <...>` error detection.
+
+IMPL TASK: test both `<Lib>` and `DENDRITIC_HL_OUTPUT_LIB` work.
+
+IMPL TASK: the harness currently hard-wires running `RunGenMain` with
+`--benchmarks=all --estimate_all`.
+All the functionality described here is new.
+
+* **Command Line Arguments:** `argv`, with some `<...>` placeholder values.
+
+* **Enablement State:** `enabled`, `disabled`, or `main`.
+
+* **Short Name:** string with only alphanumeric characters and underscores.
+
+* **Problem Object Full ID:** hash of commands only.
+
+The "enabled problems" are those with `enabled` or `main` state.
+
+The "main problem" is the unique problem object with `main` state;
+tools that require this give an error if this is not well-defined.
+
+See the help text for `new_problem` for more information.
+
+
+## Golden Object State
+
+* **Timestamp**
+
+* **Golden Object Full ID:** `golden_{timestamp}`
+
+* **Remarks:** text.
+
+* **Schedule:** reference to schedule node, or none.
+
+The **Golden Schedule Node** is the schedule node referenced by the most recent golden object.
+There is no golden schedule node if the reference is none, or there's no golden object at all.
+
+See the help for the `new_golden` tool for more information.
 
 
 ## Current Idea State
@@ -489,10 +544,17 @@ Unless otherwise stated, any of the `{...}` components may be empty.
 
 **Benchmark short ID:**
 
-* `{schedule ID}.{hostname}_{timestamp}`
-  Find all schedule nodes matching the given ID (long or short),
-  then match any benchmark sub-objects of those schedule nodes
-  that have a matching (sanitized) hostname and timestamp.
+* `private.{schedule ID}.{generator parameters index}.{n}`:
+  Matches the n-th benchmark created by the *current session*
+  for the given (schedule, generator parameters) pair.
+  The short ID mappings are stored in session private workspace state.
+<!-- impl -->
+
+  I had to change these from an older scheme due to too much agent confusion.
+
+  Schedule ID could be long or short; first `.` always separates the `private`
+  and the last two `.` always separate the generator parameters index and `n`.
+<!-- end impl -->
 
 **WarningToggle short ID:**
 
@@ -501,11 +563,25 @@ Unless otherwise stated, any of the `{...}` components may be empty.
   then match any `WarningToggle` sub-objects of those schedule nodes
   that have a matching timestamp.
 
+**Problem Short ID:**
+
+* `problem.{short name}`:
+  Match all *enabled* problem objects with the given short name.
+
+* `main`:
+  The main problem.
+  The tool accepts but does not generate short IDs of this form.
+<!-- impl -->
+
+Should add more "ID Translation Tools" if more short IDs are defined.
+<!-- end impl -->
+
 **Warning:** short IDs may become invalid due to new ambiguities.
 Use them only as convenient IDs for immediate tool use,
 and not long-term identification (e.g. in commentary text).
+Use the `schedule_full_id` and related tools.
 
-Currently benchmark sets don't have short IDs.
+Currently benchmark set and golden objects don't have short IDs.
 
 
 # Session Handles
@@ -567,6 +643,10 @@ For now, we will use the `wall_time_min` statistic as the raw cost;
 the other profiler statistics are used only for the `dh_hl json_profiler_stats`
 tool and the table created by the profiler.
 
+We currently support multiple problems (e.g. multiple input shapes)
+but don't have a plan to aggregate their results,
+so all cost calculation is done for one specific given specific problem for now.
+
 Schedule nodes may really correspond to multiple schedules due to the
 generator parameters feature.
 For the below methods, the **representative** is picked by selecting
@@ -580,7 +660,8 @@ Ties are broken arbitrarily.
 
 When comparing two schedules head-to-head
 (e.g. to answer "is there a performance regression?"),
-the answer will be based only on batches that included the two schedules.
+the answer will be based only on batches that included the two schedules,
+for one specific problem.
 
 Select the representative for each schedule.
 Then reduce each batch to a single sample:
@@ -606,7 +687,7 @@ in a big batch.
 The technique relies on a selection of a single anchor schedule.
 
 For each target schedule (to be ranked), consider only batches that
-included both the anchor node and the target schedule.
+included both the anchor node and the target schedule, for a specific problem.
 Pick the representative for both schedules.
 Reduce each batch to a single sample:
 the target schedule's raw cost divided by the anchor schedule's raw cost.
@@ -623,11 +704,46 @@ anchor schedule technique for high-stakes "is regression" 2-way comparisons.
 If there is no anchor schedule, the cost ranking falls back to raw time,
 rather than dimensionless ratios.
 
-For each schedule, consider batches that included profiling that schedule.
+For each schedule, consider batches that used the specific problem
+and included profiling that schedule.
 The cost is the median raw cost of the representative
 (the same metric used to pick the representative in the first place).
 
 This exposes the harness user to drift.
+<!-- impl -->
+
+
+## Cost Model Benchmark Search Warnings
+
+IMPL TASK: verbose explanation of why 0 benchmark objects were found.
+
+IMPL TASK: test for `json_ranking_cost`, `json_cost_comparison`, `list_private_ideas`
+
+Print a warning to `stderr` if 0 batches were found.
+
+The warning gives a breakdown of the benchmarks found for each filter criterion:
+
+* Number of benchmarks found filtering only by the first schedule node
+  (target or LHS)
+
+* If applicable, number of benchmarks left after filtering by the second schedule node
+  (anchor or RHS)
+
+* Then, number of benchmarks left after filtering by problem
+  (this is always 0 given the warning is emitted,
+  but clues-in the harness user as to another reason for lossage).
+
+IMPL TASK: implement this new suggestion, test it shows up for all relevant tools.
+
+Suggest `dh_hl init_build --target ...`
+and `dh_hl build --profile ... --problem ...`.
+
+For 2-way comparisons, include `--other ...` in the `init_build` suggestion.
+For ranking cost, include `--anchor ...` in the `init_build` suggestion
+unless `--anchor auto` is in effect.
+
+Replace all `...` with real arguments (except `--profile ...`).
+<!-- end impl -->
 
 
 <!--
@@ -658,10 +774,18 @@ There are two frequest arguments:
   A session handle may substitute for a mandatory `-C` argument;
   if both are given, the catalog directory must match.
 
+IMPL TASK: remove `-C` file extension check, except for `new_catalog`.
+
 Tools that *require* a current session have `-s` shown as an explicit argument,
 but note `-C` is implicitly required if `-s` passed a session node full ID.
 Tools that *require* only a catalog directory have `-C` shown as an explicit argument.
 However, all tools accept both arguments, for simplicity.
+<!-- impl -->
+
+The human has forgotten `-C`/`-s` at least a dozen times.
+Flag these mistakes when you see them
+(other than commands like `dh_hl help` that truly don't need a catalog).
+<!-- end impl -->
 
 The "current session" is the session node referenced by the above 2 arguments.
 The "current idea state" and "workspace C++ file" implicitly refer to the
@@ -677,6 +801,25 @@ corresponding session private workspace state.
 implies the unambiguous schedule node ID that would be given by `dh_hl status`,
 or an error if no current session (`-s`) or no unambiguous schedule node ID would be given.
 It is rarely needed to pass this.
+All `schedule ID` arguments also accept the following magic values:
+
+* `terminus`: primary output schedule of terminus (error if not well-defined)
+
+* `session_output`: primary output schedule of the current session (`-s` required)
+
+* `golden`: golden schedule node (error if none)
+
+* any golden object ID: schedule node of the referenced golden (error if none)
+<!-- impl -->
+
+IMPL TASK: implement the `schedule ID` translation.
+Can lift code from the removed `terminus_schedule_full_id`, etc.
+`seed` intentionally removed.
+
+The golden object IDs have a form that will never collide with
+schedule full IDs (can't start with `golden_`)
+or short IDs (which always have a `.`).
+<!-- end impl -->
 
 The "current idea node" is nothing, if the current idea state encodes "no current idea",
 and otherwise the idea node referenced by the "some current idea" state.
@@ -694,7 +837,7 @@ include a trailing newline, as customary for Unix tools.
     dh_hl help [command]
 
 With no `[command]`, lists all commands briefly;
-with a `[command]`, describes that one.
+with a `[command]`, gives the full help for that one.
 
 Most complicated CLI commands are greatly sumamrized in the prompt
 (progressive discovery pattern).
@@ -845,6 +988,8 @@ passes only `impl` (see "Help Tool — Implementation Details").
 
 ## Session Creation Tools
 
+IMPL TASK: save "golden schedule node on opening" and "enabled problems on opening".
+
 Each session creation tool requires (or implies) an input proposal name,
 prompt file, and list of parent schedule nodes.
 
@@ -884,6 +1029,10 @@ for a parent schedule that's exclusively its own.
 
     dh_hl new_catalog -C ... {proposal name} {prompt file} {input C++ file} [input generator parameters]
 
+IMPL TASK: default problem.
+The new default problem should be functionally identical to the current hard-wired behavior.
+Inform me if for some reason, it isn't.
+
 Creates a new catalog directory with the bare minimum state to get started:
 
 * Two schedule nodes, both holding a copy of the input C++ file and
@@ -894,6 +1043,13 @@ Creates a new catalog directory with the bare minimum state to get started:
 * One idea node connecting the two schedule nodes.
 
 * One top-level session node (terminus) seeded with that idea node.
+
+* A problem object with short name `default`, state `main`,
+  and CLI `<RunGenMain> --benchmarks=all --estimate_all`.
+  Note this problem only works for generators that include
+  `set_estimate` for all input sizes.
+
+* A golden is intentionally NOT added by default.
 <!-- help -->
 
 The new catalog directory is named by the `-C` argument.
@@ -1275,6 +1431,35 @@ one made canonical), so editing the workspace to match that sibling still trips
 
     dh_hl build -s ...
 
+IMPL TASK: need to create shared library build,
+and non-RunGenMain profile path.
+
+IMPL TASK: need to export `DENDRITIC_HL_ALGORITHM_HLPIPE`
+environment variable when running the generator.
+
+IMPL TASK: need to export `DENDRITIC_HL_OUTPUT_LIB`
+environment variable when running the profiler with non-RunGenMain.
+
+IMPL TASK: a research agent produced
+`human_stuff/externalized_runner_report.md`
+with info on implementing the non-RunGenMain path.
+This may give useful added detail for implementing this,
+although this file takes priority for contradictions.
+However, if a crucial agent point or gotcha seems to have sailed
+over my head, flag it for my review.
+
+IMPL TASK: `--problem`
+
+IMPL TASK: Add info in the build implementation details section if appropriate.
+
+IMPL TASK: test behavior for broken runners that don't emit a profiler JSON.
+This counts as a "catalogued bad outcome", not "tool failure"
+(i.e. no state rollback; profile loop continues).
+Write a real CLI test in the style of `test_build_cli_halide.py` for this,
+maybe using `_exit(0)` (pretend to finish successfully but skip the profiler teardown).
+
+IMPL TASK: Use `-f` for the generator to emit the pipeline as `dh_hl_pipeline`.
+
 Builds the schedule nodes selected by the latest `dh_hl init_build`
 done with the current session (state stored in the session private workspace)
 Optionally profiles them in batches (`--profile [N]`),
@@ -1282,15 +1467,17 @@ generating new benchmark or benchmark set objects.
 Generated benchmark sets are added to the private benchmark set list.
 
 By default, if a schedule has `N`-many generator parameters objects,
-then `N` binaries are built, one for each parameters object.
+then `N` shared library and `RunGenMain` binaries are built,
+one for each parameters object.
+
 It's an error if any schedule node being built has 0 parameters objects.
 <!-- help -->
 
 The tool
 
-1. Compiles the schedules selected by `init_build` into Halide binaries
-   in the session private workspace `bin` directory, along with
-   `.stmt` and `.conceptual.stmt` files for the target schedule.
+1. Compiles the schedules selected by `init_build` into Halide header + binaries
+   in the session private workspace `bin` directory,
+   along with .`.stmt` and `.conceptual.stmt` files.
    Compiler and generator outputs get piped to harness `stdout`/`stderr`.
 
 2. (`--profile` only) runs all generated binaries with Andrew Adams's profiler,
@@ -1308,10 +1495,14 @@ The tool
 
 Flags:
 
+* `--problem {problem ID}`
+  adds the named problem to the set of problems to test with.
+  If no `--problem` arguments exist,
+  the testing is done for all enabled problems.
+
 * `--profile [N]` (`N = 0` default, must be a non-negative integer).
-  This enables `N` batches of profiler runs.
-  Each batch runs all generated binaries in a random order ("interleaved")
-  Note, without profiling, `runtime error` is the best result possible.
+  This enables `N` batches of profiler runs per problem.
+  Each batch runs all generated binaries in a random order ("interleaved").
 
 * `--only [N|target|all]`.
   Limits the generators and Halide binaries built.
@@ -1344,6 +1535,19 @@ The `... with Benchmark ID:` line leads with `...` to tie it to the preceding
 `Profiled ...` line, so agents don't misread the ID as belonging to the
 profiler's own printf output printed nearby.
 
+IMPL TASK: print benchmark short IDs.
+This can be done without a general purpose full-ID-to-short-ID function;
+just give the short ID just-in-time while editing the session private workspace state.
+
+IMPL TASK: generate `stmt` for all Halide pipelines now.
+
+IMPL TASK: stop printing output paths, since `copy_build_output` exists now.
+
+IMPL TASK: also generate shared libraries, with no Halide runtime
+as explained in [Reference Build Commands](reference_build_commands.md)
+
+IMPL TASK: problem ID printf
+
 Pseudocode:
 
     # 1a. C++ compilation: relies on state from init_build
@@ -1375,12 +1579,7 @@ Pseudocode:
                 print "dh_hl: params={params}"
                 # ... Run Halide generator with given params
                 # Binary in session private workspace: bin/{node.full_id}_{i}
-                # Also, for target node only, if generation succeeds, generate
-                # bin/{i}.stmt, bin/{i}.conceptual_stmt
-                # and print each path with "dh_hl: " lines
-                # NB skipping ID prefix for .stmt for my human taste,
-                # since no tool reads .stmt for me and I don't want to copy
-                # a huge session ID + schedule node ID path. Re-eval later.
+                # Shared library, stmt, etc. with similar file names.
                 print "dh_hl: end Halide generator {i} (success|fail)"
 
     # 2. Profiling
@@ -1394,16 +1593,20 @@ Pseudocode:
             for params in node.generator_parameters:
                 if Halide generator succeeded:
                     binaries.append(...)
-        for batch in range(N):
-            shuffle(binaries)  # Shuffled each time
-            for bin in binaries:
-                profile(bin)
-                node, params_index = source_of(binary)
-                print "dh_hl: Profiled {node.short_id}, binary {params_index} (success|fail)"
-                if success:
-                    Add benchmark sub-object to binary's source schedule node
-                    Timestamp could be taken before or after profiling, unimportant
-                    print "dh_hl: ... with Benchmark ID: {benchmark id}"
+        for problem in selected problems:
+            for batch in range(N):
+                shuffle(binaries)  # Shuffled each time
+                for bin in binaries:
+                    profile(bin)  # By executing the problem command line.
+                    node, params_index = source_of(binary)
+                    print "dh_hl: Profiled {node.short_id}, binary {params_index}, problem {problem.short_id} (success|fail)"
+                    if success:
+                        if profiler output not found:
+                            # some message
+                        else:
+                            Add benchmark sub-object to binary's source schedule node
+                            Timestamp could be taken before or after profiling, unimportant
+                            print "dh_hl: ... with Benchmark ID: {benchmark short id}"
 
     # 3. Save results
     for node in nodes:
@@ -1411,8 +1614,6 @@ Pseudocode:
             result = "c++ error"
         elif any generator failed or --only [int] passed:
             result = "halide error"
-        elif 0 profile batches or any Halide binary run failed:
-            result = "runtime error"
         else:
             result = "success"
         node.result = best_of(node.result, result)
@@ -1426,6 +1627,17 @@ example file names.  It is deliberately NOT the source of truth for the
 catalog-specific `bin/` file names — those are named as in the pseudocode above
 (keyed by schedule full ID + parameters index), and `build.py` owns them.
 Don't try to keep the two in sync.
+
+FUTURE: (not a task for current turn)
+check the profiler output provenance is correct,
+as suggested by `reference_build_commands.md`,
+before trusting and ingesting its results.
+This counts as a "catalogued bad outcome", not "tool failure"
+(i.e. no state rollback; profile loop continues).
+Write a real CLI test in the style of `test_build_cli_halide.py` for this;
+maybe do something crooked to copy one schedule node's binary on top of another's.
+The real reason for the check is to catch accidental shared library SNAFUs,
+but I'm not sure this is easy to reproduce in a controlled test environment.
 
 **As implemented** (`build.py`): `init_build` (`cmd_init_build`) resolves
 target/other/anchor (`_resolve_target`/`_resolve_other`/`_resolve_anchor`, the
@@ -1443,6 +1655,40 @@ each binary's source node and filling the dense benchmark-set index.
 never a rollback); the generator-count harness error skips the node's compile
 without updating its result.
 <!-- end impl -->
+
+
+### Copy Build Output Tool
+
+    dh_hl copy_build_output -s ... {output file} {what} [schedule ID]
+<!-- help -->
+
+IMPL TASK: add this
+
+IMPL TASK: common helpers (if they don't exist) for figuring out
+session private workspace `bin` file
+
+Copy a certain build output for the given schedule node from the session private workspace.
+
+`what` can be
+
+* `generator`: Halide generator binary
+
+* `algorithm_hlpipe`
+
+* `stmt`
+
+* `conceptual_stmt`
+
+* `header` (declares generated pipeline as the function `dh_hl_pipeline`)
+
+* `RunGenMain`
+
+* `shared_library`
+
+If there's more than 1 generator parameters object for the schedule node
+and `what` is not `generator`, then `--parameters {object index}`
+must be given.
+<!-- end help -->
 
 
 ### Add Warning Toggle Tool
@@ -1574,7 +1820,8 @@ Prints the state of the referenced benchmark set as a JSON object.
 
 Gives a cost ranked "frontier" of session private ideas,
 grouped by pool tag (as mapped by the session private workspace state).
-The cost is calculated from the session's private benchmark set list.
+The cost is calculated from the session's private benchmark set list,
+using only benchmarks for a specific problem (the main problem, by default).
 Performs automated detection of ideas "obsoleted by" lower cost child ideas.
 
 **Optional Command Line Arguments:**
@@ -1585,6 +1832,8 @@ Performs automated detection of ideas "obsoleted by" lower cost child ideas.
   comparisons. `0 < ci < 1`.
 
 * `--max {n}`, list up to `n` ideas per pool tag. Default `n = 6`.
+
+* `--problem {problem ID}`, select the specific problem for the cost model.
 
 * `--pool {name}`, enable including idea nodes with the given pool tag.
   Unions with other `--pool` arguments.
@@ -1748,6 +1997,9 @@ The output is a JSON object with key/value pairs on separate lines:
   n-th entry gives the raw cost of the program generated with the
   n-th generator parameters object, as used for representative picking.
 
+Takes an optional `--problem {problem ID}` argument
+to select the specific problem for the cost model (default: main problem).
+
 Uses either the "Cost Ranking With Anchor Schedule" methodology
 or "Cost Ranking Without Anchor Schedule" methodology,
 depending on the optional `--anchor {schedule ID}` argument:
@@ -1763,21 +2015,17 @@ depending on the optional `--anchor {schedule ID}` argument:
   using the session's current anchor schedule if it exists,
   otherwise without anchor schedule.
 <!-- end help -->
-<!-- impl -->
-
-Print a warning to `stderr` if 0 batches were found,
-and suggest `dh_hl init_build --target ... --anchor ...`
-and `dh_hl build --profile ...`.
-Omit the `--anchor` part of the suggestion if `--anchor auto` was in effect.
-<!-- end impl -->
 
 
 ### JSON Compare Cost Tool
 
     dh_hl json_compare_cost -s ... [LHS schedule ID] [RHS schedule ID]
 
+IMPL TASK: `--problem`, `problem`/`problem_short_id` outputs, verbose 0-batch warnings
+
 Do a head-to-head cost comparison between the LHS and RHS schedules,
 using the "2-way Cost Comparison" methodology,
+done once for each enabled problem (by default),
 and try to conclude if LHS is an "improvement" or a "regression" over the RHS.
 This relies only on batches reachable from
 the current session's private benchmark set list,
@@ -1798,7 +2046,17 @@ confidence for the confidence interval; must have `0 < ci < 1`.
 The optional `--bootstrap {B}` argument overrides the number of bootstrap
 resamples used for the confidence interval; must be at least `2`.
 
-The output is a JSON object with key/value pairs on separate lines:
+The optional `--problem {problem ID}` argument adds a problem to the set
+of problems to run the 2-way cost comparison with.
+If no `--problem` arguments are given, all enabled problems are used.
+
+The optional `--boolean` argument converts the output to boolean form.
+
+The default output is a list of JSON objects with key/value pairs on separate lines:
+
+* `problem`: full ID of the problem used for the comparison
+
+* `problem_short_id`: short ID of the problem used for the comparison
 
 * `batch_count`: number of batches found
 
@@ -1819,6 +2077,13 @@ The output is a JSON object with key/value pairs on separate lines:
 
 * `rhs_representative`: number,
   index of generator parameters object used by the RHS representative.
+
+The boolean format is a single object of the form
+
+    {"any_improvement": bool, "any_regression": bool, "any_unknown": bool}
+
+giving whether any of the selected per-problem cost comparisons
+gave an `improvement`, `regression`, or `unknown` result, respectively.
 <!-- end help -->
 
 
@@ -1826,8 +2091,15 @@ The output is a JSON object with key/value pairs on separate lines:
 
     dh_hl json_profiler_stats -s ... [schedule ID]
 
+IMPL TASK: `--problem`, test `--problem` works.
+
+IMPL TASK: `test_build_cli_halide.py` testing with `--problem`.
+Should be straightforward to vary the problem size with custom
+`["<RunGenMain>", ...]` problems, and check runtime changed as expected.
+
 Aggregate profiler statistics for the referenced schedule,
-considering only benchmarks reachable from the private benchmark set list.
+considering only benchmarks reachable from the private benchmark set list
+that profiled using the main problem (by default).
 The list of stats to include is given by command line arguments.
 
 * `-f {name}`, include a per-function statistic (e.g. `-f recompute_ratio`)
@@ -1843,7 +2115,10 @@ The list of stats to include is given by command line arguments.
 * `--hottest {n}`, optional, `n >= 1`.
   Output only the `n` hottest functions (defined below)
 
+* `--problem {problem ID}`, consider only statistics from
+  benchmarks run with this problem (default: `main`).
 <!-- help -->
+
 With `obj` being a benchmark sub-object, each `-p` pipeline-global
 statistic name is the key name of a number value of `obj["profiler"]`,
 or one of the special values:
@@ -1978,6 +2253,232 @@ For each output schedule node of the current session, prints:
 Error if the current session has no output yet.
 
 
+## Golden Object Tools
+
+### New Golden Tool
+
+    dh_hl new_golden -s ... {remarks file} [schedule ID]
+<!-- help -->
+
+IMPL TASK: add command
+
+Create a new golden object with remarks from a given file,
+and the given schedule node.
+The special value `none` encodes "no schedule node".
+
+This will fail if the current session does not have an algorithm
+`hlpipe` file already built for the given non-none schedule node,
+using its 0th generator parameters object.
+
+This is to prevent picking a golden schedule node that's impossible to satisfy.
+
+<!-- We promised in "Golden Object State" to explain this in the new_golden help -->
+The expectation is all generators will output a serialized `algorithm_hlpipe`,
+which is the pipeline *before any scheduling directives are applied*.
+The harness gives the output path for the serialization as the
+`DENDRITIC_HL_ALGORITHM_HL` environment variable.
+Insert the following between the algorithm definition and the scheduling:
+
+    // Output algorithm as serialized pipeline, before any scheduling.
+    if (const char* path = getenv("DENDRITIC_HL_ALGORITHM_HL")) {
+        serialize_pipeline(Pipeline(std::vector<Func>{output}), path);
+    }
+
+Sometimes a Halide optimization is impossible to express
+except through an algorithmic change.
+The purpose of this feature is to quickly verify the typical case
+where only scheduling changes are made.
+New goldens will keep a record of when the algorithm changed,
+which warrants additional scrutiny.
+these decisions are between the user and the agent.
+
+This is obviously vulnerable to reward hacking (don't do this).
+The human programmer should manually review the final pipeline
+before production usage to ensure the algorithm is as intended.
+<!-- end help -->
+<!-- impl -->
+
+Note, we don't use the `-e hlpipe` generator option
+since that would serialize the finished scheduled pipeline.
+Trying to compare algorithm equality of the scheduled pipelines
+is actually really really hard thanks to
+wrappers, clones, `compute_with`, and especially `rfactor`.
+<!-- end impl -->
+
+
+### Golden History Tool
+
+    dh_hl golden_history -C ...
+
+IMPL TASK: add command
+
+Prints most recent to least recent golden objects, separated by dividers.
+<!-- help -->
+Each is printed as
+
+* `timestamp: {timestamp}`
+
+* `schedule: {schedule ID}`
+
+* remarks
+<!-- end help -->
+
+
+## Problem Object Tools
+
+### New Problem Tool
+
+    dh_hl new_problem -C ... {short name} ...
+
+IMPL TASK: add command
+
+IMPL TASK: test invalid short name
+
+IMPL TASK: test incorrect `<...>` arguments.
+
+Add a new problem with the given short name,
+and problem CLI arguments as specified in the remaining arguments.
+Gives an error in case an identical problem already exists,
+and give the ID of the identical problem.
+<!-- help -->
+(Note, this is essential due to how problems are ID'd by hash).
+
+The command line strings include some special values:
+
+* `<RunGenMain>`, valid only as the 0th argument.
+  If given, the harness will link the Halide pipeline
+  into a standalone `RunGenMain` binary.
+  Otherwise, you must supply a runner binary as the 0th argument,
+  which must load the Halide pipeline from a shared library,
+  and must provide a Halide runtime.
+
+* `<Lib>`, valid only if `<RunGenMain>` is not used.
+  Path to shared libary holding Halide pipeline,
+  built with no Halide runtime.
+  This path is also given through the `DENDRITIC_HL_OUTPUT_LIB` environment variable.
+
+* All other `<...>` arguments are reserved and invalid.
+
+There must be at least one argument.
+Incorrect `<...>` arguments will be diagnosed immediately.
+
+Prints the new problem's ID.
+The default state is "enabled".
+
+<!-- We promised to explain this here in "Problem Object State" -->
+**Custom Runner Setup:**
+If you don't use the default `<RunGenMain>` runner,
+you must provide a runner binary that accepts a Halide pipeline
+to test as a shared library.
+This only has to be done once, then left alone in the agent hot loop.
+
+1. **Include the generated header for the entry declarations.**
+  Include the Halide-generated header to get the `extern "C"` declarations.
+  Note the harness can *build* the Halide pipeline without a runner.
+  Use `copy_build_output header`.
+  Also `#include "HalideBuffer.h"` (header-only, no linking)
+  to marshal inputs/outputs as `Halide::Runtime::Buffer<T>`.
+  This is unchanged from the static-link world.
+
+2. **Own the runtime in the runner.** Link one standalone runtime object
+   (`halide_runtime.o` or `libHalideRuntime`) and install any custom
+   handlers here (e.g. `halide_set_custom_do_par_for(...)`, error/print handlers).
+   Because the pipeline `.so` is `no_runtime`, these apply to whatever pipeline is
+   loaded.
+
+3. **Resolve the entry point**, either:
+   `void* h = dlopen(path, RTLD_NOW|RTLD_LOCAL);` then
+   `auto fn = (int(*)(halide_buffer_t*, ..., halide_buffer_t*))dlsym(h,
+   "dh_hl_pipeline");` cast to the header's prototype.
+
+4. **Call it** with the buffers, exactly as a statically-linked call would.
+
+IMPL TASK: as part of writing tests, check the code below is actually correct.
+
+        void* h = dlopen(lib_path, RTLD_NOW | RTLD_LOCAL);
+        if (!h) {
+            ...
+        }
+        auto fn = static_cast<decltype(&dh_hl_pipeline)>(dlsym(h, "dh_hl_pipeline"));
+        Halide::Runtime::Buffer<uint8_t> in(64, 64), out(64, 64);
+        in.fill(100);
+        int rc = fn(in, out);   // use whatever your real inputs/outputs are
+
+IMPL TASK: make an effort to have your tests work on Linux too.
+Will test on the mystical "mantissa" Linux box eventually...
+
+5. **Build the runner once** (`-Wl,-export_dynamic` on macOS / `-rdynamic` on
+   Linux, include `-I$HALIDE/include -I$HALIDE/../src/runtime -I.`,
+   link the runtime object, `-lpthread -ldl`).
+<!-- end help -->
+
+
+### Problem State Tools
+
+    dh_hl disable_problem -C ... {problem ID}
+    dh_hl enable_problem -C ... {problem ID}
+    dh_hl set_main_problem -C ... {problem ID}
+
+IMPL TASK: add commands
+
+Respectively,
+
+* Set problem state to `disabled`.
+
+* Set problem state to `enabled`, unless its state was `main`.
+
+* Set problem state to `main`,
+  and set all other problems with `main` state to `enabled` state.
+
+
+### Problem Short Name Tools
+
+    dh_hl get_problem_short_name -C ... {problem ID}
+    dh_hl set_problem_short_name -C ... {problem ID} {short name}
+
+IMPL TASK: add commands
+
+
+### List Problems Tool
+
+    dh_hl list_enabled_problems -C ...
+    dh_hl list_all_problems -C ...
+<!-- help -->
+
+IMPL TASK: add command
+
+List all enabled problems or all problems, respectively.
+Each is printed separated by dividers.
+
+Each problem is printed as four lines:
+
+* `id: {id}` (short ID if possible)
+
+* `state: {state}`
+
+* `short name: {short name}`
+
+* `cli: {CLI args, as one-line JSON list}`
+<!-- end help -->
+
+
+### JSON Problem Info Tool
+
+    dh_hl json_problem_info -C ... {problem ID}
+<!-- help -->
+
+IMPL TASK: add command
+
+Print info for the given problem object as a JSON object with key/value pairs
+
+* `argv`: list of strings, command line arguments
+
+* `state`: string
+
+* `short_name`: string
+<!-- end help -->
+
+
 ## Other Session Tools
 
 ### Set Idea Tool
@@ -2002,13 +2503,92 @@ List all open session nodes or all termini ("terminuses") of the current catalog
 Give both full session IDs and session handles.
 
 
+### Should-accept Schedule Tool
+
+    dh_hl should_accept -s ... [schedule ID]
+
+IMPL TASK: add this
+
+IMPL TASK: test the last 3 checks actually are for top-level sessions only.
+
+IMPL TASK: include `run_cli` tests for all this functionality.
+
+Check the given schedule's suitability to be the primary output schedule.
+This tool gives the check-override flags that need to be passed to
+`dh_hl close_session` to force the primary output schedule anyway.
+<!-- help -->
+
+**Failed Problem Check:**
+Run for all sessions.
+
+For each enabled problem and each generator parameters of the given schedule,
+search for a benchmark sub-object reachable from the private benchmark set list
+that encodes the given schedule, generator parameters, and problem.
+(recall failed benchmarks runs don't emit benchmark objects).
+
+The check fails if any benchmark search failed.
+The `close_session --allow-failed-problems` flag overrides this.
+This is almost certainly a bad idea,
+but the harness allows it in case of unforseen circumstances.
+
+**Failed Golden Check:**
+Only run for top-level sessions.
+
+If the golden schedule node exists,
+check for binary equality between its `algorithm_hlpipe`
+and the given schedule node's `algorithm_hlpipe`.
+The check fails if they are not equal, or they don't exist.
+
+If either `algorithm_hlpipe` doesn't exist, the tool suggests
+`init_build --target {schedule ID} --other golden` and `build`.
+This could still fail because the generators didn't emit the
+`algorithm_hlpipe`.
+The tool will keep recommending a rebuild in this case,
+but you have to actually fix the generator for it to work.
+
+The `close_session --allow-failed-golden` flag overrides this.
+This is also a bad check to override.
+If the goldens don't match AND you have very good reason to think
+the end user will approve of this algorithm deviation,
+create a new golden to record this decision.
+
+**Deleted Problem Check:**
+Only run for top-level sessions.
+
+If any of the session's enabled problems on opening are now disabled,
+the check fails.
+
+The `close_session --allow-disabled-problems` flag overrides this.
+Disabling problems is like deleting test cases.
+There should be a good reason for this.
+Usually disabling the `default` problem is acceptable;
+it's just there for convenience.
+
+**Changed Golden Check:**
+Only run for top-level sessions.
+
+If the session's golden schedule node on opening exists,
+and it's not the same as the current golden schedule node
+(either a different node or doesn't exist anymore),
+the check fails.
+
+The `close_session --allow-changed-golden` flag overrides this.
+Don't overide this check unless you actually have a very good reason
+to think the end user will approve of this algorithm change.
+<!-- end help -->
+
+
 ### Close Session Tool
 
     dh_hl close_session -s ... [schedule IDs...]
 
+IMPL TASK: `dh_hl should_accept` checks.
+
 Add outputs to the current session, making it self-closed.
 This promotes a fair amount of private (not git tracked)
 session state to public (git tracked) session node state.
+This accepts the check-override flags given by `dh_hl should_accept`.
+<!-- help -->
 
 **Output Schedules:**
 The `[schedule IDs...]` is a list of schedule node IDs
@@ -2026,6 +2606,11 @@ or if the parent idea is not in the private idea list
 All output schedules must be major schedules and must have commentary
 (the tool will remind of the `comment` tool in the latter case).
 
+The primary output schedule is subjected to `dh_hl should_accept` checks.
+If `dh_hl should_accept` requires some override flags,
+and those were not provided,
+the tool errors and the session is *not* self-closed.
+
 **Output Benchmark Sets:**
 Same as the current session's private benchmark set list.
 
@@ -2035,6 +2620,7 @@ that would be found by `dh_hl session_root_of O`.
 Add a superseded-by idea side link from `R`'s parent to `O`'s parent.
 This step is silently skipped for output schedules
 where `session_root_of` would fail.
+<!-- end help -->
 
 
 ### Join Session Tool
@@ -2378,51 +2964,19 @@ This fails if:
 <!-- end help -->
 
 
-### Copy Schedule, ID-of Schedule Tools
+### Copy Schedule Command
 
-    # All commands do not acquire the session lock
     dh_hl copy_schedule -C ... {output file} [schedule ID]
-    dh_hl copy_terminus_schedule -C ... {output file}
-    dh_hl copy_seed_schedule -s ... {output file}
-    dh_hl copy_session_output -s ... {output file}
 
-    dh_hl terminus_schedule_short_id -C ...
-    dh_hl seed_schedule_short_id -s ...
-    dh_hl session_output_short_id -s ...
+IMPL TASK: huge number of tools eliminated thanks to new `[schedule ID]` magic arguments.
 
-    dh_hl terminus_schedule_full_id -C ...
-    dh_hl seed_schedule_full_id -s ...
-    dh_hl session_output_full_id -s ...
-<!-- help -->
+IMPL TASK: `--parameters`
 
-Find a certain schedule node (noun), and do something with it (verb):
+Copy the referenced schedule node's C++ generator to the given file.
+The optional `--parameters` value causes the
+`generator_parameters.json` to be copied instead.
 
-**Nouns:**
-
-* `schedule`: the schedule node id'd by `[schedule ID]`.
-
-* `terminus_schedule`:
-  the primary output schedule of the unique terminus.
-  Error if there is not exactly one session node that is a terminus
-  or the terminus has no output schedule.
-
-* `seed_schedule`:
-  the canonical schedule of the current session's 0th seed idea.
-
-* `session_output`:
-  the primary output schedule of the current session;
-  error if there is no output has been defined yet.
-
-**Verbs:**
-
-* `copy`: write the C++ schedule to the given `{output file}`.
-
-* `full_id`: give the full ID of the schedule node
-
-* `short_id`: give a short ID of the schedule node (may fall back to full ID)
-
-NB see also `schedule_full_id`, `schedule_short_id`, `restore_schedule` tools.
-<!-- end help -->
+See also `restore_schedule`.
 
 
 ### View Generator Parameters Tool
@@ -2575,12 +3129,21 @@ Non-trivial when the `-s {session handle}` option is used.
 ### ID Translation Tools
 
     # All commands do not acquire session lock
-    dh_hl schedule_full_id -C ... [schedule ID]  # Print the full ID of the given schedule node
-    dh_hl schedule_short_id -C ... [schedule ID] # Print a short ID for the given schedule node
-    dh_hl idea_full_id -C ... {idea ID}          # Print the full ID of the given idea node
-    dh_hl idea_short_id -C ... {idea ID}         # Print a short ID for the given idea node
-    dh_hl session_full_id -s ...                 # Print the full ID of the current session
-    dh_hl session_handle -s ...                  # Print the session handle for the current session
+    dh_hl schedule_full_id -C ... [schedule ID]
+    dh_hl schedule_short_id -C ... [schedule ID]
+    dh_hl idea_full_id -C ... {idea ID}
+    dh_hl idea_short_id -C ... {idea ID}
+    dh_hl session_full_id -s ...
+    dh_hl session_handle -s ...
+    dh_hl benchmark_full_id -s ... {benchmark ID}  # No benchmark_short_id
+    dh_hl commentary_full_id -C ... {commentary ID}
+    dh_hl commentary_short_id -C ... {commentary ID}
+    dh_hl WarningToggle_full_id -C ... {WarningToggle ID}
+    dh_hl WarningToggle_short_id -C ... {WarningToggle ID}
+    dh_hl problem_full_id -C ... {commentary ID}
+    dh_hl problem_short_id -C ... {commentary ID}
+
+IMPL TASK: add new ones
 
 On success: print out the ID/handle with a newline, and no other `stdout` output.
 
@@ -2605,9 +3168,14 @@ Exports the entire catalog as a JSON object, with key/value pairs
 
 * `benchmark_sets`: benchmark set objects
 
+* `goldens`: golden objects
+
+* `problems`: problem objects
+
 Each value is itself an object, with keys being string full ID and values
 being JSON objects in the same format as `json_schedule_info`,
-`json_idea_info`, `json_session_info`, `json_benchmark_set_info`.
+`json_idea_info`, `json_session_info`, `json_benchmark_set_info`,
+`json_golden_info`, `json_problem_info`.
 
 FUTURE: holds the exclusive catalog lock despite being conceptually read-only.
 Optimize this if needed, but this shouldn't be in the agent hot loop.

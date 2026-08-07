@@ -11,7 +11,7 @@ Golden object
 
 * ID `golden_{timestamp}`
 
-* Commentary
+* Remarks
 
 * Reference to schedule node, or null
 
@@ -22,7 +22,7 @@ The most recent golden object's schedule node is the golden schedule node.
 
 # `[schedule ID]` Special Values
 
-Add special schedule ID values `terminus`, `seed`, `session_output`,
+Add special schedule ID values `terminus`, `session_output`,
 `golden`, and golden ID.
 
 
@@ -59,7 +59,7 @@ by default all enabled problems.
 
 Output is now list of comparisons, with additional object values
 
-* `problem_full_id`: string
+* `problem`: string
 
 * `problem_short_id`: string
 
@@ -111,18 +111,12 @@ New key/value pairs
 Remove terminus/seed/session variants,
 replaced by `[schedule ID]` default behavior.
 
-Add `--pick`,
-
-`generator`: default, generator C++
-
-`parameters`
+Add `--parameters`.
 
 
 # Copy Build Output
 
     dh_hl copy_build_output {what} [parameters_index] [schedule ID]
-
-`generator`, `header`, `shared_library`, `algorithm_hlpipe`
 
 
 # ID translation
@@ -163,7 +157,7 @@ If `algorithm_hlpipe` not found, give warnings.
 If they differ, require `--allow-failed-golden`.
 
 If there exists a problem in the session open state that is now disabled,
-require `--allow-deleted-problems`.
+require `--allow-disabled-problems`.
 
 If there exists a golden schedule node in the session open state that is now changed,
 require `--allow-changed-golden`.

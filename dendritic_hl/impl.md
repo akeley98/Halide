@@ -56,12 +56,14 @@ Pro").  Everywhere the hostname is used as an ID or filename (session IDs, the
 
 # Catalog Directory State
 
-The top-level catalog directory contains sub-directories for each node type:
+The top-level catalog directory contains sub-directories for each node/object type:
 
 * `idea`
 * `sch`
 * `session`
 * `benchmark_sets`
+* `golden`
+* `problem`
 
 as well as
 
@@ -217,15 +219,6 @@ The gitignored session private workspace is stored separately to ensure git chec
 can cleanly create and destroy this directory.
 The state is:
 
-**Username/hostname sanitization (implemented, `ids.sanitize_component`):** each
-of `username` (from `getpass.getuser()`, falling back to `"user"`) and `hostname`
-(from `socket.gethostname()`) has every character outside `[A-Za-z0-9_-]` mapped
-to `_`, is truncated to 64 chars, and is never empty (an all-stripped value
-becomes `"_"`). De-anonymizing is intentional, so there is no hashing. The `@`
-between them is therefore the unique separator, and since the timestamp is fixed
-width, `is_session_id`/`session_depth`/`session_timestamp` parse the ID
-unambiguously (`_SESSION_ID_RE` in `ids.py`).
-
 * **ID:** directory name.
 
 * **Prompt:** `prompt.txt`
@@ -239,6 +232,13 @@ unambiguously (`_SESSION_ID_RE` in `ids.py`).
 * **Default Anchor Schedule:** if it exists, its full ID plus a newline is in
   `default_anchor_schedule.txt`
 
+* **Golden Schedule Node on Opening:**
+  if it exists, its full ID plus a newline is in
+  `opening_golden_schedule_node.txt`
+
+* **Enabled Problems on Opening:**
+  `opening_enabled_problems.json`, list of problem object full IDs.
+
 * **Outputs:** `outputs.json`, doesn't exist if no outputs yet; see next section
 
 * **Delisted Flag:** Delisted iff `delisted.txt` exists; contents are ignored.
@@ -250,6 +250,15 @@ unambiguously (`_SESSION_ID_RE` in `ids.py`).
 * **Timestamp:** implied from the ID
 
 *Merge risk:* `outputs.json`, no automatic fix provided.
+
+**Username/hostname sanitization (implemented, `ids.sanitize_component`):** each
+of `username` (from `getpass.getuser()`, falling back to `"user"`) and `hostname`
+(from `socket.gethostname()`) has every character outside `[A-Za-z0-9_-]` mapped
+to `_`, is truncated to 64 chars, and is never empty (an all-stripped value
+becomes `"_"`). De-anonymizing is intentional, so there is no hashing. The `@`
+between them is therefore the unique separator, and since the timestamp is fixed
+width, `is_session_id`/`session_depth`/`session_timestamp` parse the ID
+unambiguously (`_SESSION_ID_RE` in `ids.py`).
 
 
 ### Session Outputs on Disk (outputs.json)
@@ -281,6 +290,36 @@ circumvented (e.g. by intentionally copying the catalog to two
 different directories and brute forcing a timestamp collision)
 
 
+### Golden Objects on Disk
+
+IMPL TASK: add these
+
+Stored in `golden/{timestamp}/golden.json` as a JSON object in the
+same format as `json_golden_info`.
+
+*Merge risk:* low, microsecond timestamp collision with non-equal golden objects
+
+
+### Problem Objects on Disk
+
+IMPL TASK: add these
+
+Stored in `problem/{full id}/` as multiple files
+
+* `argv.json`, JSON list of CLI strings.
+  The hash of the UTF-8 encoded JSON is the full ID.
+
+* `state.txt`, state as string + newline.
+  Interpret any malformed `state.txt` as if it were `enable`,
+  with a warning printed to `stderr`.
+
+* `short_name.txt`, short name + newline
+
+*Merge risk:* `cli.json` cannot have a merge problem except for full SHA256 collisions.
+`state.txt` and `short_name.txt` can fail due to mutability,
+but this is easy to fix by using public state/short name setters.
+
+
 ### Session Private Workspace
 
 Inside the `private/{session id}` sub-directory, there is
@@ -299,6 +338,15 @@ Inside the `private/{session id}` sub-directory, there is
   An empty *or* absent file both mean "no current anchor schedule" (we never
   delete files, so clearing it writes empty).  Modelled by the `CurrentAnchor`
   object (see "Private-workspace state objects").
+
+IMPL TASK: benchmark object short ID translation.
+Like the above, give brief pointer to object.
+Tweak the specified JSON design if needed.
+
+* `benchmark_short_id/{schedule node full ID}/{generator parameters index}.json`
+  holds list of benchmark full IDs generated with the current session
+  for the given (schedule, generator parameters) pair, in order of creation.
+  Missing file implies empty list.
 
 * `private_ideas.json`, the session private idea list (a JSON object).
   The keys are the set of idea node full IDs comprising the list.
@@ -361,10 +409,27 @@ key/value pairs:
 
 * `profiler_version`: number, `profiler_version` of each referenced benchmark.
 
+IMPL TASK: `problem` entry
+
+* `problem`: string, `problem` of each referenced benchmark.
+
 * `schedules`: object, keyed by schedule full ID; each value is a list indexed
   by parameters index, whose entries are objects `{"wall_time_min": [...],
   "id": [...]}`.  Both lists are of length batch-count and give the per-batch
   `wall_time_min` and benchmark full ID, respectively.
+
+FUTURE: either warn or do something intelligent when mixing benchmarks
+from different computers.
+
+The caching allows quick implementations of perf critical queries:
+
+1. Find the relevant benchmark sets for a given schedule
+   (by scanning the keys in `schedules`).
+
+2. Do basic cost comparisons using the cached `wall_time_min`.
+
+Only the more detailed profiler report tools require reading the
+actual benchmark sub-objects.
 
 **Implemented** as `context._benchmark_set_cache`, called by
 `SessionWorkspace.add_private_benchmark_set(set_id, catalog)` (the sole add
@@ -383,19 +448,6 @@ reachability walk): it *skips whole sets* whose cached `profiler_version`
 differs from `catalog.EXPECTED_PROFILER_VERSION` (the single expected-version
 constant), and — crucially — **warns to stderr naming the discarded set**, so a
 version bump doesn't silently turn every cost into `null` with no explanation.
-
-FUTURE: either warn or do something intelligent when mixing benchmarks
-from different computers.
-
-The caching allows quick implementations of perf critical queries:
-
-1. Find the relevant benchmark sets for a given schedule
-   (by scanning the keys in `schedules`).
-
-2. Do basic cost comparisons using the cached `wall_time_min`.
-
-Only the more detailed profiler report tools require reading the
-actual benchmark sub-objects.
 
 
 ### Current Idea State on Disk
@@ -670,6 +722,7 @@ Tools NEVER overwrite or modify existing files, except for:
 * tmp files
 * private session workspace files
 * `result.txt`
+* problem object state
 * `canonical.txt` for `fix_canonical` tool
 * `parent.txt` for `fix_canonical` tool (see note below)
 
