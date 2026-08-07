@@ -210,16 +210,49 @@ in the hot loop.
    Because the pipeline `.so` is `no_runtime`, these apply to whatever pipeline is
    loaded.
 
+   > **Naming — planned design (separate provenance field).** The intended dh_hl
+   > model is to give `-f` a **clean, stable, human-nice symbol name** (e.g.
+   > `dh_hl_pipeline`), the same for every schedule node, so the emitted `.so` and
+   > generated header are usable **as-is** — no per-node hash in the symbol or the
+   > header, no separate recompile to strip node IDs. The per-node identity needed
+   > to prove *which* pipeline ran instead rides in a **separate baked provenance
+   > field** in the profiler JSON (a new field alongside `name`), carrying the node
+   > token `g_{full_id}_{i}`. Because it is baked into the `.o` at lowering, it is
+   > artifact-bound: a stale / wrong / never-loaded pipeline reports a wrong or
+   > absent token, so provenance survives even though the symbol is stable. The
+   > `dlopen` runner then uses the plain fixed-signature call on the stable symbol
+   > (step 3) and is genuinely one-and-done.
+   >
+   > **Status:** this needs a small Halide lowering + profiler change — see
+   > "TODO: separate baked provenance field" at the end of this doc. It is *not yet
+   > implemented*. Until it lands, `-f` sets **both** the C symbol and the
+   > profiler-JSON `name` (one string, fixed in `Lower.cpp` at lowering), so the
+   > real `-f` is the ~90-char per-node `g_{sanitized full_id}_{i}` and the
+   > `brighten` used below is a stand-in for it. In the interim, a runner either
+   > tracks that per-node name or uses name-agnostic registration discovery
+   > (step 3, second bullet).
+
 3. **Resolve the entry point**, either:
-   * *fixed signature* — `void* h = dlopen(path, RTLD_NOW|RTLD_LOCAL);` then
-     `auto fn = (int(*)(halide_buffer_t*, ..., halide_buffer_t*))dlsym(h,
-     "brighten");` cast to the header's prototype; or
-   * *signature-agnostic* — `dlsym` `brighten_argv` + `brighten_metadata`, read the
-     `halide_filter_metadata_t` for arg count/types/dims, build a `void* args[]`,
-     and call `_argv`. No runner recompile even if the arg list changes.
+   * *fixed signature, by name* — `void* h = dlopen(path, RTLD_NOW|RTLD_LOCAL);`
+     then `auto fn = (int(*)(halide_buffer_t*, ..., halide_buffer_t*))dlsym(h,
+     "dh_hl_pipeline");` cast to the header's prototype. **This is the target
+     steady state:** once the provenance field lands and `-f` is the stable
+     `dh_hl_pipeline`, this runner is name-stable and one-and-done. Before then,
+     `"dh_hl_pipeline"` must be the per-node `-f` name instead.
+   * *name-agnostic, via registration* — build the `.so` with the `registration`
+     object (Phase 2 `-e ...,registration`) and have the runner **define**
+     `halide_register_argv_and_metadata(int(*argv)(void**),
+     const halide_filter_metadata_t*, const char* const*)`. Its static registerer
+     fires on `dlopen`, handing the runner the argv function pointer + metadata
+     with **no symbol name referenced**; call via `argv(void** args)` (read
+     `metadata` for arg layout). This is how `RunGenMain` discovers its filter
+     (`RunGenMain.cpp:16`), and it works across `dlopen` — verified end-to-end. Use
+     this if you want provenance today without the Halide change, or for runners
+     whose arg list varies.
 
 4. **Call it** with the buffers, exactly as a statically-linked call would. Minimal
-   verified body:
+   verified body (fixed-signature-by-name variant; `brighten` = the emitted `-f`
+   name):
 
         void* h = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
         auto fn = (int(*)(halide_buffer_t*, halide_buffer_t*))dlsym(h, "brighten");
@@ -270,3 +303,95 @@ renaming a C++ local variable does not change it); and it differs on any real
 algorithm change (including a semantically-equivalent commutative reorder). So the
 comparison against the per-root golden is a plain byte compare:
 `cmp golden.hlpipe candidate.hlpipe`.
+
+
+## TODO: separate baked provenance field (implementation notes)
+
+Goal: let `-f` be a **clean, stable symbol name** (nice header + `.so`, usable
+as-is by a one-and-done `dlopen` runner) while the profiler JSON still carries a
+**per-(node, params-index) provenance token** that proves *which* built pipeline
+actually executed. Not yet implemented; this is a scoping note so the work can be
+justified/estimated before committing to it.
+
+### Why it can't be a runtime name swap
+
+The token must be **baked into the pipeline object at compile (lowering) time** —
+that is what makes it artifact-bound, so a stale / wrong / never-loaded `.so`
+reports a wrong or absent token. A profiler that reads the name from an env var at
+JSON-emit time would report whatever the harness set, for *any* pipeline (or none),
+which defeats the check. So the fix lives in lowering + the profiler runtime, not
+in a runtime substitution.
+
+### The coupling to break
+
+One `pipeline_name` string drives both the profiler name and the C symbol:
+
+* `Lower.cpp:598` — `LoweredFunc main_func(pipeline_name, ...)` -> the C symbol
+  (`-f`) and the generated header.
+* `Lower.cpp:447` — `inject_profiling(s, pipeline_name, env, t)` -> the baked
+  profiler name.
+* `Profiling.cpp:2176-2177` — bakes `pipeline_name` as the first arg of the
+  `halide_profiler_instance_start` call.
+* `profiler_common.cpp:92` — stores it as `p->name`; emitted to JSON at
+  `profiler_common.cpp:1866` (`field_str(... "name", pp->name)`).
+
+Keep `pipeline_name` driving the symbol; add a **separate** provenance string that
+rides the profiler path only.
+
+### Minimal implementation (smallest diff; ~6 small edits, no `Lower.cpp`/GenGen threading)
+
+Add one field, thread it through the profiler call, source its value from a
+compile-time env var read in the lowering pass:
+
+1. **Struct field.** In `struct halide_profiler_pipeline_stats`
+   (`HalideRuntime.h:2045`, next to `const char *name;` at `:2067`) add
+   `const char *provenance;  // global constant string, or null`.
+2. **Runtime function.** Add a `const char *provenance` parameter to
+   `halide_profiler_instance_start` (`profiler_common.cpp:248`; also its
+   declaration in `HalideRuntime.h`) and to `find_or_create_pipeline`
+   (`profiler_common.cpp:65`); store `p->provenance = provenance;` beside
+   `p->name` (`:92`).
+3. **JSON.** Emit it next to `name`: `field_str("      ", "provenance",
+   pp->provenance ? pp->provenance : "");` after `profiler_common.cpp:1866`.
+4. **Codegen.** In `Profiling.cpp`, read the token once at lowering and pass it as
+   the new arg of the instance-start `Call::make` (`:2176`):
+
+        const char *prov = getenv("HL_PROVENANCE");   // baked into the .o now
+        // ... add `prov ? StringImm::make(prov) : pipeline_name` to the arg list
+
+   Reading the env *in the generator process at lowering* is what makes the value
+   a baked constant in the `.o` (the runtime never reads the env), so provenance is
+   preserved. The harness sets `HL_PROVENANCE=g_{full_id}_{i}` in the emit
+   subprocess env, and gives `-f dh_hl_pipeline` for the clean symbol.
+5. **Update all callers** of `halide_profiler_instance_start` for the new arity
+   (the codegen `Call::make`, the runtime definition + declaration, and any
+   in-tree callers/tests — grep `halide_profiler_instance_start`).
+6. **Harness side.** Set the env at emit; change the ingest check from
+   "`pipelines[0].name == basename`" to "`pipelines[0].provenance == expected
+   token`"; keep a stable `-f`.
+
+### Cleaner variant (more plumbing, no compiler `getenv`)
+
+Instead of the env read, thread an explicit `provenance` string as a defaulted
+parameter through `lower` / `lower_impl` (`Lower.cpp:138`) into `inject_profiling`
+(`Profiling.cpp:2132`), and add a GenGen CLI flag (e.g. `-P TAG`) next to `-f`/`-n`
+in `Generator.cpp` that sets it (default: fall back to `pipeline_name`, so existing
+behavior is unchanged when unset). Same profiler-side edits (steps 1-3). Preferable
+long-term; heavier to land.
+
+### Notes for estimating
+
+* **ABI:** adding a parameter to `halide_profiler_instance_start` and a field to
+  `halide_profiler_pipeline_stats` changes the internal profiler ABI. Harmless here
+  because the pipeline `.o` and the runtime are always from the same Halide build
+  (already required), but it means "rebuild both" — not mixable with an old runtime.
+* **Backwards-compatible default:** unset env / unset flag -> `provenance` falls
+  back to `pipeline_name` (or null), so non-dh_hl users and existing tests are
+  unaffected.
+* **Scope:** no algorithmic work; a field threaded through ~2 files (profiler
+  runtime + the profiling pass) for the minimal variant, ~4 for the cleaner one.
+  Main cost is care around the ABI/arity change and its callers, plus a test that
+  the field round-trips into the JSON.
+* **Test:** emit with `HL_PROVENANCE=xyz`, run, assert `pipelines[0].provenance ==
+  "xyz"` while `pipelines[0].name` stays the clean symbol; and that an unset env
+  leaves the JSON as today.

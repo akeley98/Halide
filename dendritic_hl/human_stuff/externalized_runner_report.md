@@ -35,10 +35,12 @@ changes made.** Verifies and extends `resnet50_gap_analysis.md`.
   thin tier is a **dlopen shared-object split** (Part 3B): the harness emits a
   `no_runtime` `.so`, a frozen runner loads it — no runner build in the hot loop.
 - **Provenance (Part 3.6):** once the runner runs the pipeline, guard against it
-  *not* executing the built `.so` by checking the profiler JSON's pipeline `name`
-  (already the content-hash `-f` basename, currently unchecked) — evidence emitted
-  by the pipeline itself, orthogonal to the Part 6 algorithm fingerprint (`-f` name
-  is verified absent from the `.hlpipe`).
+  *not* executing the built `.so` by checking a per-node token in the profiler
+  JSON — evidence emitted by the pipeline itself. To keep the `.so`/header clean
+  and the runner one-and-done, the token is a **separate baked `provenance` field**
+  (a small Halide change; plan in `reference_build_commands.md`), *not* the pipeline
+  `name` (which is coupled to the C symbol). Orthogonal to the Part 6 algorithm
+  fingerprint.
 - **Problem size (side issue 1):** the size comes from the agent-authored
   `set_estimate` calls consumed by `--estimate_all`. That is both a reward-hack
   vector and a silent-incomparability bug. RunGen *already* supports overriding
@@ -382,57 +384,81 @@ runner's self-report.** The profiler JSON is written by the Halide runtime *insi
 the pipeline call, so identity baked into the pipeline and surfaced there is a real
 attestation; a wrapper claiming "I ran X" is not.
 
-**The mechanism you already have, unchecked.** The harness compiles each
-`(node, params-index)` with `-f _emit_basename(full_id, i)` = `g_{ident}_{i}`, and
-`full_id` is `ids.schedule_content_hash(source, params_text)`. `-f` sets both the
-export symbol *and* the profiler pipeline name — verified: `-f brighten` yields
-profiler JSON `pipelines[0].name == "brighten"`. So the JSON *already* carries a
-content-hash identity of the exact source+params that was supposed to run;
-`_build_benchmark_obj` just never checks it. The single highest-value guard is
-nearly free:
+**The token must be baked at compile time, not injected at runtime.** For the JSON
+to prove *which* `.so` ran, the identity has to be a constant compiled into the
+pipeline object — a stale / wrong / never-loaded pipeline then reports a wrong or
+absent token. A profiler that read the name from an env var at JSON-emit time would
+report whatever the harness set, for any pipeline (or none), defeating the check.
+
+**Why not just reuse the pipeline `name`.** The tempting near-free check —
+`assert pipelines[0].name == _emit_basename(full_id, i)` — works because `-f`
+already becomes the JSON `name` (verified: `-f brighten` → `name == "brighten"`),
+and the harness's basename `g_{ident}_{i}` is content-derived. But **one string
+drives both the profiler name and the C symbol** (`Lower.cpp:598` sets the
+`LoweredFunc`/symbol from `pipeline_name`; `Lower.cpp:447` → `Profiling.cpp:2176`
+bakes the same string as the profiler name). So making the *name* the per-node
+token forces the *symbol* — and the generated header — to be the ~90-char per-node
+hash, which defeats the whole point of a clean, reusable `.so`/header + a
+one-and-done `dlopen` runner.
+
+**Decision: a separate baked provenance field.** Keep `-f` a clean, stable symbol
+(e.g. `dh_hl_pipeline`) shared across nodes — nice header, nice `.so`, fixed-
+signature runner is one-and-done — and bake a **separate** per-node token
+`g_{full_id}_{i}` that surfaces as its own profiler-JSON field (e.g.
+`pipelines[0].provenance`). It is still compile-time-baked, so still artifact-
+bound. The ingest check becomes:
 
 ```
-assert profiler_json["pipelines"][0]["name"] == _emit_basename(full_id, i)
+assert profiler_json["pipelines"][0]["provenance"] == expected_token
 ```
 
-This catches a stale `.so` (old source/params → old hash-name), the wrong
-variant/params-index, a hardcoded-fallback pipeline, and "source changed but the
-runner ran the old binary." It does *not* flag a stale-but-byte-equivalent `.so`
-(same source+params) — which is functionally identical, so harmless.
+This catches a stale `.so` (old token), the wrong variant/params-index, a
+hardcoded-fallback pipeline, and "source changed but the runner ran the old
+binary." It does *not* flag a stale-but-byte-equivalent `.so` (same source+params) —
+functionally identical, so harmless. Implementing it is a small Halide lowering +
+profiler change (add one field, thread it through `halide_profiler_instance_start`,
+source the value from a compile-time env read); the full plan, with `file:line`
+touchpoints and a mentor-facing estimate, is in
+`reference_build_commands.md` → "TODO: separate baked provenance field."
+
+**Interim, without the Halide change.** Until the field lands, the name *is* the
+token (`name == symbol == -f`), so you can either (a) run the `name == basename`
+check today at the cost of the ugly `-f`/header, or (b) use name-agnostic
+registration discovery (Part 3B.4) so the runner needn't hardcode the per-node
+symbol. Both are stopgaps for the clean `dh_hl_pipeline` + `provenance`-field
+steady state.
 
 **Orthogonal to the algorithm fingerprint (Part 6).** Verified empirically: the
 `-f` name does **not** appear in the serialized `.hlpipe` (two `-f` names →
 byte-identical hlpipe; grep finds the string 0 times). The hlpipe keys on the
-*internal* Func names (`output`, `blur`, `repeat_edge`), a separate namespace. So
-the `-f` provenance token and the pre-schedule algorithm-equality blob never
-interfere — you can make `-f` unique-per-build for provenance without perturbing
-the algorithm check, and vice versa.
+*internal* Func names (`output`, `blur`, `repeat_edge`), a separate namespace; and
+the provenance string is baked at lowering (post-freeze), so it never enters the
+pre-schedule snapshot either. So the provenance token, the C symbol, and the
+algorithm-equality blob are three independent namespaces.
 
 **Freshness.** Independently, treat the JSON as a fresh artifact: the harness owns
 the output path, deletes it before the run (it already does for its internal path,
 build.py:701-703), and rejects missing / empty / `runs==0` / `funcs==[]` as a
-failed run rather than a result. The name check subsumes the leftover-JSON case (a
-prior build's JSON carries a prior hash-name → mismatch); do both.
+failed run rather than a result. The provenance check subsumes the leftover-JSON
+case (a prior build's JSON carries a prior token → mismatch); do both.
 
 **Layered strength.**
-1. *Free / now* — name-equality + well-formedness (exactly one pipeline,
-   `name == expected`, `runs>0`, `funcs` non-empty). Catches ~all realistic
-   accidents.
+1. *Core* — provenance-field equality + well-formedness (exactly one pipeline,
+   `provenance == expected`, `runs>0`, `funcs` non-empty). Catches ~all realistic
+   accidents; the runner and header stay clean.
 2. *Cheap add* — fold `target` (and, once Part 4 lands, the size/params identity)
    into the token, and cross-check the JSON's func-name set against the func set
    the harness expects from the target node's own emitted `.stmt` (also
    pipeline-emitted, so it corroborates schedule identity). Note: the profiler JSON
-   records no input sizes, so "right `.so`, wrong size" is a distinct gap the name
+   records no input sizes, so "right `.so`, wrong size" is a distinct gap the token
    does not close — that's exactly idea.md:327's "embed explicit input sizes in the
    benchmark record" (Part 4).
-3. *Strict / optional* — a per-build random **nonce** in the token binds the JSON
-   to the exact build invocation (catches even equivalent-stale). Only this tier
-   has a cost: since `-f` couples the symbol and the pipeline name, a unique token
-   changes the export symbol too, so a fixed-signature `dlopen` runner that resolves
-   a constant name breaks — use the metadata/argv runner (reads the name from
-   `_metadata`; Part 3B.4) or emit a stable alias symbol. Tiers 1-2 avoid this
-   because the content hash is stable across identical source, so a fixed-signature
-   runner keeps working *and* you get provenance.
+3. *Strict* — because the token is a **separate** field, a per-build random **nonce**
+   can be folded in (catches even stale-but-equivalent) **without** touching the
+   symbol: the header/`.so`/runner stay stable while every build's `provenance`
+   is unique. This is the payoff of decoupling — the tension that a unique token
+   would break a fixed-signature runner (which existed while name == symbol) is
+   gone.
 
 ---
 
@@ -496,24 +522,33 @@ the builtin versions of the runtime functions will be called … On Linux,
 
 ### 3B.4 Entry-point resolution: fixed-signature vs metadata/argv
 
-- **Fixed-signature** (resnet/gaussian style): `dlsym(h, "dh_hl_gen")`, cast to the
-  known prototype, call. Simplest; runner must know the arg list.
-- **Metadata/argv** (RunGenMain style, at runtime): `dlsym` `NAME_argv` +
-  `NAME_metadata`, read `halide_filter_metadata_t` for arg count/types/dims, build
-  `void* args[]`, call `NAME_argv`. **Signature-agnostic** — no runner recompile
-  even if the arg list changes. Most future-proof for complex runners; one could
-  convert RunGenMain itself into a generic dlopen host and cover all simple apps
-  with zero per-app work.
+- **Fixed-signature, by name** (resnet/gaussian style): `dlsym(h,
+  "dh_hl_pipeline")`, cast to the known prototype, call. Simplest; runner must know
+  the arg list. Relies on a **stable** `-f` — which the separate-provenance-field
+  decision (Part 3.6) provides. (Note the `_argv`/`_metadata` symbols are *also*
+  `-f`-derived, so `dlsym`-ing *those* by name has the same stability requirement —
+  they are not a name-agnostic path.)
+- **Registration (name-agnostic)** (RunGenMain style, works across `dlopen`): build
+  the `.so` with the `registration` object and have the runner **define**
+  `halide_register_argv_and_metadata(argv_fn, metadata, kv)`. The `.so`'s static
+  registerer calls it on load, handing over the argv function pointer +
+  `halide_filter_metadata_t` (arg count/types/dims) with **no symbol name
+  referenced**; call via `argv(void** args)`. **Signature- and name-agnostic** — no
+  recompile even if the name or arg list changes (verified end-to-end). This is
+  what `RunGenMain.cpp:16` does; one could convert RunGenMain itself into a generic
+  `dlopen` host and cover all simple apps with zero per-app work.
 
 ### 3B.5 Why "one-and-done" actually holds
 
 A frozen runner stays valid only if the pipeline's **entry-point name and ABI are
-stable**. Both hold under the harness's own premise: it already passes a fixed
-`-f` basename (`dh_hl_gen`), and *schedule-only* changes never alter the input/
-output signature. The ABI changes only on an *algorithm* change — exactly what
-side issue 3 wants to forbid/vet. Caveat: a generator parameter that alters the
-signature would break a fixed-signature runner; disallow such params for
-dlopen-runner problems, or use the metadata/argv path.
+stable**. Both hold under the harness's own premise: with the separate-provenance-
+field decision (Part 3.6) the harness gives a **stable** `-f` (e.g.
+`dh_hl_pipeline`, shared across nodes; the per-node identity moves to the JSON
+`provenance` field), and *schedule-only* changes never alter the input/output
+signature. The ABI changes only on an *algorithm* change — exactly what side issue
+3 wants to forbid/vet. Caveat: a generator parameter that alters the signature
+would break a fixed-signature runner; disallow such params for dlopen-runner
+problems, or use the registration path.
 
 ### 3B.6 Bill of work for the (one-time, per-runner) edit
 
@@ -792,9 +827,11 @@ result state, composing with the profiler run rather than replacing it.
 
 1. **Cheapest, highest integrity ROI:** (a) store the problem size actually used
    on each benchmark record and gate paired comparisons on size-equality (Part 4.2
-   interim), closing the silent-incomparability hole; and (b) assert the profiler
-   JSON's pipeline `name` equals the compiled `-f` basename (Part 3.6) — a
-   near-free provenance check that works even on today's internal path.
+   interim), closing the silent-incomparability hole; and (b) a provenance check on
+   the profiler JSON (Part 3.6). Interim: assert `pipelines[0].name` equals the
+   compiled `-f` basename — near-free, works on today's internal path. Steady state:
+   a separate baked `provenance` field checked instead, so `-f` can be a clean
+   stable symbol (small Halide change; plan in `reference_build_commands.md`).
 2. **Harness-controlled sizes** via RunGen `--output_extents` / `random:SEED:[…]`
    + `--describe` (Part 4.2). Kills the size reward-hack; unlocks…
 3. **Ensembles** (Part 5) — a small generalization of the batch key once size is
