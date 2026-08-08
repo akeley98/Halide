@@ -1503,9 +1503,13 @@ The tool
 Flags:
 
 * `--problem {problem ID}`
-  adds the named problem to the set of problems to test with.
+  adds the named problem to the set of selected problems to test with.
   If no `--problem` arguments exist,
   the testing is done for all enabled problems.
+  <!-- impl -->
+  CAUTION: use "selected problem" consistently in this section,
+  as "enabled problem" means something different.
+  <!-- end impl -->
 
 * `--profile [N]` (`N = 0` default, must be a non-negative integer).
   This enables `N` batches of profiler runs per problem.
@@ -1523,14 +1527,14 @@ Flags:
 This tool exits successfully iff no harness errors occurred
 and all subprocesses succeeded.
 
-IMPL TASK: problem 3, settle on one benchmark set per enabled problem.
+IMPL TASK: problem 3, settle on one benchmark set per selected problem.
 This way the problem is uniform for all benchmarks in the set.
 I actually completely missed the problem and didn't have this in mind at all,
 but your proposed solution is elegant.
 
 If at least 1 profiling batch occured,
 and `--only all` or `--only target` are in effect,
-then for each enabled problem where all benchmark runs ran successfully,
+then for each selected problem where all benchmark runs ran successfully,
 a new benchmark set is generated containing all benchmark sub-objects for that problem.
 <!-- end help -->
 
