@@ -325,6 +325,13 @@ JSON object with key value pairs:
 
 * `parameters`: object, generator parameters used to generate the profiled Halide binary
 
+IMPL TASK: add `problem`, `parameters_index`
+
+* `parameters_index`: number, index of said parameters in the schedule node's
+  `generator_parameters.json`.
+
+* `problem`: string, full ID of problem used for runner command
+
 * `profiler`: the profiler JSON output should be a JSON object whose "pipelines"
   value is a list of 1 object. This is that inner object.
   (There will be more than 1 if we support multiple generators; just error for != 1 for now).
@@ -1515,9 +1522,16 @@ Flags:
 
 This tool exits successfully iff no harness errors occurred
 and all subprocesses succeeded.
-A new benchmark set is generated, containing all benchmark objects
-made by this tool run, iff `--only all` or `--only target` are in effect,
-profiler batch count is at least 1, and no subprocesses failed.
+
+IMPL TASK: problem 3, settle on one benchmark set per enabled problem.
+This way the problem is uniform for all benchmarks in the set.
+I actually completely missed the problem and didn't have this in mind at all,
+but your proposed solution is elegant.
+
+If at least 1 profiling batch occured,
+and `--only all` or `--only target` are in effect,
+then for each enabled problem where all benchmark runs ran successfully,
+a new benchmark set is generated containing all benchmark sub-objects for that problem.
 <!-- end help -->
 
 Important lines emitted by the harness itself are prefixed with
@@ -1547,6 +1561,10 @@ IMPL TASK: also generate shared libraries, with no Halide runtime
 as explained in [Reference Build Commands](reference_build_commands.md)
 
 IMPL TASK: problem ID printf
+
+IMPL TASK: problem 2, resolved with per `(node, generator parameters)` `bin` subdirectory.
+
+IMPL TASK: modify the scheme if needed, document decisions in `impl.md`.
 
 Pseudocode:
 
@@ -1578,12 +1596,11 @@ Pseudocode:
                 print "dh_hl: begin Halide generator {i}: {node.short_id}"
                 print "dh_hl: params={params}"
                 # ... Run Halide generator with given params
-                # Binary in session private workspace: bin/{node.full_id}_{i}
-                # Shared library, stmt, etc. with similar file names.
+                # Build outputs placed into: bin/{node.full_id}_{i}/...
                 print "dh_hl: end Halide generator {i} (success|fail)"
 
     # 2. Profiling
-    if --profile N with N == 0:
+    if --profile N with N == 0 or any build/generate failed:
         acquire_exclusive(catalog_lock)
     else:
         acquire_exclusive(machine_lock)  # Upgrade from concurrent
@@ -1618,7 +1635,7 @@ Pseudocode:
             result = "success"
         node.result = best_of(node.result, result)
 
-    # Also save benchmark set object and add to session, if criteria passed.
+    # Also save per-problem benchmark set object and add to session, if criteria passed.
 
 See the [Reference Build Commands](reference_build_commands.md) file for the
 tested build/link recipe.  That file teaches the **Halide toolchain** (which
@@ -1638,6 +1655,8 @@ Write a real CLI test in the style of `test_build_cli_halide.py` for this;
 maybe do something crooked to copy one schedule node's binary on top of another's.
 The real reason for the check is to catch accidental shared library SNAFUs,
 but I'm not sure this is easy to reproduce in a controlled test environment.
+
+IMPL TASK: this "as implemented" needs to be updated
 
 **As implemented** (`build.py`): `init_build` (`cmd_init_build`) resolves
 target/other/anchor (`_resolve_target`/`_resolve_other`/`_resolve_anchor`, the
@@ -2276,11 +2295,13 @@ This is to prevent picking a golden schedule node that's impossible to satisfy.
 The expectation is all generators will output a serialized `algorithm_hlpipe`,
 which is the pipeline *before any scheduling directives are applied*.
 The harness gives the output path for the serialization as the
-`DENDRITIC_HL_ALGORITHM_HL` environment variable.
+`DENDRITIC_HL_ALGORITHM_HLPIPE` environment variable.
 Insert the following between the algorithm definition and the scheduling:
 
+IMPL TASK: fix problem 1, good catch
+
     // Output algorithm as serialized pipeline, before any scheduling.
-    if (const char* path = getenv("DENDRITIC_HL_ALGORITHM_HL")) {
+    if (const char* path = getenv("DENDRITIC_HL_ALGORITHM_HLPIPE")) {
         serialize_pipeline(Pipeline(std::vector<Func>{output}), path);
     }
 
@@ -2321,6 +2342,21 @@ Each is printed as
 * `schedule: {schedule ID}`
 
 * remarks
+<!-- end help -->
+
+
+### JSON Golden Info Tool
+
+    dh_hl json_golden_info -C ... {golden ID}
+<!-- help -->
+
+IMPL TASK: add command, fixed problem 4 (copy/paste SNAFU; emacs kill ring saved the day)
+
+Print info for the given golden object as a JSON object with key/value pairs
+
+* `remarks`: string
+
+* `schedule`: null, or string holding schedule node full ID
 <!-- end help -->
 
 
@@ -3140,8 +3176,8 @@ Non-trivial when the `-s {session handle}` option is used.
     dh_hl commentary_short_id -C ... {commentary ID}
     dh_hl WarningToggle_full_id -C ... {WarningToggle ID}
     dh_hl WarningToggle_short_id -C ... {WarningToggle ID}
-    dh_hl problem_full_id -C ... {commentary ID}
-    dh_hl problem_short_id -C ... {commentary ID}
+    dh_hl problem_full_id -C ... {problem ID}
+    dh_hl problem_short_id -C ... {problem ID}
 
 IMPL TASK: add new ones
 

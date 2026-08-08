@@ -619,17 +619,47 @@ the name is discovered automatically: run the generator executable with **no**
 `-g`, and it errors out listing `available Generators are:` followed by the sole
 registered name; scrape that single name and pass it as `-g`.
 
-**Output basename (`-f`).** A `build` run compiles many binaries in one `bin/`
-dir (up to three nodes × their parameters objects), so the `-f` basename must be
-**unique per (node, parameters index)** or the emitted `.a`/`.registration.cpp`/
-`.rungen` would clobber each other.  It ALSO must be a valid **C identifier**,
-because Halide bakes it into symbol names in the emitted `registration.cpp`.  A
-schedule full ID starts with a digit and contains `-`, so `build._emit_basename`
-sanitizes it (non-alphanumerics → `_`, prefixed with a letter) and appends the
-parameters index — unique, valid, and independent of the generator's registered
-name.  (An earlier design used a single fixed `-f dh_hl_gen`; that only worked
-for the old one-node/one-params build and was replaced.)  This whole path is
-tested end-to-end against the local Halide build.
+**Output basename (`-f`) and per-(node, params-index) layout.** A `build` run
+compiles many binaries at once (up to three nodes × their parameters objects),
+and everything the generator emits for one build (`dh_hl_pipeline.a`,
+`.registration.cpp`, the `c_header`, `.stmt`/`.conceptual.stmt`, the shared
+library, the serialized `algorithm_hlpipe`) shares the `-f` basename.  Rather
+than fold (node, parameters index) into the basename, we **isolate each (node,
+parameters index) in its own subdirectory** `bin/{node.full_id}_{i}/` and emit
+into it with a **fixed, stable** `-f dh_hl_pipeline`.  The subdirectory supplies
+the uniqueness (no clobbering across nodes or params), which frees the basename
+to be the *same clean symbol for every schedule node*: the generated header is
+always `dh_hl_pipeline.h` declaring `dh_hl_pipeline(...)`, and the emitted shared
+library always exports `dh_hl_pipeline`.  That stability is load-bearing — it is
+exactly what lets `copy_build_output header`/`shared_library` and a `dlopen`
+runner be one-and-done (idea.md "New Problem Tool" custom-runner setup and "Copy
+Build Output Tool"), instead of the runner having to track a per-node symbol.
+`dh_hl_pipeline` is already a valid **C identifier** (Halide bakes `-f` into the
+symbol names in `registration.cpp`), so no sanitization is needed.
+
+The **param-independent** artifacts stay at the `bin/` root, one per node — the
+ninja file `bin/{node.full_id}.ninja` and the generator executable
+`bin/{node.full_id}_generator` — plus the fully shared, node- and param-
+independent `RunGenMain.o`.  Only the phase-2 emit + phase-4 link outputs (and,
+for a `<Lib>` problem, the shared-library emit) land in the per-(node, i)
+subdirectory.
+
+Consequence for provenance: the profiler-JSON `name` field is now the constant
+`dh_hl_pipeline` for every pipeline, so it can NOT identify which node actually
+ran.  That is fine because provenance verification is deliberately deferred (the
+idea.md Build FUTURE note and reference_build_commands.md "separate baked
+provenance field"); until the Halide change lands there is no in-`name` hash to
+check.  (Design history: a single fixed `-f dh_hl_gen` in one flat `bin/` dir
+clobbered across nodes/params and was replaced by a per-(node, i) sanitized
+basename `g_{sanitized full_id}_{i}`; that in turn is now superseded by the fixed
+name + subdirectory here, which was needed to give the runner/header a stable
+symbol — see idea.md Build Tool "problem 2".)
+
+IMPL TASK: `build.py` still uses the superseded flat layout — `_emit_basename`
+returns `g_{sanitized full_id}_{i}` and emits every node/param into one `bin/`
+dir with the per-node `-f`.  Switch it to the `bin/{full_id}_{i}/` subdirectory +
+fixed `-f dh_hl_pipeline` scheme described here (and update the `_publish_stmt` /
+`copy_build_output` path lookups accordingly).
 
 If the `available Generators are:` list contains anything other than exactly
 one name (zero, or two or more), the tool reports a harness error and stops.
