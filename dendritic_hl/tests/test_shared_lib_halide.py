@@ -80,18 +80,20 @@ def test_shared_library_dlopen_runner(run_cli, tmp_path):
     r = run_cli("build", "-s", handle, "--only", "all")  # no profiling needed
     assert r.returncode == 0, r.stderr
 
-    # 2. Locate the emitted subdir (holds the .so, header) + the shared runtime.
-    # IMPL TASK: once `copy_build_output` exists (idea.md "Copy Build Output
-    # Tool"), fetch the shared library + generated header through it (real CLI
-    # getters) instead of reaching into the bin/ layout directly here; a runner is
-    # only supposed to need copy_build_output outputs, so this test should model
-    # that.  (halide_runtime.o has no getter yet -- flag if one is wanted.)
+    # 2. Fetch the artifacts a runner needs through the real CLI getter
+    #    (copy_build_output) -- a runner is only supposed to need these outputs,
+    #    not knowledge of the bin/ layout.  The shared library and generated
+    #    header come out this way; the standalone runtime object has no getter, so
+    #    it is still taken from bin/ (IMPL TASK: add a getter if one is wanted).
+    def _fetch(what, name):
+        dst = str(tmp_path / name)
+        r = run_cli("copy_build_output", "-s", handle, dst, what)
+        assert r.returncode == 0, r.stderr
+        return dst
+
+    lib = _fetch("shared_library", build._shared_lib_filename())
+    _fetch("header", "dh_hl_pipeline.h")     # runner #includes this
     bin_dir = run_cli("workspace_bin", "-s", handle).stdout.strip()
-    subdirs = [d for d in os.listdir(bin_dir)
-               if d.endswith("_0") and os.path.isdir(os.path.join(bin_dir, d))]
-    assert len(subdirs) == 1, subdirs
-    subdir = os.path.join(bin_dir, subdirs[0])
-    lib = os.path.join(subdir, build._shared_lib_filename())
     runtime_obj = os.path.join(bin_dir, build._RUNTIME_OBJ)
     assert os.path.isfile(lib) and os.path.isfile(runtime_obj)
 
@@ -107,7 +109,7 @@ def test_shared_library_dlopen_runner(run_cli, tmp_path):
         "c++", "-std=c++17", "-O2",
         "-I" + os.path.join(build.HALIDE_BUILD, "include"),
         "-I" + os.path.join(build.HALIDE_ROOT, "src", "runtime"),
-        "-I" + subdir,                       # dh_hl_pipeline.h
+        "-I" + str(tmp_path),                # dh_hl_pipeline.h (fetched above)
         str(runner_src), runtime_obj,
         "-o", runner_bin, export_flag, "-lpthread", "-ldl"]
     cp = subprocess.run(compile_cmd, capture_output=True, text=True)

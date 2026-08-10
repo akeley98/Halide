@@ -31,7 +31,6 @@ import argparse
 import json
 import os
 import random
-import shutil
 import subprocess
 import sys
 
@@ -39,7 +38,8 @@ from . import ids
 from . import locks
 from . import profiler_warnings
 from . import safety
-from .catalog import Catalog, best_result, canonical_block_advice, validate_parameters
+from .catalog import (Catalog, PROBLEM_LIB, PROBLEM_RUNGENMAIN, best_result,
+                      canonical_block_advice, validate_parameters)
 from .context import Context, SessionWorkspace, resolve_target
 from .errors import DhHlError, HarnessError
 from . import ninja_syntax
@@ -326,14 +326,14 @@ def _resolve_run(bin_dir, problem_argv, rungen_rel, shared_rel):
     shared_abs = os.path.abspath(os.path.join(bin_dir, shared_rel))
     cmd = []
     for tok in problem_argv:
-        if tok == "<RunGenMain>":
+        if tok == PROBLEM_RUNGENMAIN:
             cmd.append(rungen_abs)
-        elif tok == "<Lib>":
+        elif tok == PROBLEM_LIB:
             cmd.append(shared_abs)
         else:
             cmd.append(tok)
     extra_env = {}
-    if problem_argv[0] != "<RunGenMain>":
+    if problem_argv[0] != PROBLEM_RUNGENMAIN:
         extra_env["DENDRITIC_HL_OUTPUT_LIB"] = shared_abs
     return cmd, extra_env
 
@@ -653,7 +653,7 @@ def cmd_build(args):
     else:
         param_indices = {n.full_id: list(range(len(n.params))) for n in nodes}
 
-    all_ok = _compile_phase(bin_dir, nodes, param_indices, target.full_id)
+    all_ok = _compile_phase(bin_dir, nodes, param_indices)
 
     # Profiling is all-or-nothing on the build: if any generator/link failed,
     # skip it entirely (don't take the exclusive machine lock for a doomed run --
@@ -726,7 +726,7 @@ def _selected_problems(catalog, problem_args):
     return out
 
 
-def _compile_phase(bin_dir, nodes, param_indices, target_id):
+def _compile_phase(bin_dir, nodes, param_indices):
     """Phases 1a (per-node C++ generator exe + shared RunGenMain.o) and 1b
     (per-(node, params-index) emit + link).  Mutates the _NodeBuild records.
     Returns whether every attempted subprocess succeeded."""
@@ -765,20 +765,20 @@ def _compile_phase(bin_dir, nodes, param_indices, target_id):
         if not n.cpp_ok:
             continue
         for i in param_indices[n.full_id]:
-            with_stmt = (n.full_id == target_id)
             subdir = _param_subdir(n.full_id, i)
             print("dh_hl: begin Halide generator {}: {}".format(i, n.short_id))
             print("dh_hl: params={}".format(json.dumps(n.params[i])))
             _trace_build("emit", n.full_id, i)
+            # stmt/conceptual_stmt are emitted for EVERY built pipeline now (so
+            # `copy_build_output stmt` works for any built node), not just the
+            # target (idea.md Build Tool).
             if _emit(bin_dir, _gen_exe_name(n.full_id), n.gen_name, subdir,
-                     n.params[i], with_stmt) != 0:
+                     n.params[i], with_stmt=True) != 0:
                 n.gen_ok[i] = False
                 all_ok = False
                 print("dh_hl: end Halide generator {} fail".format(i))
                 continue
             n.gen_ok[i] = True
-            if with_stmt:
-                _publish_stmt(bin_dir, subdir, i)
             # RunGenMain static-link binary (needs the shared runtime object).
             _ensure_runtime(bin_dir, _gen_exe_name(n.full_id))
             _trace_build("link", n.full_id, i)
@@ -799,18 +799,6 @@ def _compile_phase(bin_dir, nodes, param_indices, target_id):
             n.shared_ok[i] = True
             print("dh_hl: end Halide generator {} success".format(i))
     return all_ok
-
-
-def _publish_stmt(bin_dir, out_subdir, i):
-    """Copy the target's emitted .stmt / .conceptual.stmt (in bin/{out_subdir}/)
-    to the short human-friendly `bin/{i}.stmt` names and announce them (idea.md
-    pseudocode)."""
-    for suffix in (".stmt", ".conceptual.stmt"):
-        src = os.path.join(bin_dir, out_subdir, _PIPELINE + suffix)
-        if os.path.exists(src):
-            dst = os.path.join(bin_dir, "{}{}".format(i, suffix))
-            shutil.copyfile(src, dst)
-            print("dh_hl: stmt: " + dst)
 
 
 def _profile_phase(bin_dir, nodes, param_indices, sched, catalog, batches,
@@ -929,3 +917,80 @@ def _compute_result(n, indices, only_kind):
     if only_kind == "index" or any(not n.gen_ok.get(i) for i in indices):
         return "halide error"
     return "success"
+
+
+# ---------------------------------------------------------------------------
+# copy_build_output: fetch a build artifact from the session bin/
+# ---------------------------------------------------------------------------
+
+# what -> file name inside the per-(node, params index) subdir.  `generator` is
+# node-level (param-independent, handled specially); `shared_library` uses the
+# platform extension.
+_COPY_PARAM_FILES = {
+    "algorithm_hlpipe": _PIPELINE + ".hlpipe",
+    "stmt": _PIPELINE + ".stmt",
+    "conceptual_stmt": _PIPELINE + ".conceptual.stmt",
+    "header": _PIPELINE + ".h",
+    "RunGenMain": _PIPELINE + ".rungen",
+}
+COPY_BUILD_WHATS = ["generator"] + list(_COPY_PARAM_FILES) + ["shared_library"]
+
+
+def _build_output_rel(full_id, what, params_index):
+    """Path (relative to the session bin/) of the *what* build output for a
+    (schedule, params index).  `generator` is param-independent."""
+    if what == "generator":
+        return _gen_exe_name(full_id)
+    subdir = _param_subdir(full_id, params_index)
+    if what == "shared_library":
+        return os.path.join(subdir, _shared_lib_filename())
+    return os.path.join(subdir, _COPY_PARAM_FILES[what])
+
+
+def _copy_output_params_index(num_params, what, parameters_arg):
+    """Resolve the parameters index for copy_build_output: None for the
+    param-independent `generator`; otherwise `--parameters` is required when the
+    node has >1 params object, and defaults to 0 for a single one (idea.md)."""
+    if what == "generator":
+        return None
+    if num_params > 1 and parameters_arg is None:
+        raise DhHlError(
+            "--parameters {{index}} is required: the schedule node has {} "
+            "generator parameters objects".format(num_params))
+    idx = parameters_arg if parameters_arg is not None else 0
+    if not 0 <= idx < num_params:
+        raise DhHlError("--parameters {} out of range (0..{})".format(
+            idx, num_params - 1))
+    return idx
+
+
+def _copy_file_out(src, dst):
+    """Copy *src* bytes to *dst* ('-' = stdout).  Bytes, not text: outputs may be
+    binaries (generator exe, shared library, RunGenMain)."""
+    with open(src, "rb") as f:
+        data = f.read()
+    if dst == "-":
+        sys.stdout.buffer.write(data)
+    else:
+        with open(dst, "wb") as f:
+            f.write(data)
+
+
+def cmd_copy_build_output(args):
+    # Reads the session's private bin/ (built outputs) + resolves the schedule.
+    # Read-only, so it does NOT take the session lock (like `status`).
+    ctx = Context.for_session(args, session_lock=False)
+    node = ctx.resolve_schedule_arg(getattr(args, "schedule", None))
+    what = args.what
+    idx = _copy_output_params_index(
+        len(node.parameters), what, getattr(args, "parameters", None))
+    src = os.path.join(ctx.workspace.bin_dir,
+                       _build_output_rel(node.full_id, what, idx))
+    if not os.path.isfile(src):
+        raise DhHlError(
+            "build output {!r} not found for {} in this session (run "
+            "`dh_hl build` first{}): {}".format(
+                what, ctx.catalog.format_schedule_id(node),
+                "; and the generator must emit the algorithm hlpipe"
+                if what == "algorithm_hlpipe" else "", src))
+    _copy_file_out(src, args.output)

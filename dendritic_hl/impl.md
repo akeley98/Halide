@@ -656,8 +656,10 @@ symbol — see idea.md Build Tool "problem 2".)
 **As implemented** (`build.py`): `_param_subdir(full_id, i)` -> `bin/{full_id}_{i}/`
 and `_emit`/`_link` run with `-o {subdir}` / `-f dh_hl_pipeline`; the node-level
 ninja file, generator exe, and shared `RunGenMain.o` stay at the `bin/` root.
-`_publish_stmt` copies the target's `{subdir}/dh_hl_pipeline.stmt` to the short
-`bin/{i}.stmt`.  The pipeline is emitted ONCE per (node, i) as a `no_runtime`
+`stmt`/`conceptual_stmt` are emitted for every built (node, i) and fetched on
+demand by `copy_build_output` (`_build_output_rel` maps a `what` to its bin/
+path); there is no eager copy-to-`bin/{i}.stmt` and no path printing anymore.
+The pipeline is emitted ONCE per (node, i) as a `no_runtime`
 **object** (`-e object,... target=host-profile-no_runtime`), and both binaries
 link from it: `_link` builds the RunGenMain `.rungen` (object + the shared
 `bin/halide_runtime.o` emitted once by `_ensure_runtime`), and `_link_shared`

@@ -1525,15 +1525,11 @@ The `... with Benchmark ID:` line leads with `...` to tie it to the preceding
 `Profiled ...` line, so agents don't misread the ID as belonging to the
 profiler's own printf output printed nearby.
 
-IMPL TASK: print benchmark short IDs.
-This can be done without a general purpose full-ID-to-short-ID function;
-just give the short ID just-in-time while editing the session private workspace state.
-
-IMPL TASK: generate `stmt` for all Halide pipelines now.
-
-IMPL TASK: stop printing output paths, since `copy_build_output` exists now.
-
-IMPL TASK: problem ID printf
+IMPL TASK: print benchmark short IDs of the `private.{schedule}.{parameters
+index}.{n}` session-local form (idea.md "Benchmark short ID").  `build` currently
+prints the general `{schedule}.{host}_{ts}` short ID instead; the `private.` form
+depends on the not-yet-implemented `benchmark_short_id/` session state
+(impl.md "Session Private Workspace").
 
 Pseudocode:
 
@@ -1649,11 +1645,6 @@ without updating its result.
 
     dh_hl copy_build_output -s ... {output file} {what} [schedule ID]
 <!-- help -->
-
-IMPL TASK: add this
-
-IMPL TASK: common helpers (if they don't exist) for figuring out
-session private workspace `bin` file
 
 Copy a certain build output for the given schedule node from the session private workspace.
 

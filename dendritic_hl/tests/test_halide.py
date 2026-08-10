@@ -43,7 +43,8 @@ def _stmt_line(path):
     return path
 
 
-def test_build_and_profile_real_halide(brighten_session, run_tool, capsys):
+def test_build_and_profile_real_halide(brighten_session, run_tool, capsys,
+                                       tmp_path):
     S = brighten_session
     # Give the target two parameters objects, then init_build --target workspace
     # (workspace now inconsistent -> a new child node with those params).  The
@@ -58,14 +59,15 @@ def test_build_and_profile_real_halide(brighten_session, run_tool, capsys):
     with pytest.raises(SystemExit) as e:
         run_tool(build.cmd_build, S.ns(profile=1, only="all"))
     assert e.value.code == 0
-    # build announces both emitted stmt paths for the target; both exist on disk.
-    printed = capsys.readouterr().out.splitlines()
-    stmt_lines = [ln.split("dh_hl: stmt: ", 1)[1]
-                  for ln in printed if ln.startswith("dh_hl: stmt: ")]
-    plain = [p for p in stmt_lines if not p.endswith(".conceptual.stmt")]
-    conceptual = [p for p in stmt_lines if p.endswith(".conceptual.stmt")]
-    assert len(plain) == 2 and all(os.path.isfile(p) for p in plain)
-    assert len(conceptual) == 2 and all(os.path.isfile(p) for p in conceptual)
+    capsys.readouterr()
+    # Both params objects' stmt / conceptual.stmt are fetchable via
+    # copy_build_output, and carry real IR text (the `output` Func appears).
+    for i in (0, 1):
+        for what in ("stmt", "conceptual_stmt"):
+            dst = str(tmp_path / "{}_{}.txt".format(what, i))
+            run_tool(build.cmd_copy_build_output,
+                     S.ns(output=dst, what=what, schedule=None, parameters=i))
+            assert "output" in open(dst, encoding="utf-8").read()
 
     run_tool(tools.cmd_json_schedule_info, S.ns(schedule=None))
     obj = json.loads(capsys.readouterr().out)

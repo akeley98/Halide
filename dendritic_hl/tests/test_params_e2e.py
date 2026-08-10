@@ -134,10 +134,17 @@ def test_view_generator_parameters(run_cli, tiled_session):
 
 # ---- build: parameter leaves a signature in the emitted .stmt -------------
 
-def test_build_parameter_changes_stmt_loop_bound(run_cli, tiled_session):
-    # The target's stmt for params index 0 is published to bin/0.stmt.
-    stmt = os.path.join(tiled_session.private_dir, "bin", "0.stmt")
+def _stmt_text(run_cli, S, tmp_path, pidx=0):
+    """Fetch the target node's stmt for params index *pidx* via copy_build_output."""
+    dst = str(tmp_path / "out.stmt")
+    r = run_cli("copy_build_output", *_cli(S), dst, "stmt", "--parameters",
+                str(pidx))
+    assert r.returncode == 0, r.stderr
+    return open(dst, encoding="utf-8").read()
 
+
+def test_build_parameter_changes_stmt_loop_bound(run_cli, tiled_session,
+                                                 tmp_path):
     # NOTE: the `x.xi, 0, N)` fragments below encode what I observed of this
     # Halide build's .stmt syntax (empirically, not from a spec):
     #   * a for-loop prints as `for (<var>, <min>, <max>)` with an INCLUSIVE
@@ -150,19 +157,19 @@ def test_build_parameter_changes_stmt_loop_bound(run_cli, tiled_session):
 
     # Default GeneratorParam (split_factor=8): inner split loop bound is 7.
     _init_and_build(run_cli, tiled_session, profile=0)
-    text = open(stmt).read()
+    text = _stmt_text(run_cli, tiled_session, tmp_path)
     assert "x.xi, 0, 7)" in text
     assert "x.xi, 0, 15)" not in text
 
     # split_factor=16: the inner loop bound tracks the parameter (now 15).
     _set_params(tiled_session, '[{"split_factor": 16}]')
     _init_and_build(run_cli, tiled_session, profile=0)
-    text = open(stmt).read()
+    text = _stmt_text(run_cli, tiled_session, tmp_path)
     assert "x.xi, 0, 15)" in text
     assert "x.xi, 0, 7)" not in text
 
     # split_factor=32: bound becomes 31.
     _set_params(tiled_session, '[{"split_factor": 32}]')
     _init_and_build(run_cli, tiled_session, profile=0)
-    text = open(stmt).read()
+    text = _stmt_text(run_cli, tiled_session, tmp_path)
     assert "x.xi, 0, 31)" in text

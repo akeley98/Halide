@@ -125,6 +125,7 @@ COMMAND_HELP = {
     "restore_idea": "Load an idea's parent schedule into the workspace to implement it.",
     "init_build": "Select up to 3 schedule nodes (target/other/anchor) for the next build.",
     "build": "Compile (and optionally profile) the init_build selection.",
+    "copy_build_output": "Copy a build artifact (stmt/header/shared_library/...) to a file.",
     "canon": "Make the current schedule the canonical schedule of the current idea.",
     "comment": "Attach commentary (with a review and optional cancels) to a schedule node.",
     "new_root": "Create a new root schedule node from the workspace.",
@@ -265,6 +266,15 @@ def _build_parser():
     sp.add_argument("--problem", action="append", metavar="PROBLEM_ID",
                     help="profile with this problem (repeatable; default: all "
                          "enabled problems)")
+
+    sp = add("copy_build_output")
+    sp.add_argument("output", help="output file ('-' for stdout)")
+    sp.add_argument("what", choices=build_mod.COPY_BUILD_WHATS,
+                    help="which build artifact to copy")
+    sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
+    sp.add_argument("--parameters", type=int, metavar="N",
+                    help="generator parameters index (required if the node has "
+                         ">1 and 'what' is not 'generator')")
 
     add("canon")
 
@@ -575,6 +585,7 @@ _DISPATCH = {
     "restore_idea": tools.cmd_restore_idea,
     "init_build": build_mod.cmd_init_build,
     "build": build_mod.cmd_build,
+    "copy_build_output": build_mod.cmd_copy_build_output,
     "canon": tools.cmd_canon,
     "comment": tools.cmd_comment,
     "new_root": tools.cmd_new_root,

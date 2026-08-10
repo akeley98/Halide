@@ -375,16 +375,6 @@ def test_profile_json_path_is_absolute_with_relative_catalog(
         "profiler JSON path must be absolute, got " + repr(seen["json_out"])
 
 
-def test_build_prints_stmt_paths(session, run_tool, fake_build, capsys):
-    _init(session, run_tool)
-    _build(session, run_tool, profile=0)
-    lines = capsys.readouterr().out.splitlines()
-    assert any(ln.startswith("dh_hl: stmt:") and ln.endswith("0.stmt")
-               and not ln.endswith(".conceptual.stmt") for ln in lines)
-    assert any(ln.startswith("dh_hl: stmt:") and ln.endswith("0.conceptual.stmt")
-               for ln in lines)
-
-
 # ---------------------------------------------------------------------------
 # build: problem-driven profiling (2d)
 # ---------------------------------------------------------------------------
@@ -552,6 +542,45 @@ def test_no_benchmark_set_when_a_subprocess_fails(session, run_tool, fake_build,
 ])
 def test_format_param_value(value, expected):
     assert build._format_param_value(value) == expected
+
+
+def test_copy_output_params_index():
+    """The parameters-index resolution for copy_build_output (idea.md): None for
+    `generator`, required when >1 params for other artifacts, default 0 for one,
+    range-checked."""
+    assert build._copy_output_params_index(3, "generator", None) is None
+    with pytest.raises(DhHlError):
+        build._copy_output_params_index(3, "stmt", None)      # required
+    assert build._copy_output_params_index(1, "stmt", None) == 0   # default
+    assert build._copy_output_params_index(3, "stmt", 2) == 2
+    with pytest.raises(DhHlError):
+        build._copy_output_params_index(2, "stmt", 5)         # out of range
+
+
+def test_copy_build_output_stmt(session, run_tool, fake_build, capsys, tmp_path):
+    """copy_build_output fetches an emitted artifact (the fake emit materializes
+    the .stmt) from the session bin/ to a file."""
+    _init(session, run_tool)
+    _build(session, run_tool, profile=0)
+    capsys.readouterr()
+    dst = str(tmp_path / "out.stmt")
+    run_tool(build.cmd_copy_build_output,
+             session.ns(output=dst, what="stmt", schedule=None, parameters=None))
+    assert open(dst, encoding="utf-8").read() == "// .stmt"   # fake_emit's marker
+
+
+def test_copy_build_output_missing_is_clean_error(session, run_tool, fake_build,
+                                                  capsys):
+    """A `what` the build didn't produce (the fake emit makes no header) is a
+    clean DhHlError, not a traceback."""
+    _init(session, run_tool)
+    _build(session, run_tool, profile=0)
+    capsys.readouterr()
+    with pytest.raises(DhHlError) as e:
+        run_tool(build.cmd_copy_build_output,
+                 session.ns(output="-", what="header", schedule=None,
+                            parameters=None))
+    assert "not found" in str(e.value)
 
 
 def test_resolve_run_rungenmain():
