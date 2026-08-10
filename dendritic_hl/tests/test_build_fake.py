@@ -6,9 +6,9 @@ is modeled.  The `session` fixture's workspace is consistent with its seed
 idea's canonical schedule, so `init_build --target workspace` selects that node
 (no new node created) unless we perturb the workspace first.
 
-Note the new result semantics: a `build` WITHOUT `--profile` caps at
-`runtime error` (no binary is known to run); `--profile N` (all-ok) reaches
-`success` (idea.md Build Tool pseudocode step 3).
+Note the result semantics (idea.md Build Tool pseudocode step 3): `success`
+means every Halide binary was BUILT (the generators emitted), so even a `build`
+WITHOUT `--profile` reaches `success`; linking/running is not part of the result.
 """
 
 import json
@@ -236,12 +236,13 @@ def test_failed_init_build_isolated_between_sessions(session, run_tool, fake_bui
 # build: result states
 # ---------------------------------------------------------------------------
 
-def test_build_no_profile_is_runtime_error(session, run_tool, fake_build, capsys):
-    """A clean build with no profiling exits 0 (all subprocesses succeeded) but
-    the result state caps at `runtime error` -- no binary is known to run."""
+def test_build_no_profile_reaches_success(session, run_tool, fake_build, capsys):
+    """A clean build with no profiling exits 0 and reaches `success`: the
+    generators emitted, which is all `success` requires (running is a per-problem
+    benchmark fact, not a node result)."""
     _init(session, run_tool)
     assert _build(session, run_tool, profile=0) == 0
-    assert _result(session, run_tool, capsys)["result"] == "runtime error"
+    assert _result(session, run_tool, capsys)["result"] == "success"
 
 
 def test_build_profile_success(session, run_tool, fake_build, capsys):

@@ -99,7 +99,7 @@ This contains files and directories holding state:
   but just raised too many tough cases for a prototype with questionable payoff.
 
 * **Result:** `result.txt`,
-  holding `unknown`, `c++ error`, `halide error`, `runtime error`, or `success`.
+  holding `unknown`, `c++ error`, `halide error`, or `success`.
   The default value is `unknown`.
   Ranked worst-to-best by `catalog.RESULT_RANK`; `build` only ever moves a node
   to a better value (`catalog.best_result`).

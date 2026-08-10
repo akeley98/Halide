@@ -66,9 +66,10 @@ COMMENTARY_REVIEWS = ("neutral", "negative", "positive", "lost_interest")
 IDEA_SIDE_LINK_TYPES = ("borrows_from", "superseded_by")
 
 # Schedule node result states, worst -> best (idea.md "Schedule Node State").
-# The absence of result.txt reads as the worst value, "unknown".
-RESULT_STATES = ("unknown", "c++ error", "halide error", "runtime error",
-                 "success")
+# The absence of result.txt reads as the worst value, "unknown".  "success"
+# means every Halide binary was BUILT (the generators emitted); whether a runner
+# then executes is a per-problem benchmark fact, not a node result state.
+RESULT_STATES = ("unknown", "c++ error", "halide error", "success")
 RESULT_RANK = {state: i for i, state in enumerate(RESULT_STATES)}
 
 

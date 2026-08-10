@@ -140,8 +140,6 @@ sha256, lowercase hex digits.
 
 * **Edges:** 0 or 1 parent idea nodes, 0 or more child idea nodes.
 
-IMPL TASK: remove `runtime error` and update `impl.md` to match.
-
 * **Result:** one of:
   * `unknown`: Did not attempt any compilation (worst).
   * `c++ error`: C++ generator did not compile successfully.

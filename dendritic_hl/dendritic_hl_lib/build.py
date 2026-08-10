@@ -578,8 +578,7 @@ def cmd_build(args):
     for n in nodes:
         if n.harness_error:
             continue
-        result = _compute_result(n, param_indices[n.full_id], only_kind,
-                                  profile_batches)
+        result = _compute_result(n, param_indices[n.full_id], only_kind)
         node = sched[n.full_id]
         node.set_result(best_result(node.result, result))
 
@@ -757,15 +756,16 @@ def _build_benchmark_obj(json_out, warnings_out, hostname, params, stdout_text,
     }
 
 
-def _compute_result(n, indices, only_kind, profile_batches):
-    """The result state this run establishes for node *n* (idea.md pseudocode
-    step 3).  best_result() at the call site keeps it monotone."""
+def _compute_result(n, indices, only_kind):
+    """The result state this run establishes for node *n* (idea.md Build Tool
+    pseudocode step 3).  `success` means every Halide binary was BUILT (all
+    generators emitted); linking RunGenMain and running a benchmark are NOT part
+    of the result -- run outcomes are per-problem benchmark facts, checked by
+    should_accept, not node state.  best_result() at the call site keeps it
+    monotone."""
     if not n.cpp_ok:
         return "c++ error"
     # --only [int] builds a single binary, so success is not provable.
     if only_kind == "index" or any(not n.gen_ok.get(i) for i in indices):
         return "halide error"
-    if profile_batches == 0 or n.any_run_failed \
-            or any(not n.linked.get(i) for i in indices):
-        return "runtime error"
     return "success"
