@@ -108,6 +108,31 @@ def test_ranking_cost_null_when_no_batches(session, run_tool, capsys):
                    "representative": None, "parameters_raw_cost": [None]}
 
 
+def test_ranking_cost_mixed_null_keeps_ordinal_slot(session, run_tool, capsys):
+    """A schedule with 2 generator-parameters objects, only index 0 profiled:
+    parameters_raw_cost is [cost, null].  The unbenchmarked slot is null (NOT 0,
+    which reads as infinitely fast) AND keeps its ordinal position beside the
+    real number -- the mixed case the all-null test above cannot exercise."""
+    from dendritic_hl_lib import locks
+    from dendritic_hl_lib.catalog import dump_parameters
+    cat = open_catalog(session.catalog_dir)
+    try:
+        idea = cat.get_idea(cat.get_session(session.session_id).seed_idea_id)
+        two_id = cat.create_schedule(
+            "two-param source\n", parent_idea=idea,
+            params_text=dump_parameters([{}, {"tile": 8}])).full_id
+        cat.flush()
+        safety.commit()
+    finally:
+        locks._reset_for_tests()
+    _setup(session, {two_id: [[100, 101, 99]]})   # only params index 0 profiled
+    out = _out(run_tool, capsys, tools.cmd_json_ranking_cost,
+               session.ns(schedule=two_id, anchor="none"))
+    obj = json.loads(out)
+    assert obj["parameters_raw_cost"] == [100, None]
+    assert obj["representative"] == 0 and obj["cost"] == 100
+
+
 def _short_id(session, full_id):
     from dendritic_hl_lib import locks
     cat = open_catalog(session.catalog_dir)

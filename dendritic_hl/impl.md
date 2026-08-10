@@ -302,8 +302,6 @@ same format as `json_golden_info`.
 
 ### Problem Objects on Disk
 
-IMPL TASK: add these
-
 Stored in `problem/{full id}/` as multiple files
 
 * `argv.json`, JSON list of CLI strings.
@@ -1310,44 +1308,34 @@ against the looped-mutation regression.  The Halide tier then re-checks the same
 tools against genuinely noisy real timings (above), where only *robust* facts
 (the parallel variant is much faster) can be asserted.
 
-IMPL TASK: close cost-tool "garbage value" test holes -- bugs that return a
-plausible-but-WRONG number (not a crash/None) are the worst, because they send
-agents in bad directions.  The current synthetic data is near-constant, so
-several load-bearing behaviours are undetected.  Add tests for, roughly in
-priority order:
+**Structural "garbage value" cost tests (pairing / multi-set / representative).**
+Bugs that return a plausible-but-WRONG number rather than crashing are the worst
+(they send agents in bad directions), so these pin behaviours that near-constant
+data would hide.  In `test_cost.py`: `test_pairing_beats_cross_batch_variance`
+(large cross-batch variance with a consistent per-batch offset -> the paired
+verdict is confidently `improvement`/`regression` where an unpaired marginal CI
+would read `unknown`); `test_batches_accumulate_across_sets_without_cross_set_pairing`
+(the `(set_id, batch)` key accumulates to `batch_count == 6` across two sets
+instead of colliding to 3); and `test_representative_recomputed_over_shared_batches`
+plus `test_representative_tie_breaks_to_lower_index` (the representative params
+index is recomputed per method over the relevant batch subset, ties to the lower
+index).  In `test_cost_tools.py`: `test_ranking_cost_mixed_null_keeps_ordinal_slot`
+pins `[cost, null]` for a 2-param schedule with only index 0 profiled (an
+unbenchmarked index is `null`, never `0` = "infinitely fast").  Each was
+mutation-checked against the specific bug it names.  Already-covered and
+deliberately NOT re-added: anchor ratio direction
+(`test_ranking_with_anchor_is_ratio`), representative<->cost consistency
+(`test_representative_picks_lowest_median_param`), and the profiler-stats
+percentile ordering + `time_ratio` denominator
+(`test_profiler_stats.py::test_percentiles_and_special_values`).
 
-* **Batch pairing (highest).** The 2-way method's whole point is per-batch
-  pairing.  Construct batches with large cross-batch variance but a consistent
-  per-batch offset: correct pairing -> confident `improvement`; a bug that pairs
-  across batches / doesn't pair / uses a marginal (unpaired) CI -> `unknown`.
-  No current test distinguishes these.
-* **`parameters_raw_cost`: null vs 0.** An unbenchmarked params index must be
-  `null`, not `0` (a `0` reads as "infinitely fast").  2 params, only index 0
-  profiled -> assert `[cost, null]` exactly.
-* **Anchor ratio direction.** With an anchor, cost is `target/anchor`.
-  target=200, anchor=100 -> ratio ~= 2.0, not 0.5 (catch an inverted ratio).
-* **Representative recomputed per method + tie-break.** A schedule whose best
-  params index over ALL its batches differs from the best over the batches shared
-  with the RHS/anchor; assert compare/ranking use the right one.  Equal per-param
-  costs -> representative is the lower index (deterministic).
-* **Batch key includes set_id.** Two sets each with batches 0..2 for the same
-  schedules -> `batch_count == 6`, no cross-set pairing (a bug keying on batch
-  index alone collides them).
-* **profiler_stats percentiles with DISTINCT samples.** Many distinct samples ->
-  assert `p25 < median < p75` strictly (catch a "return mean x3" bug) and that
-  `time_ratio` uses the pipeline `time_ns` denominator (exact ratio).
-* **`representative` <-> `cost` consistency** with asymmetric per-param costs:
-  `cost == parameters_raw_cost[representative]` and `representative == argmin`.
-
-IMPL TASK: before writing the above, investigate the best *fixture mechanism*.
-`add_synthetic_benchmark_set` fabricates through the real model, which is honest
-but verbose for multi-set / multi-problem / per-batch-structured cases.  Weigh:
-(a) extending `test_build_fake.py`'s fake-toolchain seams so a fake `build
---profile` mints structured benchmark sets, vs (b) a small backdoor
-"insert-fake-benchmark[-set]-into-catalog" test helper (or hidden `dh_hl` dev
-tool) that writes exactly the batch/problem/params structure a cost test needs.
-Pick whichever makes the pairing/multi-set tests above readable without obscuring
-what is being asserted; document the choice here.
+*Fixture mechanism (decided):* these use `add_synthetic_benchmark_set` unchanged
+-- one call per benchmark set (a batch is a position in a cell's sample list; a
+second set is a second call, merged with `private.update`), which already
+expresses every batch / set / params / problem axis a cost test needs.  No
+fake-`build --profile` seam or backdoor insert-tool was warranted: the
+model-level helper keeps each test's inputs visible at its call site, and the
+multi-set pattern (`test_compare_no_shared_batches`) predates these tests.
 
 **Locking in tests.**
 

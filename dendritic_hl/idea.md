@@ -2243,8 +2243,6 @@ The harness gives the output path for the serialization as the
 `DENDRITIC_HL_ALGORITHM_HLPIPE` environment variable.
 Insert the following between the algorithm definition and the scheduling:
 
-IMPL TASK: fix problem 1, good catch
-
     // Output algorithm as serialized pipeline, before any scheduling.
     if (const char* path = getenv("DENDRITIC_HL_ALGORITHM_HLPIPE")) {
         serialize_pipeline(Pipeline(std::vector<Func>{output}), path);

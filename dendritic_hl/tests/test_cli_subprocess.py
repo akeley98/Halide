@@ -192,6 +192,57 @@ def test_failed_init_build_cli_still_invalidates(run_cli, tmp_path):
     assert "no successful init_build" in r.stderr
 
 
+def test_new_problem_cli_remainder_dispatch_and_exit_codes(run_cli, tmp_path):
+    """CLI-layer coverage the in-process problem tests (run_tool bypasses
+    argparse) can't give (idea.md new_problem): argparse REMAINDER capture of a
+    flag-laden runner command line, real dispatch + list/json formatting, and
+    genuine process exit codes for the empty-argv / bad-short-name / bad-<...> /
+    duplicate error paths."""
+    cat_dir, _ = _bootstrap_cli(run_cli, tmp_path)   # has a `default` main problem
+
+    # REMAINDER captures flag-like tokens and the <RunGenMain> placeholder
+    # verbatim (argv distinct from `default` so it is not a duplicate).
+    r = run_cli("new_problem", "-C", cat_dir, "bench",
+                "<RunGenMain>", "--benchmarks=all")
+    assert r.returncode == 0, r.stderr
+    # A custom runner carrying <Lib> and a trailing flag.
+    r = run_cli("new_problem", "-C", cat_dir, "lib", "./runner", "<Lib>", "-v")
+    assert r.returncode == 0, r.stderr
+
+    # Dispatch + list formatting: default + bench + lib, argv round-tripped.
+    r = run_cli("list_all_problems", "-C", cat_dir)
+    assert r.returncode == 0 and r.stdout.count("id: ") == 3
+    assert 'cli: ["./runner", "<Lib>", "-v"]' in r.stdout
+
+    # json_problem_info round-trips the flag-laden argv exactly.
+    r = run_cli("json_problem_info", "-C", cat_dir, "problem.bench")
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == {
+        "argv": ["<RunGenMain>", "--benchmarks=all"],
+        "state": "enabled", "short_name": "bench"}
+
+    # Empty REMAINDER -> exit 1, clean error.
+    r = run_cli("new_problem", "-C", cat_dir, "noargs")
+    assert r.returncode == 1
+    assert "at least one" in r.stderr and "Traceback" not in r.stderr
+
+    # Bad short name (space) with VALID argv -> exit 1, clean error.
+    r = run_cli("new_problem", "-C", cat_dir, "bad name", "<RunGenMain>")
+    assert r.returncode == 1
+    assert "short name" in r.stderr and "Traceback" not in r.stderr
+
+    # Bad <...> placeholder with VALID short name -> exit 1, clean error.
+    r = run_cli("new_problem", "-C", cat_dir, "bogus", "<Bogus>")
+    assert r.returncode == 1
+    assert "unknown special argument" in r.stderr and "Traceback" not in r.stderr
+
+    # Duplicate argv -> exit 1, names the existing problem, no traceback.
+    r = run_cli("new_problem", "-C", cat_dir, "dup", "./runner", "<Lib>", "-v")
+    assert r.returncode == 1
+    assert "already exists" in r.stderr and "problem.lib" in r.stderr
+    assert "Traceback" not in r.stderr
+
+
 def test_review_cancels_cancelled_by_via_real_cli(run_cli, session):
     """Subprocess mirror of test_review.test_cancels_and_cancelled_by: drive the
     real `comment`/`json_schedule_info` CLI, computing the derived review and

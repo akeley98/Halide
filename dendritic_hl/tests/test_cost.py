@@ -178,6 +178,93 @@ def test_compare_no_shared_batches(tmp_path):
     assert data.ranking_cost(t["C"], None)["cost"] == 130
 
 
+# ---- pairing & multi-set batch structure ----------------------------------
+
+def test_pairing_beats_cross_batch_variance(tmp_path):
+    """The paired test is the module's whole point: with LARGE cross-batch
+    variance but a CONSISTENT per-batch offset, per-batch differencing cancels
+    the common-mode noise and yields a confident verdict.  The marginal
+    distributions overlap heavily (medians 220 vs 232, but batches span
+    100..300), so an implementation that failed to pair -- or used an unpaired
+    marginal CI -- would return `unknown` here."""
+    cat, t = _catalog(tmp_path)
+    set_id = add_synthetic_benchmark_set(cat, {
+        t["A"]: [[100, 300, 150, 280, 220]],
+        t["B"]: [[112, 309, 162, 291, 232]],   # A is ~10 faster in EVERY batch
+    })
+    cat.flush(); safety.commit()
+    data = cost.CostData.from_private_sets(_benchmark_set_dict(cat, set_id))
+
+    ab = data.compare(t["A"], t["B"])
+    assert ab["result"] == "improvement"        # paired diffs all negative
+    assert ab["batch_count"] == 5
+    # Marginal medians nearly tie despite the confident paired verdict.
+    assert ab["lhs_raw_cost"] == 220 and ab["rhs_raw_cost"] == 232
+    assert data.compare(t["B"], t["A"])["result"] == "regression"
+
+
+def test_batches_accumulate_across_sets_without_cross_set_pairing(tmp_path):
+    """The batch key is (set_id, batch): the SAME pair profiled in two sets
+    contributes 6 distinct paired batches, not 3.  A bug keying on the bare
+    batch index would collide (s1,i) with (s2,i) -- overwriting samples and
+    reporting batch_count==3."""
+    cat, t = _catalog(tmp_path)
+    s1 = add_synthetic_benchmark_set(cat, {
+        t["A"]: [[10, 11, 9]], t["B"]: [[15, 16, 14]]})
+    s2 = add_synthetic_benchmark_set(cat, {
+        t["A"]: [[20, 21, 19]], t["B"]: [[25, 26, 24]]})
+    cat.flush(); safety.commit()
+    private = {}
+    private.update(_benchmark_set_dict(cat, s1))
+    private.update(_benchmark_set_dict(cat, s2))
+    data = cost.CostData.from_private_sets(private)
+
+    assert data.ranking_cost(t["A"], None)["batch_count"] == 6
+    ab = data.compare(t["A"], t["B"])
+    assert ab["batch_count"] == 6               # 3 from each set, not merged
+    assert ab["result"] == "improvement"        # A ~5 faster in every batch
+
+
+def test_representative_recomputed_over_shared_batches(tmp_path):
+    """The representative params index is recomputed per method over the
+    relevant batch set, not cached once over ALL batches.  A's argmin over all
+    batches is param 1 (very fast in s2), but over the batches it SHARES with
+    anchor/RHS B (only s1) it is param 0.  A reused-global-representative bug
+    would wrongly report param 1 in the anchored/compare case."""
+    cat, t = _catalog(tmp_path)
+    s1 = add_synthetic_benchmark_set(cat, {
+        t["A"]: [[100, 100, 100], [200, 200, 200]],   # p0 fast, p1 slow here
+        t["B"]: [[150, 150, 150]]})
+    s2 = add_synthetic_benchmark_set(cat, {
+        t["A"]: [[100, 100, 100], [10, 10, 10, 10, 10]]})   # p1 very fast; B absent
+    cat.flush(); safety.commit()
+    private = {}
+    private.update(_benchmark_set_dict(cat, s1))
+    private.update(_benchmark_set_dict(cat, s2))
+    data = cost.CostData.from_private_sets(private)
+
+    # No anchor: over all batches, p1 (global median 10) beats p0 (100).
+    assert data.ranking_cost(t["A"], None)["representative"] == 1
+    # Anchored on B: only s1 batches are shared -> p0 (100) beats p1 (200).
+    anchored = data.ranking_cost(t["A"], t["B"])
+    assert anchored["representative"] == 0
+    assert anchored["raw_costs"] == {0: 100, 1: 200}
+    # compare() likewise picks the shared-batch representative for A.
+    assert data.compare(t["A"], t["B"])["lhs_representative"] == 0
+
+
+def test_representative_tie_breaks_to_lower_index(tmp_path):
+    """Equal median cost across params -> the lower index is the representative
+    (deterministic; cost.py sorts indices and uses a strict `<`)."""
+    cat, t = _catalog(tmp_path)
+    set_id = add_synthetic_benchmark_set(cat, {
+        t["A"]: [[100, 100, 100], [100, 100, 100]]})
+    cat.flush(); safety.commit()
+    data = cost.CostData.from_private_sets(_benchmark_set_dict(cat, set_id))
+    r = data.ranking_cost(t["A"], None)
+    assert r["representative"] == 0 and r["cost"] == 100
+
+
 # ---- profiler-version gate ------------------------------------------------
 
 def test_wrong_profiler_version_skipped(tmp_path):
