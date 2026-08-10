@@ -455,7 +455,7 @@ def _benchmark_set_cache(catalog, set_id):
     set whose version isn't `catalog.EXPECTED_PROFILER_VERSION`, so a stale
     version is recorded here rather than rejected at add time."""
     bs = catalog.get_benchmark_set(set_id)
-    prov = {}  # first-seen hostname/cpu_count/profiler_version, for the assert
+    prov = {}  # first-seen (host, cpu, ver, problem), asserted uniform
     schedules = {}
     for sched_id, per_pidx in bs.data.items():
         cells = []
@@ -465,16 +465,21 @@ def _benchmark_set_cache(catalog, set_id):
                 bench = catalog.resolve_benchmark(bid)
                 ids_out.append(bid)
                 wall_time_min.append(bench.wall_time_min)
-                seen = (bench.hostname, bench.cpu_count, bench.profiler_version)
+                # A set is single-problem (build makes one set per problem), so
+                # the problem is uniform too -- asserted alongside the machine
+                # provenance (idea.md "Cost Model", impl.md "Private Benchmark
+                # Sets on Disk").
+                seen = (bench.hostname, bench.cpu_count, bench.profiler_version,
+                        bench.problem)
                 first = prov.setdefault("provenance", seen)
                 assert first == seen, (
                     "benchmark set {} mixes provenance {} vs {}".format(
                         set_id, first, seen))
             cells.append({"wall_time_min": wall_time_min, "id": ids_out})
         schedules[sched_id] = cells
-    host, cpu, ver = prov.get("provenance", (None, None, None))
+    host, cpu, ver, problem = prov.get("provenance", (None, None, None, None))
     return {"hostname": host, "cpu_count": cpu, "profiler_version": ver,
-            "schedules": schedules}
+            "problem": problem, "schedules": schedules}
 
 
 def _missing_workspace_message(missing, private_dir):

@@ -323,8 +323,6 @@ JSON object with key value pairs:
 
 * `parameters`: object, generator parameters used to generate the profiled Halide binary
 
-IMPL TASK: add `problem`, `parameters_index`
-
 * `parameters_index`: number, index of said parameters in the schedule node's
   `generator_parameters.json`.
 
@@ -376,14 +374,6 @@ created on the i-th batch of the tool usage.
 
 
 ## Problem Object State
-
-IMPL TASK: test `Cannot give both <Lib> and <RunGenMain>` and `unknown <...>` error detection.
-
-IMPL TASK: test both `<Lib>` and `DENDRITIC_HL_OUTPUT_LIB` work.
-
-IMPL TASK: the harness currently hard-wires running `RunGenMain` with
-`--benchmarks=all --estimate_all`.
-All the functionality described here is new.
 
 * **Command Line Arguments:** `argv`, with some `<...>` placeholder values.
 
@@ -1436,26 +1426,12 @@ one made canonical), so editing the workspace to match that sibling still trips
 
     dh_hl build -s ...
 
-IMPL TASK: need the non-RunGenMain (dlopen runner) profile path.
-The shared library build itself is done.
-
-IMPL TASK: need to export `DENDRITIC_HL_ALGORITHM_HLPIPE`
-environment variable when running the generator.
-
-IMPL TASK: need to export `DENDRITIC_HL_OUTPUT_LIB`
-environment variable when running the profiler with non-RunGenMain.
-
-IMPL TASK: a research agent produced
-`human_stuff/externalized_runner_report.md`
-with info on implementing the non-RunGenMain path.
-This may give useful added detail for implementing this,
-although this file takes priority for contradictions.
-However, if a crucial agent point or gotcha seems to have sailed
-over my head, flag it for my review.
-
-IMPL TASK: `--problem`
-
-IMPL TASK: Add info in the build implementation details section if appropriate.
+IMPL TASK: end-to-end test of a `<Lib>` (custom-runner) problem profiled through
+a real dlopen runner that emits the profiler JSON.  The runner-command resolution
++ `DENDRITIC_HL_OUTPUT_LIB` export are implemented and unit-tested
+(`test_build_fake.py` `_resolve_run`), and the shared-library dlopen path is
+proven by `test_shared_lib_halide.py`, but no test yet drives `build --profile`
+with a `<Lib>` problem end-to-end.
 
 IMPL TASK: test behavior for broken runners that don't emit a profiler JSON.
 This counts as a "catalogued bad outcome", not "tool failure"

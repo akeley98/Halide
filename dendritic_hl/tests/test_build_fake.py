@@ -61,7 +61,7 @@ def fake_build(monkeypatch):
     monkeypatch.setattr(build, "_link_shared",
                         lambda bin_dir, out_subdir: knobs["shared_rc"])
 
-    def fake_bench(bin_dir, rungen_bin, json_out, warnings_out):
+    def fake_bench(bin_dir, cmd, extra_env, json_out, warnings_out):
         with open(json_out, "w") as f:
             # Include the fields the cost cache reads (wall_time_min,
             # profiler_version); the same dummy value for every binary is fine
@@ -356,7 +356,7 @@ def test_profile_json_path_is_absolute_with_relative_catalog(
     absolute (it is handed to a child running with cwd=bin_dir)."""
     seen = {}
 
-    def spy_bench(bin_dir, rungen_bin, json_out, warnings_out):
+    def spy_bench(bin_dir, cmd, extra_env, json_out, warnings_out):
         seen["json_out"] = json_out
         with open(json_out, "w") as f:
             json.dump({"pipelines": [{"name": "x", "profiler_version": 1,
@@ -383,6 +383,75 @@ def test_build_prints_stmt_paths(session, run_tool, fake_build, capsys):
                and not ln.endswith(".conceptual.stmt") for ln in lines)
     assert any(ln.startswith("dh_hl: stmt:") and ln.endswith("0.conceptual.stmt")
                for ln in lines)
+
+
+# ---------------------------------------------------------------------------
+# build: problem-driven profiling (2d)
+# ---------------------------------------------------------------------------
+
+def _set_lines(out):
+    return [ln for ln in out.splitlines()
+            if ln.startswith("dh_hl: Benchmark set ID: ")]
+
+
+def test_benchmark_carries_problem_and_params_index(session, run_tool,
+                                                    fake_build, capsys):
+    """Each profiled benchmark records the problem (full ID) it ran with and its
+    generator-parameters index (idea.md "Benchmark Sub-object State")."""
+    run_tool(tools.cmd_problem_full_id, session.ns(problem="main"))
+    main_id = capsys.readouterr().out.strip()
+    _init(session, run_tool)
+    assert _build(session, run_tool, profile=1) == 0
+    bench = _result(session, run_tool, capsys)["benchmark"][0]
+    assert bench["parameters_index"] == 0
+    assert bench["problem"] == main_id
+
+
+def test_one_benchmark_set_per_enabled_problem(session, run_tool, fake_build,
+                                               capsys):
+    """With two enabled problems, a full profiling run makes one set PER problem
+    (each single-problem, so its cached problem is uniform)."""
+    run_tool(tools.cmd_new_problem,
+             session.ns(short_name="alt", argv=["<RunGenMain>", "--alt"]))
+    run_tool(build.cmd_init_build,
+             session.ns(target="workspace", other="none", anchor="none"))
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as e:
+        run_tool(build.cmd_build, session.ns(profile=1, only="all"))
+    assert e.value.code == 0
+    out = capsys.readouterr().out
+    assert len(_set_lines(out)) == 2                       # default + alt
+    assert "problem problem.default" in out and "problem problem.alt" in out
+
+
+def test_problem_flag_selects_subset(session, run_tool, fake_build, capsys):
+    """--problem restricts profiling to the named problem(s): only that problem's
+    set is made (not every enabled problem's)."""
+    run_tool(tools.cmd_new_problem,
+             session.ns(short_name="alt", argv=["<RunGenMain>", "--alt"]))
+    run_tool(build.cmd_init_build,
+             session.ns(target="workspace", other="none", anchor="none"))
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as e:
+        run_tool(build.cmd_build,
+                 session.ns(profile=1, only="all", problem=["problem.alt"]))
+    assert e.value.code == 0
+    out = capsys.readouterr().out
+    assert len(_set_lines(out)) == 1
+    assert "problem problem.alt" in out
+    assert "problem problem.default" not in out
+
+
+def test_no_profile_when_compile_failed(session, run_tool, fake_build, capsys):
+    """If a generator fails, profiling is skipped entirely (all-or-nothing on the
+    build): no `Profiled` lines, no set, nonzero exit (idea.md Build Tool)."""
+    fake_build["emit_rc"] = 1  # generator emit fails
+    _init(session, run_tool)
+    capsys.readouterr()
+    assert _build(session, run_tool, profile=1, only="all") == 1
+    out = capsys.readouterr().out
+    assert "dh_hl: Profiled" not in out
+    assert not _set_lines(out)
 
 
 # ---------------------------------------------------------------------------
@@ -483,6 +552,38 @@ def test_no_benchmark_set_when_a_subprocess_fails(session, run_tool, fake_build,
 ])
 def test_format_param_value(value, expected):
     assert build._format_param_value(value) == expected
+
+
+def test_resolve_run_rungenmain():
+    """A <RunGenMain> problem: argv[0] -> the absolute .rungen path, other tokens
+    verbatim, no DENDRITIC_HL_OUTPUT_LIB (RunGenMain doesn't need it)."""
+    cmd, env = build._resolve_run(
+        "bin", ["<RunGenMain>", "--benchmarks=all", "--estimate_all"],
+        "sub_0/dh_hl_pipeline.rungen", "sub_0/dh_hl_pipeline.dylib")
+    assert os.path.isabs(cmd[0]) and cmd[0].endswith("sub_0/dh_hl_pipeline.rungen")
+    assert cmd[1:] == ["--benchmarks=all", "--estimate_all"]
+    assert env == {}
+
+
+def test_resolve_run_custom_runner_with_lib():
+    """A custom-runner problem: argv[0] stays the runner, <Lib> -> the absolute
+    shared-library path, and the library is ALSO exported as DENDRITIC_HL_OUTPUT_LIB."""
+    cmd, env = build._resolve_run(
+        "bin", ["./runner", "<Lib>", "-v"],
+        "sub_0/dh_hl_pipeline.rungen", "sub_0/dh_hl_pipeline.dylib")
+    assert cmd[0] == "./runner"
+    assert os.path.isabs(cmd[1]) and cmd[1].endswith("dh_hl_pipeline.dylib")
+    assert cmd[2] == "-v"
+    assert env["DENDRITIC_HL_OUTPUT_LIB"] == cmd[1]
+
+
+def test_resolve_run_custom_runner_env_only():
+    """A custom runner that omits <Lib> still receives the library via env."""
+    cmd, env = build._resolve_run(
+        "bin", ["./runner"], "sub_0/x.rungen", "sub_0/dh_hl_pipeline.dylib")
+    assert cmd == ["./runner"]
+    assert os.path.isabs(env["DENDRITIC_HL_OUTPUT_LIB"])
+    assert env["DENDRITIC_HL_OUTPUT_LIB"].endswith("dh_hl_pipeline.dylib")
 
 
 def test_emit_requests_both_stmt_forms(monkeypatch, tmp_path):

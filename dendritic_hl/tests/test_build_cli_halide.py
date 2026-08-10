@@ -201,7 +201,8 @@ def test_build_banners_use_short_schedule_ids(run_cli, tmp_path):
 
     assert "dh_hl: begin C++ compile: {}".format(short) in r.stdout
     assert "dh_hl: begin Halide generator 0: {}".format(short) in r.stdout
-    assert "dh_hl: Profiled {}, binary 0 (success)".format(short) in r.stdout
+    assert ("dh_hl: Profiled {}, binary 0, problem problem.default (success)"
+            .format(short) in r.stdout)
     # The per-benchmark ID is the short schedule ID plus a {hostname}_{ts} tail.
     assert "dh_hl: ... with Benchmark ID: {}.".format(short) in r.stdout
 

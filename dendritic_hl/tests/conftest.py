@@ -122,6 +122,11 @@ def make_catalog_session(cat_dir, source=DUMMY_SOURCE, idea_name="seed"):
         # Mimic init_workspace: the seed idea is in the private idea list with
         # pool tag "default", so new_idea on its canonical inherits a tag.
         ws.set_pool_tag(idea.full_id, "default")
+        # Mimic new_catalog's default problem (a main RunGenMain problem), so
+        # profiling has a problem to run (idea.md "New Catalog Tool").
+        cat.create_problem(
+            ["<RunGenMain>", "--benchmarks=all", "--estimate_all"],
+            "default", state="main")
         cat.flush()
         safety.commit()
         return cat.catalog_dir, sess.full_id

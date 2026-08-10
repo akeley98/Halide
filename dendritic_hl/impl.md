@@ -409,8 +409,6 @@ key/value pairs:
 
 * `profiler_version`: number, `profiler_version` of each referenced benchmark.
 
-IMPL TASK: `problem` entry
-
 * `problem`: string, `problem` of each referenced benchmark.
 
 * `schedules`: object, keyed by schedule full ID; each value is a list indexed

@@ -264,7 +264,14 @@ def _emit(bin_dir, gen_exe, gen_name, out_subdir, params, with_stmt):
     cmd = (["./" + gen_exe, "-g", gen_name, "-o", out_subdir, "-f", _PIPELINE]
            + _param_tokens(params)
            + ["-e", ",".join(emits), "target=host-profile-no_runtime"])
-    return _run_streamed(cmd, cwd=bin_dir)
+    # Point the generator at where to serialize the algorithm `hlpipe` (the
+    # pre-scheduling pipeline, for the golden algorithm-equality check).  A
+    # generator with the serialize_pipeline snippet writes it; one without simply
+    # ignores the env var (idea.md new_golden, reference_build_commands.md).
+    env = dict(os.environ)
+    env["DENDRITIC_HL_ALGORITHM_HLPIPE"] = os.path.abspath(
+        os.path.join(bin_dir, out_subdir, _PIPELINE + ".hlpipe"))
+    return _run_streamed(cmd, cwd=bin_dir, env=env)
 
 
 def _ensure_runtime(bin_dir, gen_exe):
@@ -305,23 +312,47 @@ def _link_shared(bin_dir, out_subdir):
     return _run_streamed(cmd, cwd=bin_dir)
 
 
-def _run_benchmark(bin_dir, rungen_bin, json_out_path, warnings_out_path):
-    """Run one benchmark binary.  Captures the binary's stdout -- it is redirected
-    into the benchmark sub-object (later read back by `view_benchmark_stdout`),
-    NOT echoed to the harness stdout (idea.md Build Tool) -- while letting stderr
-    flow.  Returns (rc, stdout_text)."""
+def _resolve_run(bin_dir, problem_argv, rungen_rel, shared_rel):
+    """Map a problem's argv + this binary's paths to (cmd, extra_env) for a run
+    (idea.md "Problem Object State" / "New Problem Tool").
+
+    `<RunGenMain>` becomes the absolute path to the linked RunGenMain binary;
+    `<Lib>` becomes the absolute path to the emitted shared library.  For a
+    custom-runner problem (argv[0] is not `<RunGenMain>`), the shared-library path
+    is ALSO exported as DENDRITIC_HL_OUTPUT_LIB, so a runner can take it from the
+    environment instead of (or in addition to) `<Lib>`.  All substituted paths are
+    absolute, so the run's cwd does not matter."""
+    rungen_abs = os.path.abspath(os.path.join(bin_dir, rungen_rel))
+    shared_abs = os.path.abspath(os.path.join(bin_dir, shared_rel))
+    cmd = []
+    for tok in problem_argv:
+        if tok == "<RunGenMain>":
+            cmd.append(rungen_abs)
+        elif tok == "<Lib>":
+            cmd.append(shared_abs)
+        else:
+            cmd.append(tok)
+    extra_env = {}
+    if problem_argv[0] != "<RunGenMain>":
+        extra_env["DENDRITIC_HL_OUTPUT_LIB"] = shared_abs
+    return cmd, extra_env
+
+
+def _run_benchmark(bin_dir, cmd, extra_env, json_out_path, warnings_out_path):
+    """Run one profiling command (the problem's resolved argv).  Captures the
+    binary's stdout -- it is redirected into the benchmark sub-object (later read
+    back by `view_benchmark_stdout`), NOT echoed to the harness stdout (idea.md
+    Build Tool) -- while letting stderr flow.  Returns (rc, stdout_text)."""
     env = dict(os.environ)
     env["HL_PROFILER_JSON_OUTPUT"] = json_out_path
     # Andrew Adams's profiler doesn't put warnings in the main JSON yet; a
     # separate secret-menu env var names a file of per-pipeline warnings (see
     # reference_build_commands.md "Warnings Output").
     env["HL_PROFILER_JSON_TEMPORARY_WARNINGS"] = warnings_out_path
-    # Deliberately NOT --quiet: RunGen's `halide_print:` profiler-stats table is
-    # kept in the captured stdout.  It duplicates the parsed JSON, but the plain
-    # table is an easier read than the JSON tools for simple tasks, and it lands
-    # in the benchmark sub-object (viewable via `view_benchmark_stdout`) rather
-    # than the harness output, so it isn't noise (idea.md Build Tool).
-    cmd = ["./" + rungen_bin, "--benchmarks=all", "--estimate_all"]
+    env.update(extra_env)
+    # RunGen is deliberately NOT run with --quiet: its `halide_print:`
+    # profiler-stats table stays in the captured stdout (an easy read next to the
+    # JSON tools; it lands in the benchmark sub-object, not the harness output).
     p = subprocess.run(cmd, cwd=bin_dir, env=env, stdout=subprocess.PIPE,
                        universal_newlines=True)
     return p.returncode, p.stdout or ""
@@ -624,19 +655,31 @@ def cmd_build(args):
 
     all_ok = _compile_phase(bin_dir, nodes, param_indices, target.full_id)
 
+    # Profiling is all-or-nothing on the build: if any generator/link failed,
+    # skip it entirely (don't take the exclusive machine lock for a doomed run --
+    # idea.md Build Tool pseudocode "or any build/generate failed").
+    do_profile = profile_batches > 0 and all_ok
+
     # Phase 2: profiling (upgrade to exclusive machine lock first if profiling),
     # then the catalog lock, then find nodes + record.
-    if profile_batches > 0:
+    if do_profile:
         locks.upgrade_machine_exclusive()
     locks.acquire_catalog(catalog_dir)
     ctx = Context(Catalog(catalog_dir), session_id)
     catalog = ctx.catalog
     sched = {n.full_id: catalog.get_schedule(n.full_id) for n in nodes}
 
-    bench_index = None
-    if profile_batches > 0:
-        bench_index, prof_ok = _profile_phase(
-            bin_dir, nodes, param_indices, sched, catalog, profile_batches)
+    problem_indexes = {}   # problem full ID -> dense bench index
+    problem_run_ok = {}    # problem full ID -> every run for it succeeded
+    selected = []
+    if do_profile:
+        selected = _selected_problems(catalog, getattr(args, "problem", None))
+        if not selected:
+            print("dh_hl: warning: no problems selected/enabled; nothing to "
+                  "profile", file=sys.stderr)
+        problem_indexes, problem_run_ok, prof_ok = _profile_phase(
+            bin_dir, nodes, param_indices, sched, catalog, profile_batches,
+            selected)
         all_ok = all_ok and prof_ok
 
     # Phase 3: result-state updates (monotone; never regress).  A harness error
@@ -648,19 +691,39 @@ def cmd_build(args):
         node = sched[n.full_id]
         node.set_result(best_result(node.result, result))
 
-    # Benchmark set: for an --only all OR --only target run that profiled >=1
-    # batch with no subprocess failures (idea.md "Build Tool"): the dense index
-    # is then guaranteed populated.  (--only <int> never makes a set.)
-    if only_kind in ("all", "target") and profile_batches > 0 and all_ok:
-        bs = catalog.create_benchmark_set(bench_index)
-        # Add it to the session's private benchmark set list (idea.md Build Tool).
-        ws.add_private_benchmark_set(bs.full_id, catalog)
-        ctx.finish()
+    # Benchmark sets: for an --only all OR --only target run that profiled >=1
+    # batch, ONE set per selected problem whose runs ALL succeeded (idea.md
+    # "Build Tool"): so every set is single-problem (its cached problem is
+    # uniform).  (--only <int> never makes a set.)  A problem whose runs all
+    # succeeded has a dense index by construction.
+    made = []
+    if do_profile and only_kind in ("all", "target"):
+        for problem in selected:
+            if problem_run_ok.get(problem.full_id):
+                bs = catalog.create_benchmark_set(problem_indexes[problem.full_id])
+                ws.add_private_benchmark_set(bs.full_id, catalog)
+                made.append((problem, bs))
+    ctx.finish()
+    for problem, bs in made:
+        print("dh_hl: benchmark set for problem "
+              + catalog.format_problem_id(problem))
         print("dh_hl: Benchmark set ID: " + bs.full_id)
-    else:
-        ctx.finish()
 
     sys.exit(0 if all_ok else 1)
+
+
+def _selected_problems(catalog, problem_args):
+    """The problems to profile: the `--problem` selection (deduped, in order), or
+    all enabled problems if none were named (idea.md Build Tool)."""
+    if not problem_args:
+        return catalog.enabled_problems()
+    out, seen = [], set()
+    for spec in problem_args:
+        problem = catalog.resolve_problem(spec)
+        if problem.full_id not in seen:
+            seen.add(problem.full_id)
+            out.append(problem)
+    return out
 
 
 def _compile_phase(bin_dir, nodes, param_indices, target_id):
@@ -750,68 +813,85 @@ def _publish_stmt(bin_dir, out_subdir, i):
             print("dh_hl: stmt: " + dst)
 
 
-def _profile_phase(bin_dir, nodes, param_indices, sched, catalog, batches):
-    """Run *batches* interleaved profiling passes over every linked binary,
-    attaching a benchmark sub-object to each binary's source schedule node.
-    Returns (bench_index, all_ok).  bench_index[full_id][i][batch] = benchmark
-    full ID (dense iff no subprocess failed)."""
+def _profile_phase(bin_dir, nodes, param_indices, sched, catalog, batches,
+                   problems):
+    """For each problem, run *batches* interleaved profiling passes over every
+    linked binary, attaching a benchmark sub-object (tagged with the problem full
+    ID + parameters index) to each binary's source schedule node.
+
+    Returns (problem_indexes, problem_run_ok, all_ok):
+      problem_indexes[problem full ID][sched full ID][slot][batch] = benchmark ID
+      problem_run_ok[problem full ID] = every run for that problem succeeded
+    A problem whose runs all succeeded has a dense index (idea.md Build Tool)."""
     hostname = ids.stable_hostname()
     file_hostname = ids.sanitize_component(hostname)
 
-    # The list of runnable (node, i) binaries, and the empty dense index.
+    # The list of runnable (node, params index) binaries (shared across problems).
     binaries = []
-    bench_index = {}
     for n in nodes:
-        idxs = param_indices[n.full_id]
-        bench_index[n.full_id] = [[None] * batches for _ in idxs]
-        for slot, i in enumerate(idxs):
+        for slot, i in enumerate(param_indices[n.full_id]):
             if n.linked.get(i):
                 binaries.append((n, i, slot))
 
     all_ok = True
+    problem_indexes = {}
+    problem_run_ok = {}
     json_out = os.path.abspath(os.path.join(bin_dir, "profile_out.json"))
     warnings_out = os.path.abspath(os.path.join(bin_dir, "profile_warnings.json"))
-    for batch in range(batches):
-        random.shuffle(binaries)  # interleaved: fresh order each batch
-        _trace_build("batch", batch)
-        for n, i, slot in binaries:
-            for p in (json_out, warnings_out):
-                if os.path.exists(p):
-                    os.remove(p)
-            _trace_build("profile", n.full_id, i)
-            rc, stdout_text = _run_benchmark(
-                bin_dir, _rungen_bin_rel(n.full_id, i), json_out, warnings_out)
-            ok = rc == 0
-            # The profile phase holds the catalog lock, so format the short ID
-            # live from the resolved node (no need for the precomputed one).
-            print("dh_hl: Profiled {}, binary {} ({})".format(
-                catalog.format_schedule_id(sched[n.full_id]), i,
-                "success" if ok else "fail"))
-            if not ok:
-                n.any_run_failed = True
-                all_ok = False
-                continue
-            try:
-                bench_obj = _build_benchmark_obj(
-                    json_out, warnings_out, hostname, n.params[i],
-                    stdout_text, catalog.fresh_timestamp())
-            except HarnessError as e:
-                print("dh_hl: skipping benchmark: " + str(e), file=sys.stderr)
-                n.any_run_failed = True
-                all_ok = False
-                continue
-            bench = sched[n.full_id].add_benchmark(file_hostname, bench_obj)
-            bench_index[n.full_id][slot][batch] = bench.full_id
-            # "... with" ties this line to the "Profiled ..." line just above, so
-            # the benchmark ID isn't misread as belonging to the profiler's own
-            # stdout printed around it (idea.md Build Tool pseudocode).
-            print("dh_hl: ... with Benchmark ID: "
-                  + catalog.format_benchmark_id(bench))
-    return bench_index, all_ok
+    for problem in problems:
+        bench_index = {n.full_id: [[None] * batches
+                                   for _ in param_indices[n.full_id]]
+                       for n in nodes}
+        prob_ok = True
+        for batch in range(batches):
+            random.shuffle(binaries)  # interleaved: fresh order each batch
+            _trace_build("batch", batch)
+            for n, i, slot in binaries:
+                for p in (json_out, warnings_out):
+                    if os.path.exists(p):
+                        os.remove(p)
+                _trace_build("profile", n.full_id, i)
+                cmd, extra_env = _resolve_run(
+                    bin_dir, problem.argv, _rungen_bin_rel(n.full_id, i),
+                    _shared_lib_rel(n.full_id, i))
+                rc, stdout_text = _run_benchmark(
+                    bin_dir, cmd, extra_env, json_out, warnings_out)
+                ok = rc == 0
+                # The profile phase holds the catalog lock, so format the short
+                # IDs live from the resolved node/problem.
+                print("dh_hl: Profiled {}, binary {}, problem {} ({})".format(
+                    catalog.format_schedule_id(sched[n.full_id]), i,
+                    catalog.format_problem_id(problem),
+                    "success" if ok else "fail"))
+                if not ok:
+                    n.any_run_failed = True
+                    all_ok = False
+                    prob_ok = False
+                    continue
+                try:
+                    bench_obj = _build_benchmark_obj(
+                        json_out, warnings_out, hostname, n.params[i], i,
+                        problem.full_id, stdout_text, catalog.fresh_timestamp())
+                except HarnessError as e:
+                    print("dh_hl: skipping benchmark: " + str(e), file=sys.stderr)
+                    n.any_run_failed = True
+                    all_ok = False
+                    prob_ok = False
+                    continue
+                bench = sched[n.full_id].add_benchmark(file_hostname, bench_obj)
+                bench_index[n.full_id][slot][batch] = bench.full_id
+                # "... with" ties this line to the "Profiled ..." line just above,
+                # so the benchmark ID isn't misread as belonging to the profiler's
+                # own stdout printed around it (idea.md Build Tool pseudocode).
+                print("dh_hl: ... with Benchmark ID: "
+                      + catalog.format_benchmark_id(bench))
+        problem_indexes[problem.full_id] = bench_index
+        problem_run_ok[problem.full_id] = prob_ok
+    return problem_indexes, problem_run_ok, all_ok
 
 
-def _build_benchmark_obj(json_out, warnings_out, hostname, params, stdout_text,
-                         timestamp):
+def _build_benchmark_obj(json_out, warnings_out, hostname, params,
+                         parameters_index, problem_id, stdout_text, timestamp):
     with open(json_out, "r", encoding="utf-8") as f:
         prof = json.load(f)
     pipelines = prof.get("pipelines")
@@ -828,6 +908,8 @@ def _build_benchmark_obj(json_out, warnings_out, hostname, params, stdout_text,
         "cpu_count": cpu_count,
         "timestamp": timestamp,
         "parameters": params,
+        "parameters_index": parameters_index,
+        "problem": problem_id,
         "profiler": pipelines[0],
         "warnings": profiler_warnings.warnings_from_temp_file(warnings_out),
         "stdout": stdout_text,

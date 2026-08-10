@@ -262,6 +262,9 @@ def _build_parser():
                     metavar="N", help="profiler batches to run (default 0)")
     sp.add_argument("--only", default="all", metavar="N|target|all",
                     help="limit built binaries: 'all' (default), 'target', or index N")
+    sp.add_argument("--problem", action="append", metavar="PROBLEM_ID",
+                    help="profile with this problem (repeatable; default: all "
+                         "enabled problems)")
 
     add("canon")
 

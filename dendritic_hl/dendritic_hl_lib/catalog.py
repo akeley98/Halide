@@ -335,6 +335,18 @@ class Benchmark:
     def cpu_count(self):
         return self.data.get("cpu_count")
 
+    @property
+    def problem(self):
+        """Full ID of the problem this benchmark was run with (idea.md
+        "Benchmark Sub-object State").  None for pre-problem benchmarks."""
+        return self.data.get("problem")
+
+    @property
+    def parameters_index(self):
+        """Index of the generator-parameters object used (idea.md "Benchmark
+        Sub-object State").  None for pre-problem benchmarks."""
+        return self.data.get("parameters_index")
+
     def flush(self):
         safety.makedirs_tracked(self.schedule.bench_dir)
         safety.new_file(self.path, json.dumps(self.data, indent=1) + "\n")

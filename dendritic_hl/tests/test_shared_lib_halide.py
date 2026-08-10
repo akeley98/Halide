@@ -81,6 +81,11 @@ def test_shared_library_dlopen_runner(run_cli, tmp_path):
     assert r.returncode == 0, r.stderr
 
     # 2. Locate the emitted subdir (holds the .so, header) + the shared runtime.
+    # IMPL TASK: once `copy_build_output` exists (idea.md "Copy Build Output
+    # Tool"), fetch the shared library + generated header through it (real CLI
+    # getters) instead of reaching into the bin/ layout directly here; a runner is
+    # only supposed to need copy_build_output outputs, so this test should model
+    # that.  (halide_runtime.o has no getter yet -- flag if one is wanted.)
     bin_dir = run_cli("workspace_bin", "-s", handle).stdout.strip()
     subdirs = [d for d in os.listdir(bin_dir)
                if d.endswith("_0") and os.path.isdir(os.path.join(bin_dir, d))]
