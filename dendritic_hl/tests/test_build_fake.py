@@ -43,16 +43,18 @@ def fake_build(monkeypatch):
         return knobs["gen_name"]
     monkeypatch.setattr(build, "_discover_generator_name", fake_discover)
 
-    def fake_emit(bin_dir, gen_exe, gen_name, basename, params, with_stmt):
-        # Materialize the .stmt outputs so _publish_stmt has something to copy.
+    def fake_emit(bin_dir, gen_exe, gen_name, out_subdir, params, with_stmt):
+        # Materialize the .stmt outputs (in the per-(node,i) subdir, as the real
+        # emit does) so _publish_stmt has something to copy.
         if with_stmt and knobs["emit_rc"] == 0:
+            sub = os.path.join(bin_dir, out_subdir)
+            os.makedirs(sub, exist_ok=True)
             for suffix in (".stmt", ".conceptual.stmt"):
-                os.makedirs(bin_dir, exist_ok=True)
-                with open(os.path.join(bin_dir, basename + suffix), "w") as f:
+                with open(os.path.join(sub, build._PIPELINE + suffix), "w") as f:
                     f.write("// " + suffix)
         return knobs["emit_rc"]
     monkeypatch.setattr(build, "_emit", fake_emit)
-    monkeypatch.setattr(build, "_link", lambda bin_dir, basename: knobs["link_rc"])
+    monkeypatch.setattr(build, "_link", lambda bin_dir, out_subdir: knobs["link_rc"])
 
     def fake_bench(bin_dir, rungen_bin, json_out, warnings_out):
         with open(json_out, "w") as f:
@@ -478,9 +480,10 @@ def test_format_param_value(value, expected):
     assert build._format_param_value(value) == expected
 
 
-def test_emit_requests_both_stmt_forms(monkeypatch):
+def test_emit_requests_both_stmt_forms(monkeypatch, tmp_path):
     """build (with_stmt=True) asks the generator for both `stmt` and
-    `conceptual_stmt`; without, neither."""
+    `conceptual_stmt`; without, neither.  Also pins the stable-symbol layout:
+    `-f dh_hl_pipeline` and `-o {subdir}`."""
     seen = {}
 
     def spy(cmd, cwd=None, env=None):
@@ -488,11 +491,15 @@ def test_emit_requests_both_stmt_forms(monkeypatch):
         return 0
     monkeypatch.setattr(build, "_run_streamed", spy)
 
-    build._emit("bin", "gen_exe", "gen", "base", {}, with_stmt=True)
-    emits = seen["cmd"][seen["cmd"].index("-e") + 1].split(",")
+    bin_dir = str(tmp_path)
+    build._emit(bin_dir, "gen_exe", "gen", "sub_0", {}, with_stmt=True)
+    cmd = seen["cmd"]
+    assert cmd[cmd.index("-f") + 1] == build._PIPELINE   # stable symbol
+    assert cmd[cmd.index("-o") + 1] == "sub_0"           # per-(node,i) subdir
+    emits = cmd[cmd.index("-e") + 1].split(",")
     assert "stmt" in emits and "conceptual_stmt" in emits
 
-    build._emit("bin", "gen_exe", "gen", "base", {}, with_stmt=False)
+    build._emit(bin_dir, "gen_exe", "gen", "sub_0", {}, with_stmt=False)
     emits = seen["cmd"][seen["cmd"].index("-e") + 1].split(",")
     assert "stmt" not in emits and "conceptual_stmt" not in emits
 

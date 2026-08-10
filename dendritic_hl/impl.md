@@ -655,11 +655,12 @@ basename `g_{sanitized full_id}_{i}`; that in turn is now superseded by the fixe
 name + subdirectory here, which was needed to give the runner/header a stable
 symbol — see idea.md Build Tool "problem 2".)
 
-IMPL TASK: `build.py` still uses the superseded flat layout — `_emit_basename`
-returns `g_{sanitized full_id}_{i}` and emits every node/param into one `bin/`
-dir with the per-node `-f`.  Switch it to the `bin/{full_id}_{i}/` subdirectory +
-fixed `-f dh_hl_pipeline` scheme described here (and update the `_publish_stmt` /
-`copy_build_output` path lookups accordingly).
+**As implemented** (`build.py`): `_param_subdir(full_id, i)` -> `bin/{full_id}_{i}/`
+and `_emit`/`_link` run with `-o {subdir}` / `-f dh_hl_pipeline`; the node-level
+ninja file, generator exe, and shared `RunGenMain.o` stay at the `bin/` root.
+`_publish_stmt` copies the target's `{subdir}/dh_hl_pipeline.stmt` to the short
+`bin/{i}.stmt`.  (The shared-library emit into the same subdir is still pending;
+see the Build Tool shared-library IMPL TASK.)
 
 If the `available Generators are:` list contains anything other than exactly
 one name (zero, or two or more), the tool reports a harness error and stops.

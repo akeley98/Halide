@@ -31,7 +31,6 @@ import argparse
 import json
 import os
 import random
-import re
 import shutil
 import subprocess
 import sys
@@ -60,10 +59,23 @@ _RUNGENMAIN_OBJ = "RunGenMain.o"   # shared, param- and node-independent
 
 _CXX = "c++"
 
+# The fixed, stable `-f` basename for every emitted pipeline (impl.md "Output
+# basename (-f) and per-(node, params-index) layout").  Because each (node,
+# params index) emits into its OWN subdirectory, the basename never needs to
+# encode identity, so it can be this one clean C identifier -- giving a stable
+# symbol `dh_hl_pipeline` and header `dh_hl_pipeline.h` usable as-is by
+# copy_build_output / a dlopen runner.
+_PIPELINE = "dh_hl_pipeline"
+
 
 # ---------------------------------------------------------------------------
-# bin/ naming (keyed by schedule full ID + parameters index)
+# bin/ naming
 # ---------------------------------------------------------------------------
+# Node-level artifacts (param-independent) live at the bin/ root, one per node:
+# the ninja file and the generator executable, plus the fully shared
+# RunGenMain.o.  Per-(node, params-index) emit/link outputs live in a
+# subdirectory bin/{full_id}_{i}/ (all named `dh_hl_pipeline.*`), so the fixed
+# `-f` basename never clobbers across nodes/params.
 
 def _ninja_name(full_id):
     return full_id + ".ninja"
@@ -73,21 +85,14 @@ def _gen_exe_name(full_id):
     return full_id + "_generator"
 
 
-def _emit_basename(full_id, i):
-    """-f basename for one (node, params-index): all emitted artifacts
-    (`{base}.a`, `{base}.registration.cpp`, `{base}.stmt`, ...) share it, so
-    every (node, i) has a distinct, coexisting set.
-
-    Halide bakes this basename into C identifiers in registration.cpp, so it
-    MUST be a valid C identifier.  A schedule full ID starts with a digit and
-    contains '-', so sanitize it (non-alphanumerics -> '_') and prefix a letter;
-    it stays unique because the full ID is unique."""
-    ident = re.sub(r"[^0-9A-Za-z]", "_", full_id)
-    return "g_{}_{}".format(ident, i)
+def _param_subdir(full_id, i):
+    """The per-(node, params-index) output subdirectory, relative to bin/."""
+    return "{}_{}".format(full_id, i)
 
 
-def _rungen_bin_name(full_id, i):
-    return _emit_basename(full_id, i) + ".rungen"
+def _rungen_bin_rel(full_id, i):
+    """The linked RunGenMain binary, relative to bin/."""
+    return os.path.join(_param_subdir(full_id, i), _PIPELINE + ".rungen")
 
 
 # ---------------------------------------------------------------------------
@@ -222,21 +227,28 @@ def _discover_generator_name(bin_dir, gen_exe):
 # phase 2 (emit) + phase 4 (link) + run
 # ---------------------------------------------------------------------------
 
-def _emit(bin_dir, gen_exe, gen_name, basename, params, with_stmt):
+def _emit(bin_dir, gen_exe, gen_name, out_subdir, params, with_stmt):
+    """Run the generator, emitting all artifacts into bin/{out_subdir}/ under the
+    fixed `-f dh_hl_pipeline` basename.  The subdir isolates this (node, params
+    index)'s outputs, so the stable basename never clobbers another's."""
+    os.makedirs(os.path.join(bin_dir, out_subdir), exist_ok=True)
     emits = ["static_library", "c_header", "registration"]
     if with_stmt:
         # Both the plain lowered loop nest and the conceptual (pre-lowering) form.
         emits += ["stmt", "conceptual_stmt"]
-    cmd = (["./" + gen_exe, "-g", gen_name, "-o", ".", "-f", basename]
+    cmd = (["./" + gen_exe, "-g", gen_name, "-o", out_subdir, "-f", _PIPELINE]
            + _param_tokens(params)
            + ["-e", ",".join(emits), "target=host-profile"])
     return _run_streamed(cmd, cwd=bin_dir)
 
 
-def _link(bin_dir, basename):
+def _link(bin_dir, out_subdir):
+    """Link RunGenMain.o (bin/ root) + the subdir's registration.cpp + static
+    library into bin/{out_subdir}/dh_hl_pipeline.rungen."""
+    base = os.path.join(out_subdir, _PIPELINE)
     cmd = [_CXX, "-std=c++17", "-O2", _RUNGENMAIN_OBJ,
-           basename + ".registration.cpp", basename + ".a",
-           "-o", basename + ".rungen", "-lpthread", "-ldl"]
+           base + ".registration.cpp", base + ".a",
+           "-o", base + ".rungen", "-lpthread", "-ldl"]
     return _run_streamed(cmd, cwd=bin_dir)
 
 
@@ -637,11 +649,11 @@ def _compile_phase(bin_dir, nodes, param_indices, target_id):
             continue
         for i in param_indices[n.full_id]:
             with_stmt = (n.full_id == target_id)
-            basename = _emit_basename(n.full_id, i)
+            subdir = _param_subdir(n.full_id, i)
             print("dh_hl: begin Halide generator {}: {}".format(i, n.short_id))
             print("dh_hl: params={}".format(json.dumps(n.params[i])))
             _trace_build("emit", n.full_id, i)
-            if _emit(bin_dir, _gen_exe_name(n.full_id), n.gen_name, basename,
+            if _emit(bin_dir, _gen_exe_name(n.full_id), n.gen_name, subdir,
                      n.params[i], with_stmt) != 0:
                 n.gen_ok[i] = False
                 all_ok = False
@@ -649,9 +661,9 @@ def _compile_phase(bin_dir, nodes, param_indices, target_id):
                 continue
             n.gen_ok[i] = True
             if with_stmt:
-                _publish_stmt(bin_dir, basename, i)
+                _publish_stmt(bin_dir, subdir, i)
             _trace_build("link", n.full_id, i)
-            if _link(bin_dir, basename) != 0:
+            if _link(bin_dir, subdir) != 0:
                 n.linked[i] = False
                 all_ok = False
                 print("dh_hl: end Halide generator {} fail (link)".format(i))
@@ -661,11 +673,12 @@ def _compile_phase(bin_dir, nodes, param_indices, target_id):
     return all_ok
 
 
-def _publish_stmt(bin_dir, basename, i):
-    """Copy the target's emitted .stmt / .conceptual.stmt to the short human-
-    friendly `bin/{i}.stmt` names and announce them (idea.md pseudocode)."""
+def _publish_stmt(bin_dir, out_subdir, i):
+    """Copy the target's emitted .stmt / .conceptual.stmt (in bin/{out_subdir}/)
+    to the short human-friendly `bin/{i}.stmt` names and announce them (idea.md
+    pseudocode)."""
     for suffix in (".stmt", ".conceptual.stmt"):
-        src = os.path.join(bin_dir, basename + suffix)
+        src = os.path.join(bin_dir, out_subdir, _PIPELINE + suffix)
         if os.path.exists(src):
             dst = os.path.join(bin_dir, "{}{}".format(i, suffix))
             shutil.copyfile(src, dst)
@@ -702,7 +715,7 @@ def _profile_phase(bin_dir, nodes, param_indices, sched, catalog, batches):
                     os.remove(p)
             _trace_build("profile", n.full_id, i)
             rc, stdout_text = _run_benchmark(
-                bin_dir, _rungen_bin_name(n.full_id, i), json_out, warnings_out)
+                bin_dir, _rungen_bin_rel(n.full_id, i), json_out, warnings_out)
             ok = rc == 0
             # The profile phase holds the catalog lock, so format the short ID
             # live from the resolved node (no need for the precomputed one).
