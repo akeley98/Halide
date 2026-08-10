@@ -222,3 +222,52 @@ def test_lib_problem_profiled_end_to_end(run_cli, tmp_path):
     assert r.returncode == 0, r.stderr
     obj = json.loads(r.stdout)
     assert obj["batch_count"] == 2 and obj["cost"] is not None
+
+
+# A deliberately broken runner: exits 0 but emits no profiler JSON at all (it
+# never loads the library or sets up the profiler).  Same observable contract as
+# the idea.md "_exit(0) before the profiler teardown" case.
+_BROKEN_RUNNER_SRC = "int main() { return 0; }\n"
+
+
+def test_broken_runner_no_json_is_catalogued_bad_outcome(run_cli, tmp_path):
+    """A <Lib> problem whose runner exits 0 but emits NO profiler JSON is a
+    catalogued bad outcome, not a harness crash (idea.md Build Tool): the profile
+    loop skips that benchmark and keeps going -- the run banner is (success) (the
+    process exited 0), a 'no profiler JSON' notice goes to stderr, the build exits
+    nonzero, NO benchmark set is made, and the node still ends at `success` (the
+    generators built) with zero benchmarks."""
+    cat_dir = str(tmp_path / "proj.dh_hl")
+    (tmp_path / "p.txt").write_text("broken runner\n")
+    r = run_cli("new_catalog", "-C", cat_dir, "seed", str(tmp_path / "p.txt"),
+                _BRIGHTEN)
+    assert r.returncode == 0, r.stderr
+    handle = _line(r.stdout, "Session handle: ")
+    assert run_cli("init_workspace", "-s", handle).returncode == 0
+
+    (tmp_path / "broken.cpp").write_text(_BROKEN_RUNNER_SRC)
+    broken = str(tmp_path / "broken")
+    cp = subprocess.run(["c++", "-O2", str(tmp_path / "broken.cpp"), "-o", broken],
+                        capture_output=True, text=True)
+    assert cp.returncode == 0, cp.stderr
+
+    r = run_cli("new_problem", "-s", handle, "broken", broken, "<Lib>")
+    assert r.returncode == 0, r.stderr
+    assert run_cli("disable_problem", "-s", handle,
+                   "problem.default").returncode == 0
+    assert run_cli("init_build", "-s", handle, "--other", "none",
+                   "--anchor", "none").returncode == 0
+    r = run_cli("build", "-s", handle, "--profile", "1", "--only", "all",
+                "--problem", "problem.broken")
+    # Bad outcome -> nonzero exit, but a clean one (no Python traceback).
+    assert r.returncode == 1
+    assert "Traceback" not in r.stderr
+    assert "problem problem.broken (success)" in r.stdout   # the process exited 0
+    assert "no profiler JSON" in r.stderr                    # skip notice, not crash
+    assert "Benchmark set ID:" not in r.stdout               # nothing profiled
+
+    # The node persisted: success result, and zero benchmarks recorded.
+    r = run_cli("json_schedule_info", "-s", handle)
+    assert r.returncode == 0, r.stderr
+    obj = json.loads(r.stdout)
+    assert obj["result"] == "success" and obj["benchmark"] == []

@@ -1429,10 +1429,10 @@ one made canonical), so editing the workspace to match that sibling still trips
 A runner that exits 0 but emits no (or a corrupt) profiler JSON is a "catalogued
 bad outcome", not a tool failure: the profile loop skips that benchmark and keeps
 going (no state rollback), the build exits nonzero, and the node still reaches
-`success` (the generators built).  Fake-tier tested
-(`test_build_fake.py::test_broken_runner_no_json_is_bad_outcome_not_crash`); a
-real-CLI version (a runner that `_exit(0)`s before the profiler teardown) is
-optional, since the missing-JSON handling is entirely harness-side.
+`success` (the generators built).  Tested at both tiers --
+`test_build_fake.py::test_broken_runner_no_json_is_bad_outcome_not_crash` and the
+real-CLI `test_shared_lib_halide.py::test_broken_runner_no_json_is_catalogued_bad_outcome`
+(a broken `<Lib>` runner driven through `dh_hl build --profile`).
 
 Builds the schedule nodes selected by the latest `dh_hl init_build`
 done with the current session (state stored in the session private workspace)
