@@ -318,3 +318,31 @@ def test_ranking_cost_zero_batches_verbose_breakdown(session, run_tool, capsys):
     assert "Reachable batch breakdown" in cap.err
     assert "also requiring problem problem.big: 0" in cap.err
     assert "dh_hl build --profile ... --problem problem.big" in cap.err
+
+
+def test_compare_cost_zero_batches_verbose_breakdown(session, run_tool, capsys):
+    """json_compare_cost's 0-batch breakdown shows the RHS (second-node) filter
+    line and suggests init_build --other."""
+    t = _seed_children(session)
+    _add_second_problem(session, run_tool, capsys)
+    _setup(session, {t["A"]: [[100, 99, 101]], t["B"]: [[130, 131, 129]]})  # main
+    capsys.readouterr()
+    run_tool(tools.cmd_json_compare_cost,
+             session.ns(lhs=t["A"], rhs=t["B"], problem=["problem.big"]))
+    cap = capsys.readouterr()
+    assert json.loads(cap.out)[0]["batch_count"] == 0
+    assert "Reachable batch breakdown" in cap.err
+    assert "(RHS):" in cap.err                       # second-node breakdown line
+    assert "also requiring problem problem.big: 0" in cap.err
+    assert "--other" in cap.err                       # 2-way init_build suggestion
+
+
+def test_compare_cost_boolean_unknown(session, run_tool, capsys):
+    """A single shared batch is too little data -> the verdict is `unknown`, and
+    the boolean form reports any_unknown (and nothing else)."""
+    t = _seed_children(session)
+    _setup(session, {t["A"]: [[100]], t["B"]: [[130]]})   # one batch -> unknown
+    out = _out(run_tool, capsys, tools.cmd_json_compare_cost,
+               session.ns(lhs=t["A"], rhs=t["B"], boolean=True))
+    assert json.loads(out) == {"any_improvement": False, "any_regression": False,
+                               "any_unknown": True}

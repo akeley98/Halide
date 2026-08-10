@@ -62,6 +62,9 @@ def fake_build(monkeypatch):
                         lambda bin_dir, out_subdir: knobs["shared_rc"])
 
     def fake_bench(bin_dir, cmd, extra_env, json_out, warnings_out):
+        if not knobs.get("emit_json", True):
+            # A broken runner: exits 0 but writes no profiler JSON.
+            return knobs["bench_rc"], knobs["stdout"]
         with open(json_out, "w") as f:
             # Include the fields the cost cache reads (wall_time_min,
             # profiler_version); the same dummy value for every binary is fine
@@ -430,6 +433,24 @@ def test_problem_flag_selects_subset(session, run_tool, fake_build, capsys):
     assert len(_set_lines(out)) == 1
     assert "problem problem.alt" in out
     assert "problem problem.default" not in out
+
+
+def test_broken_runner_no_json_is_bad_outcome_not_crash(session, run_tool,
+                                                        fake_build, capsys):
+    """A runner that exits 0 but emits no profiler JSON is a CATALOGUED BAD
+    OUTCOME (idea.md Build Tool): the profile loop skips that benchmark and keeps
+    going -- nonzero exit, no benchmark set, NO traceback/rollback -- and the node
+    still reaches `success` (the generators built)."""
+    fake_build["emit_json"] = False
+    _init(session, run_tool)
+    capsys.readouterr()
+    assert _build(session, run_tool, profile=1, only="all") == 1   # clean nonzero
+    out = capsys.readouterr()
+    assert "Benchmark set ID:" not in out.out
+    assert "no profiler JSON" in out.err          # the skip message, not a crash
+    # The node persisted with a success result (build succeeded; only the run did
+    # not produce a benchmark).
+    assert _result(session, run_tool, capsys)["result"] == "success"
 
 
 def test_no_profile_when_compile_failed(session, run_tool, fake_build, capsys):

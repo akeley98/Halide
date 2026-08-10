@@ -866,8 +866,21 @@ def _profile_phase(bin_dir, nodes, param_indices, sched, catalog, batches,
 
 def _build_benchmark_obj(json_out, warnings_out, hostname, params,
                          parameters_index, problem_id, stdout_text, timestamp):
-    with open(json_out, "r", encoding="utf-8") as f:
-        prof = json.load(f)
+    # A runner can exit 0 yet emit no (or a corrupt) profiler JSON -- e.g. a
+    # custom <Lib> runner that skips the profiler teardown.  That is a catalogued
+    # BAD OUTCOME, not a harness failure: raise HarnessError so the profile loop
+    # catches it (skips this benchmark, keeps going), never an uncaught crash that
+    # would roll back the whole build (idea.md Build Tool).
+    try:
+        with open(json_out, "r", encoding="utf-8") as f:
+            prof = json.load(f)
+    except FileNotFoundError:
+        raise HarnessError(
+            "the runner emitted no profiler JSON (expected at {})".format(
+                json_out))
+    except ValueError as e:
+        raise HarnessError(
+            "the runner's profiler JSON was unparseable: {}".format(e))
     pipelines = prof.get("pipelines")
     if not isinstance(pipelines, list) or len(pipelines) != 1:
         raise HarnessError(

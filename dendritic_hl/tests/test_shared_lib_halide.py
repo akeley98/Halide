@@ -11,6 +11,7 @@ compiler.  Everything goes through the real `./dh_hl` subprocess plus one
 hand-compiled runner.
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -54,6 +55,44 @@ int main(int argc, char **argv) {
     // offset defaults to 10, so 100 -> 110.
     printf("rc=%d out=%d\n", rc, (int)out(0, 0));
     return rc;
+}
+"""
+
+
+# A PROFILING runner for the <Lib> problem end-to-end test.  It proves three
+# things a `<Lib>` problem relies on: the shared library reaches the runner via
+# the DENDRITIC_HL_OUTPUT_LIB env var (NOT read from argv), the <Lib> argv
+# substitution equals that env path, and a non-<Lib> argv token is passed through
+# verbatim.  It then benchmarks the pipeline so the runtime emits the profiler
+# JSON (HL_PROFILER_JSON_OUTPUT), exactly as RunGenMain would.
+_PROFILING_RUNNER_SRC = r"""
+#include "dh_hl_pipeline.h"
+#include "HalideBuffer.h"
+#include "HalideRuntime.h"
+#include <dlfcn.h>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+
+int main(int argc, char **argv) {
+    const char *env_lib = getenv("DENDRITIC_HL_OUTPUT_LIB");
+    if (!env_lib) { fprintf(stderr, "no DENDRITIC_HL_OUTPUT_LIB\n"); return 2; }
+    // argv[1] is the <Lib> substitution; it must equal the env var path.
+    if (argc < 3 || strcmp(argv[1], env_lib) != 0) {
+        fprintf(stderr, "lib arg != env\n"); return 3; }
+    // argv[2] is a non-<Lib> token the problem specified, passed through as-is.
+    if (strcmp(argv[2], "--marker=MAGIC") != 0) {
+        fprintf(stderr, "marker missing\n"); return 4; }
+    void *h = dlopen(env_lib, RTLD_NOW | RTLD_LOCAL);
+    if (!h) { fprintf(stderr, "dlopen: %s\n", dlerror()); return 5; }
+    auto fn = reinterpret_cast<decltype(&dh_hl_pipeline)>(
+        dlsym(h, "dh_hl_pipeline"));
+    if (!fn) { fprintf(stderr, "dlsym: %s\n", dlerror()); return 6; }
+    Halide::Runtime::Buffer<uint8_t> in(256, 256), out(256, 256);
+    in.fill(100);
+    for (int i = 0; i < 200; i++) fn(in, out);
+    halide_profiler_report(nullptr);   // flush; the runtime emits the JSON at exit
+    return 0;
 }
 """
 
@@ -120,3 +159,66 @@ def test_shared_library_dlopen_runner(run_cli, tmp_path):
     rp = subprocess.run([runner_bin, lib], capture_output=True, text=True)
     assert rp.returncode == 0, rp.stderr
     assert "rc=0 out=110" in rp.stdout, rp.stdout
+
+
+def test_lib_problem_profiled_end_to_end(run_cli, tmp_path):
+    """A `<Lib>` (custom-runner) problem profiled through `dh_hl build --profile`:
+    the harness builds the no_runtime .so, sets DENDRITIC_HL_OUTPUT_LIB, and runs
+    the prebuilt runner, which benchmarks via dlopen.  Proves the whole non-
+    RunGenMain profile path -- including that the env var reaches the runner and
+    that non-<Lib> argv tokens pass through -- and records a real benchmark."""
+    cat_dir = str(tmp_path / "proj.dh_hl")
+    (tmp_path / "p.txt").write_text("lib problem\n")
+    r = run_cli("new_catalog", "-C", cat_dir, "seed", str(tmp_path / "p.txt"),
+                _BRIGHTEN)
+    assert r.returncode == 0, r.stderr
+    handle = _line(r.stdout, "Session handle: ")
+    assert run_cli("init_workspace", "-s", handle).returncode == 0
+
+    # Build once to produce the .so + the shared runtime object + header.
+    assert run_cli("init_build", "-s", handle, "--other", "none",
+                   "--anchor", "none").returncode == 0
+    assert run_cli("build", "-s", handle, "--only", "all").returncode == 0
+    _fetch = lambda what, name: (
+        run_cli("copy_build_output", "-s", handle, str(tmp_path / name), what))
+    assert _fetch("header", "dh_hl_pipeline.h").returncode == 0
+    bin_dir = run_cli("workspace_bin", "-s", handle).stdout.strip()
+    runtime_obj = os.path.join(bin_dir, build._RUNTIME_OBJ)
+
+    # Build the profiling runner (owns the runtime, exports symbols).
+    (tmp_path / "runner.cpp").write_text(_PROFILING_RUNNER_SRC)
+    runner_bin = str(tmp_path / "runner")
+    export_flag = ("-Wl,-export_dynamic" if sys.platform == "darwin"
+                   else "-rdynamic")
+    cp = subprocess.run(
+        ["c++", "-std=c++17", "-O2",
+         "-I" + os.path.join(build.HALIDE_BUILD, "include"),
+         "-I" + os.path.join(build.HALIDE_ROOT, "src", "runtime"),
+         "-I" + str(tmp_path),
+         str(tmp_path / "runner.cpp"), runtime_obj,
+         "-o", runner_bin, export_flag, "-lpthread", "-ldl"],
+        capture_output=True, text=True)
+    assert cp.returncode == 0, cp.stderr
+
+    # A <Lib> problem: argv[0] the runner, then <Lib> (substituted to the .so
+    # path + exported as DENDRITIC_HL_OUTPUT_LIB) and a passthrough token.
+    r = run_cli("new_problem", "-s", handle, "librun",
+                runner_bin, "<Lib>", "--marker=MAGIC")
+    assert r.returncode == 0, r.stderr
+    # Profile with ONLY the lib problem.
+    assert run_cli("disable_problem", "-s", handle,
+                   "problem.default").returncode == 0
+    assert run_cli("init_build", "-s", handle, "--other", "none",
+                   "--anchor", "none").returncode == 0
+    r = run_cli("build", "-s", handle, "--profile", "2", "--only", "all",
+                "--problem", "problem.librun")
+    assert r.returncode == 0, r.stderr
+    assert "problem problem.librun (success)" in r.stdout
+    assert "dh_hl: ... with Benchmark ID:" in r.stdout
+
+    # A real benchmark was recorded for the lib problem -> a queryable cost.
+    r = run_cli("json_ranking_cost", "-s", handle, "--anchor", "none",
+                "--problem", "problem.librun")
+    assert r.returncode == 0, r.stderr
+    obj = json.loads(r.stdout)
+    assert obj["batch_count"] == 2 and obj["cost"] is not None
