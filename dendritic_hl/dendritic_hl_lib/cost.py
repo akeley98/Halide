@@ -77,12 +77,20 @@ class CostData:
         self._samples = defaultdict(lambda: defaultdict(dict))
 
     @classmethod
-    def from_private_sets(cls, private_sets):
+    def from_private_sets(cls, private_sets, problem_id=None):
         """Build from ``{set id: cache}`` (SessionWorkspace cache shape, see
         impl.md "Private Benchmark Sets on Disk").  Version-mismatched sets are
-        dropped with a stderr warning (see `compatible_sets`)."""
+        dropped with a stderr warning (see `compatible_sets`).
+
+        If *problem_id* is given, only benchmark sets recorded for that problem
+        contribute -- cost is always computed for one specific problem (idea.md
+        "Cost Comparison Methodology"); since each set is single-problem, this is
+        a whole-set filter.  ``None`` includes every (compatible) set, used by the
+        catalog-agnostic core tests where benchmarks carry no problem."""
         self = cls()
         for set_id, cache in compatible_sets(private_sets):
+            if problem_id is not None and cache.get("problem") != problem_id:
+                continue
             for sched_id, cells in cache.get("schedules", {}).items():
                 for pidx, cell in enumerate(cells):
                     for batch, v in enumerate(cell.get("wall_time_min", [])):

@@ -1524,6 +1524,20 @@ class Catalog:
         """All problems whose state is `enabled` or `main` (idea.md)."""
         return [p for p in self.problems.values() if p.is_enabled()]
 
+    def select_problems(self, problem_args):
+        """The problems named by *problem_args* (deduped, in order), or all
+        enabled problems if none were named -- the shared `--problem` selection
+        for `build` and the cost tools (idea.md)."""
+        if not problem_args:
+            return self.enabled_problems()
+        out, seen = [], set()
+        for spec in problem_args:
+            problem = self.resolve_problem(spec)
+            if problem.full_id not in seen:
+                seen.add(problem.full_id)
+                out.append(problem)
+        return out
+
     def main_problem(self):
         """The unique problem with `main` state; error if not well-defined."""
         mains = [p for p in self.problems.values() if p.state == "main"]

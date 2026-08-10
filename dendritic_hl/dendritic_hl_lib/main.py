@@ -307,6 +307,8 @@ def _build_parser():
     sp = add("list_private_ideas")
     sp.add_argument("--anchor", default="auto",
                     help="anchor schedule ID, 'auto' (default), 'always', or 'none'")
+    sp.add_argument("--problem", metavar="PROBLEM_ID",
+                    help="problem for the cost model (default: main problem)")
     sp.add_argument("--confidence", type=float, metavar="CI",
                     help="confidence for obsoleted-by CI, 0 < ci < 1 (default 0.95)")
     sp.add_argument("--max", type=int, metavar="N",
@@ -395,6 +397,8 @@ def _build_parser():
     sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
     sp.add_argument("--anchor", default="auto",
                     help="anchor schedule ID, 'auto' (default), 'always', or 'none'")
+    sp.add_argument("--problem", metavar="PROBLEM_ID",
+                    help="problem for the cost model (default: main problem)")
 
     sp = add("json_compare_cost")
     sp.add_argument("lhs", nargs="?", help="LHS schedule ID (default: status)")
@@ -404,9 +408,16 @@ def _build_parser():
                     help="confidence for the CI, 0 < ci < 1 (default 0.95)")
     sp.add_argument("--bootstrap", type=int, metavar="B",
                     help="bootstrap resample count (default: shared frontier B)")
+    sp.add_argument("--problem", action="append", metavar="PROBLEM_ID",
+                    help="compare for this problem (repeatable; default: all "
+                         "enabled problems)")
+    sp.add_argument("--boolean", action="store_true",
+                    help="collapse to {any_improvement, any_regression, any_unknown}")
 
     sp = add("json_profiler_stats")
     sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
+    sp.add_argument("--problem", metavar="PROBLEM_ID",
+                    help="problem for the stats (default: main problem)")
     sp.add_argument("-f", action="append", metavar="NAME",
                     help="include a per-function statistic (repeatable)")
     sp.add_argument("-p", action="append", metavar="NAME",

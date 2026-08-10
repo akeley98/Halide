@@ -673,7 +673,7 @@ def cmd_build(args):
     problem_run_ok = {}    # problem full ID -> every run for it succeeded
     selected = []
     if do_profile:
-        selected = _selected_problems(catalog, getattr(args, "problem", None))
+        selected = catalog.select_problems(getattr(args, "problem", None))
         if not selected:
             print("dh_hl: warning: no problems selected/enabled; nothing to "
                   "profile", file=sys.stderr)
@@ -710,20 +710,6 @@ def cmd_build(args):
         print("dh_hl: Benchmark set ID: " + bs.full_id)
 
     sys.exit(0 if all_ok else 1)
-
-
-def _selected_problems(catalog, problem_args):
-    """The problems to profile: the `--problem` selection (deduped, in order), or
-    all enabled problems if none were named (idea.md Build Tool)."""
-    if not problem_args:
-        return catalog.enabled_problems()
-    out, seen = [], set()
-    for spec in problem_args:
-        problem = catalog.resolve_problem(spec)
-        if problem.full_id not in seen:
-            seen.add(problem.full_id)
-            out.append(problem)
-    return out
 
 
 def _compile_phase(bin_dir, nodes, param_indices):

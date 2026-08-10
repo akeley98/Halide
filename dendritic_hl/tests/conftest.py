@@ -182,8 +182,8 @@ def make_profiler_obj(wall_time_min, *, profiler_version=1, name="p", funcs=None
     return obj
 
 
-def add_synthetic_benchmark_set(cat, specs, *, hostname="host", cpu_count=8,
-                                profiler_version=1):
+def add_synthetic_benchmark_set(cat, specs, *, problem=None, hostname="host",
+                                cpu_count=8, profiler_version=1):
     """Create real benchmark sub-objects + a benchmark set from *specs*, with NO
     Halide/profiler run -- the deterministic backbone of the cost tests
     (impl.md "Cost Model Core" / idea.md testing notes).
@@ -191,12 +191,23 @@ def add_synthetic_benchmark_set(cat, specs, *, hostname="host", cpu_count=8,
     *specs* maps ``schedule full id -> [[batch sample, ...] per params index]``.
     A batch sample is either a ``wall_time_min`` number (wrapped into a minimal
     profiler object) or a full profiler dict.  Returns the new benchmark set's
-    full ID.  The caller must hold the catalog lock (e.g. via `open_catalog`)."""
+    full ID.  The caller must hold the catalog lock (e.g. via `open_catalog`).
+
+    Each benchmark is tagged with *problem* + its parameters index; a set is
+    single-problem, so the whole set shares one problem.  *problem* defaults to
+    the catalog's main problem full ID if one exists (so the cost tools'
+    default-to-main filter matches), else None (the catalog-agnostic core tests
+    use bare catalogs with no problem)."""
+    if problem is None:
+        try:
+            problem = cat.main_problem().full_id
+        except Exception:
+            problem = None
     data = {}
     for sched_id, per_pidx in specs.items():
         node = cat.get_schedule(sched_id)
         cells = []
-        for batch_samples in per_pidx:  # one list per params index
+        for pidx, batch_samples in enumerate(per_pidx):  # one list per params idx
             row = []
             for sample in batch_samples:
                 prof = (sample if isinstance(sample, dict)
@@ -204,7 +215,8 @@ def add_synthetic_benchmark_set(cat, specs, *, hostname="host", cpu_count=8,
                             sample, profiler_version=profiler_version))
                 bench = node.add_benchmark(hostname, {
                     "hostname": hostname, "cpu_count": cpu_count,
-                    "parameters": {}, "profiler": prof, "warnings": [],
+                    "parameters": {}, "parameters_index": pidx,
+                    "problem": problem, "profiler": prof, "warnings": [],
                     "stdout": ""})
                 row.append(bench.full_id)
             cells.append(row)

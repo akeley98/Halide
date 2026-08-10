@@ -710,9 +710,11 @@ This exposes the harness user to drift.
 
 ## Cost Model Benchmark Search Warnings
 
-IMPL TASK: verbose explanation of why 0 benchmark objects were found.
-
-IMPL TASK: test for `json_ranking_cost`, `json_cost_comparison`, `list_private_ideas`
+IMPL TASK: `json_ranking_cost` and `json_compare_cost` emit this verbose warning
+(implemented + tested in `test_cost_tools.py`).  `list_private_ideas` does NOT --
+it surfaces per-idea null costs inline (bubbled to the top of each pool), so a
+per-idea breakdown would be noisy; decide whether a single frontier-level "no
+benchmarks for this problem" warning is wanted there.
 
 Print a warning to `stderr` if 0 batches were found.
 
@@ -727,8 +729,6 @@ The warning gives a breakdown of the benchmarks found for each filter criterion:
 * Then, number of benchmarks left after filtering by problem
   (this is always 0 given the warning is emitted,
   but clues-in the harness user as to another reason for lossage).
-
-IMPL TASK: implement this new suggestion, test it shows up for all relevant tools.
 
 Suggest `dh_hl init_build --target ...`
 and `dh_hl build --profile ... --problem ...`.
@@ -2000,8 +2000,6 @@ depending on the optional `--anchor {schedule ID}` argument:
 
     dh_hl json_compare_cost -s ... [LHS schedule ID] [RHS schedule ID]
 
-IMPL TASK: `--problem`, `problem`/`problem_short_id` outputs, verbose 0-batch warnings
-
 Do a head-to-head cost comparison between the LHS and RHS schedules,
 using the "2-way Cost Comparison" methodology,
 done once for each enabled problem (by default),
@@ -2070,11 +2068,10 @@ gave an `improvement`, `regression`, or `unknown` result, respectively.
 
     dh_hl json_profiler_stats -s ... [schedule ID]
 
-IMPL TASK: `--problem`, test `--problem` works.
-
-IMPL TASK: `test_build_cli_halide.py` testing with `--problem`.
-Should be straightforward to vary the problem size with custom
-`["<RunGenMain>", ...]` problems, and check runtime changed as expected.
+IMPL TASK: a real-Halide `test_build_cli_halide.py` test that varies the problem
+size with custom `["<RunGenMain>", ...]` problems and checks runtime changed as
+expected.  (`--problem` itself is implemented and unit-tested in
+`test_profiler_stats.py` / `test_cost_tools.py`.)
 
 Aggregate profiler statistics for the referenced schedule,
 considering only benchmarks reachable from the private benchmark set list

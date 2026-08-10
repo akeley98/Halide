@@ -372,7 +372,9 @@ def test_json_compare_cost_detects_regression(run_cli, tmp_path):
     # canonical (parent of the LHS's parent idea).
     r = run_cli("json_compare_cost", "-s", handle)
     assert r.returncode == 0, r.stderr
-    obj = json.loads(r.stdout)
+    # One per-problem comparison (the default main problem).
+    (obj,) = json.loads(r.stdout)
+    assert obj["problem_short_id"] == "problem.default"
     assert obj["batch_count"] == 3
     assert obj["result"] == "regression"             # serial LHS slower than root
     assert obj["lhs_raw_cost"] > obj["rhs_raw_cost"]

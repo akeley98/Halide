@@ -766,25 +766,48 @@ def _bootstrap_arg(args):
     return b
 
 
-def _cost_data(ctx):
+def _cost_data(ctx, problem_id=None):
     return cost.CostData.from_private_sets(
-        ctx.workspace.read_private_benchmark_sets())
+        ctx.workspace.read_private_benchmark_sets(), problem_id)
 
 
-def _warn_no_ranking_batches(ctx, node, anchor_spec):
-    """stderr guidance when `json_ranking_cost` finds 0 batches: the schedule
-    isn't profiled into any set reachable from the private benchmark set list, so
-    its cost is null.  Suggest profiling it (idea.md "JSON Ranking Cost Query
-    Tool").  The `--anchor` part of the suggestion echoes the effective anchor
-    spec, and is omitted when `--anchor auto` (the default) was in effect."""
-    short = ctx.catalog.format_schedule_id(node)
-    auto = anchor_spec is None or anchor_spec == "auto"
-    anchor_part = "" if auto else " --anchor {}".format(anchor_spec)
-    print("dh_hl: warning: no benchmark batches for {0} in this session's "
-          "private benchmark set list (its cost is null). Profile it, e.g.:\n"
-          "    dh_hl init_build --target {0}{1}\n"
-          "    dh_hl build --profile 4".format(short, anchor_part),
-          file=sys.stderr)
+def _cost_problem_id(ctx, spec):
+    """The single problem a cost query uses: `--problem` if given, else the main
+    problem (idea.md "Cost Comparison Methodology": cost is per one problem,
+    default main)."""
+    if spec is not None:
+        return ctx.catalog.resolve_problem(spec).full_id
+    return ctx.catalog.main_problem().full_id
+
+
+def _warn_no_cost_batches(ctx, private_sets, problem_id, first, second,
+                          second_role, suggest_init_tail):
+    """Verbose stderr breakdown when a cost query finds 0 batches (idea.md "Cost
+    Model Benchmark Search Warnings").  *first* is the target/LHS node; *second*
+    is the anchor/RHS node (or None); *second_role* labels it in the breakdown;
+    *suggest_init_tail* is the extra init_build flags to suggest ("--other X" /
+    "--anchor X" / "").  The breakdown counts are pre-problem-filter, so the user
+    can see whether the batches were lost to the schedule filters or the problem
+    filter."""
+    cat = ctx.catalog
+    all_data = cost.CostData.from_private_sets(private_sets)  # unfiltered by problem
+    first_short = cat.format_schedule_id(first)
+    p_short = cat.format_problem_id(cat.get_problem(problem_id))
+    fb = all_data.batches_of(first.full_id)
+    lines = ["dh_hl: warning: no benchmark batches for this cost query (cost "
+             "reads as null). Reachable batch breakdown:",
+             "  by {} alone: {}".format(first_short, len(fb))]
+    if second is not None:
+        lines.append("  also requiring {} ({}): {}".format(
+            cat.format_schedule_id(second), second_role,
+            len(fb & all_data.batches_of(second.full_id))))
+    lines.append("  also requiring problem {}: 0".format(p_short))
+    init = "    dh_hl init_build --target {}".format(first_short)
+    if suggest_init_tail:
+        init += " " + suggest_init_tail
+    lines += ["Profile them together for this problem, e.g.:", init,
+              "    dh_hl build --profile ... --problem {}".format(p_short)]
+    sys.stderr.write("\n".join(lines) + "\n")
 
 
 def cmd_json_ranking_cost(args):
@@ -793,7 +816,10 @@ def cmd_json_ranking_cost(args):
     node = ctx.resolve_schedule_arg(args.schedule)
     anchor_spec = getattr(args, "anchor", None)
     anchor_id = _resolve_anchor_arg(ctx, anchor_spec)
-    r = _cost_data(ctx).ranking_cost(node.full_id, anchor_id)
+    problem_id = _cost_problem_id(ctx, getattr(args, "problem", None))
+    private_sets = ctx.workspace.read_private_benchmark_sets()
+    r = cost.CostData.from_private_sets(
+        private_sets, problem_id).ranking_cost(node.full_id, anchor_id)
     raw = r["raw_costs"]
     out = {
         "batch_count": r["batch_count"],
@@ -805,7 +831,11 @@ def cmd_json_ranking_cost(args):
     }
     print(json.dumps(out, indent=1))
     if r["batch_count"] == 0:
-        _warn_no_ranking_batches(ctx, node, anchor_spec)
+        anchor_node = ctx.catalog.get_schedule(anchor_id) if anchor_id else None
+        tail = ("" if anchor_spec in (None, "auto")
+                else "--anchor {}".format(anchor_spec))
+        _warn_no_cost_batches(ctx, private_sets, problem_id, node, anchor_node,
+                              "anchor", tail)
 
 
 def cmd_json_compare_cost(args):
@@ -821,19 +851,44 @@ def cmd_json_compare_cost(args):
                 "LHS is a root schedule (no parent idea) so the default RHS is "
                 "undefined; pass an explicit RHS schedule ID")
         rhs = lhs.parent_idea().parent_schedule()
-    r = _cost_data(ctx).compare(lhs.full_id, rhs.full_id,
-                                _confidence_arg(args), _bootstrap_arg(args))
-    print(json.dumps(r, indent=1))
+    confidence, bootstrap = _confidence_arg(args), _bootstrap_arg(args)
+    # Once per selected problem (default: all enabled problems), so the output is
+    # a list of per-problem comparisons (idea.md "JSON Compare Cost Tool").
+    problems = ctx.catalog.select_problems(getattr(args, "problem", None))
+    private_sets = ctx.workspace.read_private_benchmark_sets()
+    rhs_tail = "--other {}".format(ctx.catalog.format_schedule_id(rhs))
+    results = []
+    for problem in problems:
+        r = cost.CostData.from_private_sets(private_sets, problem.full_id).compare(
+            lhs.full_id, rhs.full_id, confidence, bootstrap)
+        results.append({"problem": problem.full_id,
+                        "problem_short_id": ctx.catalog.format_problem_id(problem),
+                        **r})
+        if r["batch_count"] == 0:
+            _warn_no_cost_batches(ctx, private_sets, problem.full_id, lhs, rhs,
+                                  "RHS", rhs_tail)
+    if getattr(args, "boolean", False):
+        out = {"any_improvement": any(r["result"] == "improvement" for r in results),
+               "any_regression": any(r["result"] == "regression" for r in results),
+               "any_unknown": any(r["result"] == "unknown" for r in results)}
+        print(json.dumps(out, indent=1))
+    else:
+        print(json.dumps(results, indent=1))
 
 
-def _reachable_benchmarks_by_param(catalog, private_sets, sched_id):
+def _reachable_benchmarks_by_param(catalog, private_sets, sched_id,
+                                   problem_id=None):
     """``{parameters index: [Benchmark, ...]}`` for benchmarks of *sched_id*
     reachable from the private benchmark set list (idea.md json_profiler_stats).
     Version-mismatched sets are skipped (with a stderr warning), matching the
-    cost core -- via the shared cost.compatible_sets gate."""
+    cost core -- via the shared cost.compatible_sets gate.  If *problem_id* is
+    given, only sets recorded for that problem contribute (a set is
+    single-problem)."""
     from collections import defaultdict
     out = defaultdict(list)
     for _set_id, cache in cost.compatible_sets(private_sets):
+        if problem_id is not None and cache.get("problem") != problem_id:
+            continue
         cells = cache.get("schedules", {}).get(sched_id)
         if not cells:
             continue
@@ -846,12 +901,14 @@ def _reachable_benchmarks_by_param(catalog, private_sets, sched_id):
 def cmd_json_profiler_stats(args):
     ctx = Context.for_session(args, session_lock=True)
     node = ctx.resolve_schedule_arg(args.schedule)
+    problem_id = _cost_problem_id(ctx, getattr(args, "problem", None))
     reachable = _reachable_benchmarks_by_param(
-        ctx.catalog, ctx.workspace.read_private_benchmark_sets(), node.full_id)
+        ctx.catalog, ctx.workspace.read_private_benchmark_sets(), node.full_id,
+        problem_id)
     if not reachable:
         raise DhHlError(
             "no benchmarks reachable from the private benchmark set list for "
-            "this schedule")
+            "this schedule and problem")
 
     pidx = getattr(args, "parameters", None)
     if pidx is None:
@@ -1266,7 +1323,9 @@ def cmd_list_private_ideas(args):
     todo = bool(getattr(args, "todo", False))
     enabled = _pool_enable_predicate(getattr(args, "pool", None),
                                      getattr(args, "pools", None))
-    data = cost.CostData.from_private_sets(ws.read_private_benchmark_sets())
+    problem_id = _cost_problem_id(ctx, getattr(args, "problem", None))
+    data = cost.CostData.from_private_sets(
+        ws.read_private_benchmark_sets(), problem_id)
 
     # Group the enabled private ideas by pool tag, and cost each once.
     by_pool = {}

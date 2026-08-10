@@ -123,13 +123,13 @@ def _child_schedule(session):
         locks._reset_for_tests()
 
 
-def _add_set(session, specs):
+def _add_set(session, specs, **set_kw):
     from dendritic_hl_lib import locks
     from dendritic_hl_lib.context import SessionWorkspace
     cat = open_catalog(session.catalog_dir)
     try:
         ws = SessionWorkspace(cat.catalog_dir, session.session_id, catalog=cat)
-        set_id = add_synthetic_benchmark_set(cat, specs)
+        set_id = add_synthetic_benchmark_set(cat, specs, **set_kw)
         ws.add_private_benchmark_set(set_id, cat)
         cat.flush(); safety.commit()
         return set_id
@@ -213,3 +213,27 @@ def _out(run_tool, capsys, fn, args):
     capsys.readouterr()
     run_tool(fn, args)
     return capsys.readouterr().out
+
+
+def test_tool_problem_filter(session, run_tool, capsys):
+    """--problem selects which problem's benchmarks feed the stats; default is
+    the main problem (idea.md json_profiler_stats)."""
+    A = _child_schedule(session)
+    main_id = _out(run_tool, capsys, tools.cmd_problem_full_id,
+                   session.ns(problem="main")).strip()
+    run_tool(tools.cmd_new_problem,
+             session.ns(short_name="big", argv=["<RunGenMain>", "--big"]))
+    big_id = _out(run_tool, capsys, tools.cmd_problem_full_id,
+                  session.ns(problem="problem.big")).strip()
+    # Different funcs per problem so the selection is observable.
+    _add_set(session, {A: [[_bench(100, [_func(0, "a", -1, 90)],
+                                   runs=1, time_ns=100)]]}, problem=main_id)
+    _add_set(session, {A: [[_bench(100, [_func(0, "z", -1, 90)],
+                                   runs=1, time_ns=100)]]}, problem=big_id)
+
+    out = _out(run_tool, capsys, tools.cmd_json_profiler_stats,
+               _stats_ns(session, A))                      # default -> main
+    assert [f["name"] for f in json.loads(out)["funcs"]] == ["a"]
+    out = _out(run_tool, capsys, tools.cmd_json_profiler_stats,
+               _stats_ns(session, A, problem="problem.big"))
+    assert [f["name"] for f in json.loads(out)["funcs"]] == ["z"]
