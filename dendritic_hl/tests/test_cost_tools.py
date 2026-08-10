@@ -304,37 +304,72 @@ def test_compare_cost_single_problem_via_flag(session, run_tool, capsys):
     assert results[0]["result"] == "regression"
 
 
+def _sched_short(run_tool, capsys, session, sid):
+    return _out(run_tool, capsys, tools.cmd_schedule_short_id,
+                session.ns(schedule=sid)).strip()
+
+
 def test_ranking_cost_zero_batches_verbose_breakdown(session, run_tool, capsys):
-    """A 0-batch cost query prints a stderr breakdown showing where the batches
-    were lost -- here A has batches for main but none for the queried problem."""
+    """A 0-batch cost query prints a stderr breakdown with the REAL reachable
+    counts (A has 3 main batches but 0 for the queried problem)."""
     t = _seed_children(session)
     _add_second_problem(session, run_tool, capsys)
-    _setup(session, {t["A"]: [[100, 100, 100]]})       # tagged main (default)
+    _setup(session, {t["A"]: [[100, 100, 100]]})       # tagged main (default), 3 batches
+    a_short = _sched_short(run_tool, capsys, session, t["A"])
     capsys.readouterr()
     run_tool(tools.cmd_json_ranking_cost,
              session.ns(schedule=t["A"], anchor="none", problem="problem.big"))
     cap = capsys.readouterr()
     assert json.loads(cap.out)["batch_count"] == 0
     assert "Reachable batch breakdown" in cap.err
+    # The counts are REAL, not placeholders: A has 3 unfiltered batches, 0 after
+    # the problem filter.
+    assert "by {} alone: 3".format(a_short) in cap.err
     assert "also requiring problem problem.big: 0" in cap.err
     assert "dh_hl build --profile ... --problem problem.big" in cap.err
 
 
-def test_compare_cost_zero_batches_verbose_breakdown(session, run_tool, capsys):
-    """json_compare_cost's 0-batch breakdown shows the RHS (second-node) filter
-    line and suggests init_build --other."""
+def test_ranking_cost_zero_batches_anchor_line(session, run_tool, capsys):
+    """With an explicit anchor, the breakdown's second-node line uses the anchor's
+    REAL short ID + REAL intersection count, and the suggestion echoes --anchor."""
     t = _seed_children(session)
     _add_second_problem(session, run_tool, capsys)
-    _setup(session, {t["A"]: [[100, 99, 101]], t["B"]: [[130, 131, 129]]})  # main
+    # A and the canonical share 3 main batches; query problem.big -> 0.
+    _setup(session, {t["A"]: [[100, 100, 100]], t["canon"]: [[90, 90, 90]]})
+    a_short = _sched_short(run_tool, capsys, session, t["A"])
+    canon_short = _sched_short(run_tool, capsys, session, t["canon"])
+    capsys.readouterr()
+    run_tool(tools.cmd_json_ranking_cost,
+             session.ns(schedule=t["A"], anchor=t["canon"], problem="problem.big"))
+    cap = capsys.readouterr()
+    assert "by {} alone: 3".format(a_short) in cap.err
+    assert "also requiring {} (anchor): 3".format(canon_short) in cap.err
+    assert "--anchor {}".format(t["canon"]) in cap.err
+
+
+def test_compare_cost_zero_batches_verbose_breakdown(session, run_tool, capsys):
+    """json_compare_cost's 0-batch breakdown reports the REAL RHS short ID and
+    intersection count, and suggests init_build --other with the REAL RHS -- so a
+    placeholder/garbage value (wrong count, or a fabricated schedule in the
+    suggestion) would be caught."""
+    t = _seed_children(session)
+    _add_second_problem(session, run_tool, capsys)
+    # A and B profiled together for main -> 3 shared batches; big has none.
+    _setup(session, {t["A"]: [[100, 99, 101]], t["B"]: [[130, 131, 129]]})
+    a_short = _sched_short(run_tool, capsys, session, t["A"])
+    b_short = _sched_short(run_tool, capsys, session, t["B"])
     capsys.readouterr()
     run_tool(tools.cmd_json_compare_cost,
              session.ns(lhs=t["A"], rhs=t["B"], problem=["problem.big"]))
     cap = capsys.readouterr()
     assert json.loads(cap.out)[0]["batch_count"] == 0
     assert "Reachable batch breakdown" in cap.err
-    assert "(RHS):" in cap.err                       # second-node breakdown line
+    assert "by {} alone: 3".format(a_short) in cap.err
+    # Real RHS short ID + real intersection count (both 3), not a placeholder.
+    assert "also requiring {} (RHS): 3".format(b_short) in cap.err
     assert "also requiring problem problem.big: 0" in cap.err
-    assert "--other" in cap.err                       # 2-way init_build suggestion
+    # The suggested --other is the REAL RHS, not a fabricated schedule.
+    assert "--other {}".format(b_short) in cap.err
 
 
 def test_compare_cost_boolean_unknown(session, run_tool, capsys):
