@@ -1605,23 +1605,32 @@ maybe do something crooked to copy one schedule node's binary on top of another'
 The real reason for the check is to catch accidental shared library SNAFUs,
 but I'm not sure this is easy to reproduce in a controlled test environment.
 
-IMPL TASK: this "as implemented" needs to be updated
-
 **As implemented** (`build.py`): `init_build` (`cmd_init_build`) resolves
 target/other/anchor (`_resolve_target`/`_resolve_other`/`_resolve_anchor`, the
 target possibly a freshly created child schedule) under the session + catalog
 locks, then writes `init_build.json` (catalog-relative paths) to the private
 workspace.  `build` (`cmd_build`) reads that file lock-free, then
-`_compile_phase` runs phase 1a (per-node `_write_ninja` → generator exe +
-shared `RunGenMain.o`) and phase 1b (per-(node, params-index) `_emit` → `_link`,
-with the target also publishing `bin/{i}.stmt`).  Only when profiling does it
-`locks.upgrade_machine_exclusive()` **before** acquiring the catalog lock; then
-`_profile_phase` runs the shuffled batches, attaching a benchmark sub-object to
-each binary's source node and filling the dense benchmark-set index.
-`_compute_result` derives each node's monotone result state.  A `c++ error` /
-`halide error` outcome still persists the node (the result update is monotone,
-never a rollback); the generator-count harness error skips the node's compile
-without updating its result.
+`_compile_phase` runs phase 1a (per-node `_write_ninja` → generator exe + shared
+`RunGenMain.o`) and phase 1b, per (node, params index): `_emit` the `no_runtime`
+pipeline object (into `bin/{full_id}_{i}/`, `-f dh_hl_pipeline`), then `_link`
+the RunGenMain `.rungen` (object + the once-emitted shared `halide_runtime.o`
+from `_ensure_runtime`) and `_link_shared` the `no_runtime`
+`dh_hl_pipeline.{so,dylib}`.  `stmt`/`conceptual_stmt` are emitted for every
+built pipeline and fetched on demand by `copy_build_output` (no eager
+`bin/{i}.stmt` copy).  Profiling is all-or-nothing on a clean build
+(`do_profile = --profile > 0 and no build failure`); only then does it
+`locks.upgrade_machine_exclusive()` **before** acquiring the catalog lock.
+`_profile_phase` then loops the selected problems (`--problem`, default all
+enabled), running the shuffled batches per problem via the problem's resolved
+argv (`_resolve_run`: `<RunGenMain>`→the `.rungen`, `<Lib>`→the `.so` +
+`DENDRITIC_HL_OUTPUT_LIB`), attaching a benchmark sub-object (tagged with problem
++ parameters index) to each binary's source node.  One benchmark set is minted
+per selected problem whose runs all succeeded (single-problem sets, added to the
+private list).  `_compute_result` derives each node's monotone result state
+(`success` == all generators emitted).  A `c++ error` / `halide error` outcome
+still persists the node (the result update is monotone, never a rollback); the
+generator-count harness error skips the node's compile without updating its
+result.
 <!-- end impl -->
 
 
