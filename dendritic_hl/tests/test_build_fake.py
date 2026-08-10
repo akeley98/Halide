@@ -26,7 +26,8 @@ def fake_build(monkeypatch):
     """Stub every external toolchain step so init_build/build exercise pure
     logic.  Returns a dict of knobs the test can flip."""
     knobs = {"gen_rc": 0, "rungenmain_rc": 0, "emit_rc": 0, "link_rc": 0,
-             "bench_rc": 0, "gen_name": "dummy", "stdout": "", "warnings": None}
+             "runtime_rc": 0, "shared_rc": 0, "bench_rc": 0, "gen_name": "dummy",
+             "stdout": "", "warnings": None}
 
     monkeypatch.setattr(build, "_write_ninja",
                         lambda bin_dir, full_id, src: "ninja.txt")
@@ -55,6 +56,10 @@ def fake_build(monkeypatch):
         return knobs["emit_rc"]
     monkeypatch.setattr(build, "_emit", fake_emit)
     monkeypatch.setattr(build, "_link", lambda bin_dir, out_subdir: knobs["link_rc"])
+    monkeypatch.setattr(build, "_ensure_runtime",
+                        lambda bin_dir, gen_exe: knobs["runtime_rc"])
+    monkeypatch.setattr(build, "_link_shared",
+                        lambda bin_dir, out_subdir: knobs["shared_rc"])
 
     def fake_bench(bin_dir, rungen_bin, json_out, warnings_out):
         with open(json_out, "w") as f:

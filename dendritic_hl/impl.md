@@ -659,8 +659,15 @@ symbol — see idea.md Build Tool "problem 2".)
 and `_emit`/`_link` run with `-o {subdir}` / `-f dh_hl_pipeline`; the node-level
 ninja file, generator exe, and shared `RunGenMain.o` stay at the `bin/` root.
 `_publish_stmt` copies the target's `{subdir}/dh_hl_pipeline.stmt` to the short
-`bin/{i}.stmt`.  (The shared-library emit into the same subdir is still pending;
-see the Build Tool shared-library IMPL TASK.)
+`bin/{i}.stmt`.  The pipeline is emitted ONCE per (node, i) as a `no_runtime`
+**object** (`-e object,... target=host-profile-no_runtime`), and both binaries
+link from it: `_link` builds the RunGenMain `.rungen` (object + the shared
+`bin/halide_runtime.o` emitted once by `_ensure_runtime`), and `_link_shared`
+builds the `no_runtime` `dh_hl_pipeline.{so,dylib}` (`-shared`, plus
+`-undefined dynamic_lookup` on macOS) whose undefined `halide_*` bind upward to a
+dlopen runner that owns the runtime.  One Halide compile feeds both paths, and
+they are built together (idea.md Build Tool: "N shared library and RunGenMain
+binaries are built").
 
 If the `available Generators are:` list contains anything other than exactly
 one name (zero, or two or more), the tool reports a harness error and stops.

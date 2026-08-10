@@ -1436,8 +1436,8 @@ one made canonical), so editing the workspace to match that sibling still trips
 
     dh_hl build -s ...
 
-IMPL TASK: need to create shared library build,
-and non-RunGenMain profile path.
+IMPL TASK: need the non-RunGenMain (dlopen runner) profile path.
+The shared library build itself is done.
 
 IMPL TASK: need to export `DENDRITIC_HL_ALGORITHM_HLPIPE`
 environment variable when running the generator.
@@ -1462,8 +1462,6 @@ This counts as a "catalogued bad outcome", not "tool failure"
 (i.e. no state rollback; profile loop continues).
 Write a real CLI test in the style of `test_build_cli_halide.py` for this,
 maybe using `_exit(0)` (pretend to finish successfully but skip the profiler teardown).
-
-IMPL TASK: Use `-f` for the generator to emit the pipeline as `dh_hl_pipeline`.
 
 Builds the schedule nodes selected by the latest `dh_hl init_build`
 done with the current session (state stored in the session private workspace)
@@ -1559,14 +1557,7 @@ IMPL TASK: generate `stmt` for all Halide pipelines now.
 
 IMPL TASK: stop printing output paths, since `copy_build_output` exists now.
 
-IMPL TASK: also generate shared libraries, with no Halide runtime
-as explained in [Reference Build Commands](reference_build_commands.md)
-
 IMPL TASK: problem ID printf
-
-IMPL TASK: problem 2, resolved with per `(node, generator parameters)` `bin` subdirectory.
-
-IMPL TASK: modify the scheme if needed, document decisions in `impl.md`.
 
 Pseudocode:
 

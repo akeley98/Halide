@@ -56,6 +56,15 @@ _HALIDE_LIBDIR = os.path.join(HALIDE_BUILD, "src")
 _RUNGENMAIN_CPP = os.path.join(_SOURCE_TOOLS, "RunGenMain.cpp")
 
 _RUNGENMAIN_OBJ = "RunGenMain.o"   # shared, param- and node-independent
+# The standalone Halide runtime object, shared by every RunGenMain binary in a
+# build (node- and param-independent, emitted once per bin/).  The pipeline is
+# emitted `no_runtime` (see _emit), so this object is what supplies the single
+# runtime -- both to the RunGenMain link here AND, by the same logic, to an
+# external dlopen runner (which owns its own copy).  This is the "no runtime in
+# the artifact; exactly one runtime, owned by whoever runs it" invariant from
+# reference_build_commands.md "Path B".  The standalone runtime carries the
+# profiler regardless of its target feature, so `target=host` suffices.
+_RUNTIME_OBJ = "halide_runtime.o"
 
 _CXX = "c++"
 
@@ -93,6 +102,16 @@ def _param_subdir(full_id, i):
 def _rungen_bin_rel(full_id, i):
     """The linked RunGenMain binary, relative to bin/."""
     return os.path.join(_param_subdir(full_id, i), _PIPELINE + ".rungen")
+
+
+def _shared_lib_filename():
+    """The emitted shared-library file name (platform extension)."""
+    return _PIPELINE + (".dylib" if sys.platform == "darwin" else ".so")
+
+
+def _shared_lib_rel(full_id, i):
+    """The emitted no_runtime shared library, relative to bin/."""
+    return os.path.join(_param_subdir(full_id, i), _shared_lib_filename())
 
 
 # ---------------------------------------------------------------------------
@@ -232,23 +251,57 @@ def _emit(bin_dir, gen_exe, gen_name, out_subdir, params, with_stmt):
     fixed `-f dh_hl_pipeline` basename.  The subdir isolates this (node, params
     index)'s outputs, so the stable basename never clobbers another's."""
     os.makedirs(os.path.join(bin_dir, out_subdir), exist_ok=True)
-    emits = ["static_library", "c_header", "registration"]
+    # Emit the pipeline as a `no_runtime` OBJECT (not static_library): the object
+    # has undefined halide_* symbols and carries no runtime of its own, so the
+    # SAME object serves both the RunGenMain link (which adds the shared runtime
+    # object) and the `-shared` link (whose undefined symbols resolve upward into
+    # a dlopen runner that owns the runtime).  This is the "no runtime in the
+    # artifact" half of the invariant (reference_build_commands.md "Path B").
+    emits = ["object", "c_header", "registration"]
     if with_stmt:
         # Both the plain lowered loop nest and the conceptual (pre-lowering) form.
         emits += ["stmt", "conceptual_stmt"]
     cmd = (["./" + gen_exe, "-g", gen_name, "-o", out_subdir, "-f", _PIPELINE]
            + _param_tokens(params)
-           + ["-e", ",".join(emits), "target=host-profile"])
+           + ["-e", ",".join(emits), "target=host-profile-no_runtime"])
+    return _run_streamed(cmd, cwd=bin_dir)
+
+
+def _ensure_runtime(bin_dir, gen_exe):
+    """Emit the shared standalone Halide runtime object (bin/halide_runtime.o)
+    once per bin/, reusing it thereafter.  Node- and param-independent, so any
+    compiled generator exe can emit it.  Returns 0 if it is present (already or
+    newly emitted), else the generator's nonzero exit code."""
+    if os.path.exists(os.path.join(bin_dir, _RUNTIME_OBJ)):
+        return 0
+    # -r halide_runtime emits the standalone runtime as halide_runtime.o.
+    cmd = ["./" + gen_exe, "-r", "halide_runtime", "-o", ".",
+           "-e", "object", "target=host"]
     return _run_streamed(cmd, cwd=bin_dir)
 
 
 def _link(bin_dir, out_subdir):
-    """Link RunGenMain.o (bin/ root) + the subdir's registration.cpp + static
-    library into bin/{out_subdir}/dh_hl_pipeline.rungen."""
+    """Link RunGenMain.o + the subdir's registration.cpp + the no_runtime
+    pipeline object + the shared runtime object into
+    bin/{out_subdir}/dh_hl_pipeline.rungen."""
     base = os.path.join(out_subdir, _PIPELINE)
     cmd = [_CXX, "-std=c++17", "-O2", _RUNGENMAIN_OBJ,
-           base + ".registration.cpp", base + ".a",
+           base + ".registration.cpp", base + ".o", _RUNTIME_OBJ,
            "-o", base + ".rungen", "-lpthread", "-ldl"]
+    return _run_streamed(cmd, cwd=bin_dir)
+
+
+def _link_shared(bin_dir, out_subdir):
+    """Link the no_runtime pipeline object into a shared library
+    bin/{out_subdir}/dh_hl_pipeline.{so,dylib}.  The library keeps its halide_*
+    symbols UNDEFINED (no embedded runtime); on macOS `-undefined dynamic_lookup`
+    lets them bind at dlopen time to the runner that owns the runtime (on Linux
+    -shared already permits undefined symbols)."""
+    base = os.path.join(out_subdir, _PIPELINE)
+    cmd = [_CXX, "-shared", base + ".o", "-o",
+           os.path.join(out_subdir, _shared_lib_filename())]
+    if sys.platform == "darwin":
+        cmd += ["-Wl,-undefined,dynamic_lookup"]
     return _run_streamed(cmd, cwd=bin_dir)
 
 
@@ -511,7 +564,8 @@ class _NodeBuild:
         self.harness_error = False
         self.gen_name = None
         self.gen_ok = {}        # params index -> bool (emit succeeded)
-        self.linked = {}        # params index -> bool (link succeeded)
+        self.linked = {}        # params index -> bool (RunGenMain link succeeded)
+        self.shared_ok = {}     # params index -> bool (shared-lib link succeeded)
         self.any_run_failed = False
 
 
@@ -662,6 +716,8 @@ def _compile_phase(bin_dir, nodes, param_indices, target_id):
             n.gen_ok[i] = True
             if with_stmt:
                 _publish_stmt(bin_dir, subdir, i)
+            # RunGenMain static-link binary (needs the shared runtime object).
+            _ensure_runtime(bin_dir, _gen_exe_name(n.full_id))
             _trace_build("link", n.full_id, i)
             if _link(bin_dir, subdir) != 0:
                 n.linked[i] = False
@@ -669,6 +725,15 @@ def _compile_phase(bin_dir, nodes, param_indices, target_id):
                 print("dh_hl: end Halide generator {} fail (link)".format(i))
                 continue
             n.linked[i] = True
+            # no_runtime shared library, for an external dlopen runner (a <Lib>
+            # problem).  Built alongside RunGenMain (idea.md Build Tool: "N shared
+            # library and RunGenMain binaries are built").
+            if _link_shared(bin_dir, subdir) != 0:
+                n.shared_ok[i] = False
+                all_ok = False
+                print("dh_hl: end Halide generator {} fail (shared lib)".format(i))
+                continue
+            n.shared_ok[i] = True
             print("dh_hl: end Halide generator {} success".format(i))
     return all_ok
 
