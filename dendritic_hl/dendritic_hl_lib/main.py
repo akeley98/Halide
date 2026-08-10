@@ -203,6 +203,18 @@ COMMAND_HELP = {
     "view_session_commentary": "Show all commentary of the current session's output schedule.",
     "json_session_info": "Dump the current session's state as JSON.",
     "json_export": "Dump the entire catalog (ideas, schedules, sessions) as JSON.",
+    # Problem objects
+    "new_problem": "Create a problem (runner command line) with a short name.",
+    "disable_problem": "Set a problem's state to disabled.",
+    "enable_problem": "Set a problem's state to enabled (leaves a main problem main).",
+    "set_main_problem": "Make a problem the main problem (demoting any other main).",
+    "get_problem_short_name": "Print a problem's short name.",
+    "set_problem_short_name": "Set a problem's short name.",
+    "list_enabled_problems": "List the enabled (incl. main) problems.",
+    "list_all_problems": "List all problems.",
+    "json_problem_info": "Dump a problem object as JSON.",
+    "problem_full_id": "Print a problem's full ID.",
+    "problem_short_id": "Print a problem's short ID.",
     "prompt": "Print the assembled main-agent or sub-agent prompt.",
     "detail": "Print a supplemental document from the harness `detail/` dir.",
     "examples": "Print an example file from the harness `examples/` dir.",
@@ -516,6 +528,28 @@ def _build_parser():
     add("json_session_info")
     add("json_export")
 
+    # -- Problem objects -----------------------------------------------------
+    sp = add("new_problem")
+    sp.add_argument("short_name", help="short name [A-Za-z0-9_]+")
+    # argparse.REMAINDER captures the runner command line verbatim, including
+    # tokens that look like flags (e.g. --benchmarks=all) or placeholders
+    # (<RunGenMain>, <Lib>).  Put -C/-s BEFORE the short name.
+    sp.add_argument("argv", nargs=argparse.REMAINDER,
+                    help="runner command line (special: <RunGenMain>, <Lib>)")
+
+    for name in ("disable_problem", "enable_problem", "set_main_problem",
+                 "get_problem_short_name", "json_problem_info",
+                 "problem_full_id", "problem_short_id"):
+        sp = add(name)
+        sp.add_argument("problem", help="problem ID")
+
+    sp = add("set_problem_short_name")
+    sp.add_argument("problem", help="problem ID")
+    sp.add_argument("short_name", help="new short name [A-Za-z0-9_]+")
+
+    add("list_enabled_problems")
+    add("list_all_problems")
+
     sp = add("prompt")
     grp = sp.add_mutually_exclusive_group(required=True)
     grp.add_argument("--main", action="store_true",
@@ -614,6 +648,17 @@ _DISPATCH = {
     "view_session_commentary": tools.cmd_view_session_commentary,
     "json_session_info": tools.cmd_json_session_info,
     "json_export": tools.cmd_json_export,
+    "new_problem": tools.cmd_new_problem,
+    "disable_problem": tools.cmd_disable_problem,
+    "enable_problem": tools.cmd_enable_problem,
+    "set_main_problem": tools.cmd_set_main_problem,
+    "get_problem_short_name": tools.cmd_get_problem_short_name,
+    "set_problem_short_name": tools.cmd_set_problem_short_name,
+    "list_enabled_problems": tools.cmd_list_enabled_problems,
+    "list_all_problems": tools.cmd_list_all_problems,
+    "json_problem_info": tools.cmd_json_problem_info,
+    "problem_full_id": tools.cmd_problem_full_id,
+    "problem_short_id": tools.cmd_problem_short_id,
     "prompt": tools.cmd_prompt,
     "detail": tools.cmd_detail,
     "examples": tools.cmd_examples,

@@ -900,6 +900,8 @@ def cmd_json_export(args):
                      for s in catalog.sessions.values()},
         "benchmark_sets": {b.full_id: b.data
                            for b in catalog.benchmark_sets.values()},
+        "problems": {p.full_id: _problem_json(p)
+                     for p in catalog.problems.values()},
     }
     print(json.dumps(obj, indent=1))
 
@@ -1024,6 +1026,13 @@ def cmd_new_catalog(args):
     session, handle = _create_session(
         catalog, [root], args.proposal_name, prompt_text,
         parent_session=None, depth=0)
+    # The default problem reproduces the harness's historical hard-wired runner
+    # (idea.md "New Catalog Tool"): a standalone RunGenMain benchmarking all
+    # outputs at their set_estimate sizes.  It is the `main` problem so the cost
+    # tools have a well-defined default.
+    catalog.create_problem(
+        ["<RunGenMain>", "--benchmarks=all", "--estimate_all"],
+        "default", state="main")
     catalog.flush()
     safety.commit()
     print("Created catalog " + catalog_dir)
@@ -1887,3 +1896,94 @@ def cmd_detail(args):
 def cmd_examples(args):
     """Print an example file from the harness source `examples/` dir."""
     sys.stdout.write(prompts.load_doc("examples", args.name))
+
+
+# ---------------------------------------------------------------------------
+# Problem object tools (idea.md "Problem Object Tools")
+# ---------------------------------------------------------------------------
+
+def _problem_json(p):
+    """json_problem_info format (idea.md): argv / state / short_name."""
+    return {"argv": p.argv, "state": p.state, "short_name": p.short_name}
+
+
+def cmd_new_problem(args):
+    ctx = Context.for_catalog(args)
+    p = ctx.catalog.create_problem(list(args.argv or []), args.short_name)
+    ctx.finish()
+    print(ctx.catalog.format_problem_id(p))
+
+
+def cmd_disable_problem(args):
+    ctx = Context.for_catalog(args)
+    ctx.catalog.resolve_problem(args.problem).set_state("disabled")
+    ctx.finish()
+
+
+def cmd_enable_problem(args):
+    ctx = Context.for_catalog(args)
+    p = ctx.catalog.resolve_problem(args.problem)
+    # Enabling a `main` problem leaves it `main` (idea.md "Problem State Tools").
+    if p.state != "main":
+        p.set_state("enabled")
+    ctx.finish()
+
+
+def cmd_set_main_problem(args):
+    ctx = Context.for_catalog(args)
+    p = ctx.catalog.resolve_problem(args.problem)
+    # Demote any other current main to `enabled`, then promote this one.
+    for other in ctx.catalog.problems.values():
+        if other.full_id != p.full_id and other.state == "main":
+            other.set_state("enabled")
+    p.set_state("main")
+    ctx.finish()
+
+
+def cmd_get_problem_short_name(args):
+    ctx = Context.for_catalog(args)
+    print(ctx.catalog.resolve_problem(args.problem).short_name)
+
+
+def cmd_set_problem_short_name(args):
+    ctx = Context.for_catalog(args)
+    ctx.catalog.resolve_problem(args.problem).set_short_name(args.short_name)
+    ctx.finish()
+
+
+def _print_problem(catalog, p):
+    """One problem's four-line listing (idea.md "List Problems Tool")."""
+    print("=" * 72)
+    print("id: " + catalog.format_problem_id(p))
+    print("state: " + p.state)
+    print("short name: " + p.short_name)
+    print("cli: " + json.dumps(p.argv))
+
+
+def cmd_list_enabled_problems(args):
+    ctx = Context.for_catalog(args)
+    for p in ctx.catalog.enabled_problems():
+        _print_problem(ctx.catalog, p)
+
+
+def cmd_list_all_problems(args):
+    ctx = Context.for_catalog(args)
+    for p in ctx.catalog.problems.values():
+        _print_problem(ctx.catalog, p)
+
+
+def cmd_json_problem_info(args):
+    ctx = Context.for_catalog(args)
+    print(json.dumps(_problem_json(ctx.catalog.resolve_problem(args.problem)),
+                     indent=1))
+
+
+def cmd_problem_full_id(args):
+    ctx = Context.for_catalog(args)
+    print(ctx.catalog.resolve_problem(args.problem).full_id)
+
+
+def cmd_problem_short_id(args):
+    ctx = Context.for_catalog(args)
+    print(ctx.catalog.format_problem_id(
+        ctx.catalog.resolve_problem(args.problem)))

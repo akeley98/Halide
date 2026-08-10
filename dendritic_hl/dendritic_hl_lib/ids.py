@@ -209,6 +209,27 @@ def benchmark_timestamp(local):
 # resolve in different namespaces (sets are top-level, matched against
 # benchmark_sets/ file names), so there is no ambiguity.
 
+# ---- Problem object full IDs / short names ---------------------------------
+#
+# Problem full ID = sha256 hex of the canonical argv.json text (idea.md "Problem
+# Object State" / impl.md "Problem Objects on Disk").  So a problem is identified
+# purely by its command line; two problems with identical argv are the same
+# object.  There is no timestamp; uniqueness is content-addressed.  The short
+# name is a mutable, not-necessarily-unique label used only in the short ID
+# "problem.{short name}".
+
+_PROBLEM_SHORT_NAME_RE = re.compile(r"[A-Za-z0-9_]+\Z")
+
+
+def is_problem_short_name(s):
+    return bool(_PROBLEM_SHORT_NAME_RE.match(s))
+
+
+def is_problem_id(full_id):
+    """A problem full ID is exactly the 64-char lowercase-hex content hash."""
+    return is_hash(full_id)
+
+
 def make_benchmark_set_id(hostname, timestamp):
     return "{}_{}".format(hostname, timestamp)
 

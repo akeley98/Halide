@@ -22,6 +22,7 @@ TODO update for session changes.
 import getpass
 import json
 import os
+import sys
 
 from . import ids
 from . import locks
@@ -139,6 +140,60 @@ def load_parameters_text(text):
         raise DhHlError("invalid generator parameters JSON: {}".format(e))
     validate_parameters(params)
     return text
+
+
+# ---------------------------------------------------------------------------
+# Problem objects (idea.md "Problem Object State")
+# ---------------------------------------------------------------------------
+
+# A problem object's tri-state enablement (idea.md).  "main" is the single
+# default problem for cost tools; "enabled" problems (which includes the main)
+# are the ones tested by default.
+PROBLEM_STATES = ("enabled", "disabled", "main")
+
+# Special placeholder tokens allowed in a problem's argv (idea.md "New Problem
+# Tool").  <RunGenMain> (only as argv[0]) links a standalone RunGenMain binary;
+# <Lib> (only when NOT using <RunGenMain>) is the emitted shared-library path,
+# also exported as DENDRITIC_HL_OUTPUT_LIB.
+PROBLEM_RUNGENMAIN = "<RunGenMain>"
+PROBLEM_LIB = "<Lib>"
+
+
+def dump_problem_argv(argv):
+    """Canonical serialization of a problem's argv list to argv.json text.  The
+    sha256 of this exact text is the problem's full ID, so this is the single
+    definition shared by hashing and the on-disk file (idea.md "Problem Object
+    State")."""
+    return json.dumps(argv, indent=1) + "\n"
+
+
+def validate_problem_argv(argv):
+    """Validate a problem's command-line argv (idea.md "New Problem Tool").
+
+    A non-empty list of strings, whose only allowed `<...>` placeholder tokens
+    are `<RunGenMain>` (valid only as argv[0]) and `<Lib>` (valid only when
+    `<RunGenMain>` is not used).  Raises DhHlError on any violation; returns
+    *argv*."""
+    if not isinstance(argv, list) or not all(isinstance(a, str) for a in argv):
+        raise DhHlError("problem argv must be a list of strings")
+    if not argv:
+        raise DhHlError("a problem needs at least one command-line argument")
+    uses_rungenmain = argv[0] == PROBLEM_RUNGENMAIN
+    for i, tok in enumerate(argv):
+        if not (tok.startswith("<") and tok.endswith(">")):
+            continue  # ordinary token
+        if tok == PROBLEM_RUNGENMAIN:
+            if i != 0:
+                raise DhHlError(
+                    "<RunGenMain> is only valid as the first argument")
+        elif tok == PROBLEM_LIB:
+            if uses_rungenmain:
+                raise DhHlError("Cannot give both <Lib> and <RunGenMain>")
+        else:
+            raise DhHlError(
+                "unknown special argument {!r}; only <RunGenMain> and <Lib> "
+                "are allowed".format(tok))
+    return argv
 
 
 class Commentary:
@@ -403,6 +458,113 @@ class BenchmarkSet:
     def flush(self):
         safety.makedirs_tracked(self.catalog.benchmark_sets_dir)
         safety.new_file(self.path, json.dumps(self.data, indent=1) + "\n")
+
+
+class Problem:
+    """One problem object: problem/{full_id}/ holding argv.json, state.txt,
+    short_name.txt (idea.md "Problem Object State", impl.md "Problem Objects on
+    Disk").
+
+    Full ID is the sha256 of the canonical argv.json text, so the argv is
+    immutable (changing it is a different problem).  state and short_name are
+    mutable (both in the safety module's overwrite-allowed list)."""
+
+    def __init__(self, catalog, full_id, is_new=False, argv=None,
+                 state="enabled", short_name=None):
+        self.catalog = catalog
+        self.full_id = full_id
+        self._argv = argv if argv is not None else _UNLOADED
+        self._state = state if is_new else _UNLOADED
+        self._short_name = short_name if is_new else _UNLOADED
+        self._state_dirty = False
+        self._short_name_dirty = False
+        self.is_new = is_new
+        if is_new:
+            self.catalog._mark_dirty(self)
+
+    @property
+    def dir(self):
+        return os.path.join(self.catalog.problem_dir, self.full_id)
+
+    @property
+    def argv(self):
+        if self._argv is _UNLOADED:
+            with open(os.path.join(self.dir, "argv.json"), "r",
+                      encoding="utf-8") as f:
+                self._argv = json.load(f)
+        return self._argv
+
+    @property
+    def state(self):
+        # A malformed OR missing state.txt reads as "enabled" with a warning
+        # (idea.md / impl.md "Problem Objects on Disk"): a well-formed problem
+        # always has a valid one, so either is a corruption worth surfacing.
+        if self._state is _UNLOADED:
+            p = os.path.join(self.dir, "state.txt")
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    v = f.read().strip()
+            except FileNotFoundError:
+                v = None
+            if v in PROBLEM_STATES:
+                self._state = v
+            else:
+                shown = "missing" if v is None else repr(v)
+                print("dh_hl: warning: malformed problem state {} in {}; "
+                      "treating as 'enabled'".format(shown, self.full_id),
+                      file=sys.stderr)
+                self._state = "enabled"
+        return self._state
+
+    @property
+    def short_name(self):
+        if self._short_name is _UNLOADED:
+            try:
+                with open(os.path.join(self.dir, "short_name.txt"), "r",
+                          encoding="utf-8") as f:
+                    self._short_name = f.read().strip()
+            except FileNotFoundError:
+                self._short_name = ""
+        return self._short_name
+
+    def is_enabled(self):
+        return self.state in ("enabled", "main")
+
+    def set_state(self, value):
+        assert value in PROBLEM_STATES
+        if self.state == value:
+            return
+        self._state = value
+        self._state_dirty = True
+        self.catalog._mark_dirty(self)
+
+    def set_short_name(self, value):
+        if not ids.is_problem_short_name(value):
+            raise DhHlError(
+                "problem short name must be 1+ chars of [A-Za-z0-9_]: "
+                + repr(value))
+        if self.short_name == value:
+            return
+        self._short_name = value
+        self._short_name_dirty = True
+        self.catalog._mark_dirty(self)
+
+    def flush(self):
+        # argv.json is immutable (it is the hash preimage), so it is written once
+        # at creation.  state.txt / short_name.txt are the mutable files: a new
+        # problem writes both, an existing one writes only what a setter dirtied.
+        # write_allowed handles both cases (new_file when absent, deferred
+        # overwrite when present), so there is one write path, not two.
+        if self.is_new:
+            safety.makedirs_tracked(self.dir)
+            safety.new_file(os.path.join(self.dir, "argv.json"),
+                            dump_problem_argv(self._argv))
+        if self.is_new or self._state_dirty:
+            safety.write_allowed(os.path.join(self.dir, "state.txt"),
+                                 self._state + "\n")
+        if self.is_new or self._short_name_dirty:
+            safety.write_allowed(os.path.join(self.dir, "short_name.txt"),
+                                 self._short_name + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -1190,11 +1352,13 @@ class Catalog:
         self.idea_dir = os.path.join(self.catalog_dir, "idea")
         self.session_dir = os.path.join(self.catalog_dir, "session")
         self.benchmark_sets_dir = os.path.join(self.catalog_dir, "benchmark_sets")
+        self.problem_dir = os.path.join(self.catalog_dir, "problem")
         self.private_dir = os.path.join(self.catalog_dir, "private")
         self._schedules = None
         self._ideas = None
         self._sessions = None
         self._benchmark_sets = None
+        self._problems = None
         self._linked = False
         self._session_linked = False
         self._dirty = {}            # id(obj) -> obj
@@ -1305,6 +1469,65 @@ class Catalog:
         if bs is None:
             raise DhHlError("no such benchmark set: " + full_id)
         return bs
+
+    # -- problems --------------------------------------------------------
+    @property
+    def problems(self):
+        if self._problems is None:
+            self._problems = {}
+            if os.path.isdir(self.problem_dir):
+                for name in os.listdir(self.problem_dir):
+                    if ids.is_problem_id(name):
+                        self._problems[name] = Problem(self, name)
+        return self._problems
+
+    def create_problem(self, argv, short_name, state="enabled"):
+        """Create a new problem from *argv* + *short_name* (default state
+        "enabled").  The full ID is the content hash of the canonical argv, so an
+        identical argv is the same object: error (naming the existing problem) if
+        it already exists (idea.md "New Problem Tool")."""
+        validate_problem_argv(argv)
+        if not ids.is_problem_short_name(short_name):
+            raise DhHlError(
+                "problem short name must be 1+ chars of [A-Za-z0-9_]: "
+                + repr(short_name))
+        assert state in PROBLEM_STATES
+        full_id = ids.sha256_hex(dump_problem_argv(argv))
+        if full_id in self.problems:
+            raise DhHlError("an identical problem already exists: "
+                            + self.format_problem_id(self.problems[full_id]))
+        p = Problem(self, full_id, is_new=True, argv=argv, state=state,
+                    short_name=short_name)
+        self.problems[full_id] = p
+        return p
+
+    def get_problem(self, full_id):
+        p = self.problems.get(full_id)
+        if p is None:
+            raise DhHlError("no such problem: " + full_id)
+        return p
+
+    def enabled_problems(self):
+        """All problems whose state is `enabled` or `main` (idea.md)."""
+        return [p for p in self.problems.values() if p.is_enabled()]
+
+    def main_problem(self):
+        """The unique problem with `main` state; error if not well-defined."""
+        mains = [p for p in self.problems.values() if p.state == "main"]
+        if len(mains) == 1:
+            return mains[0]
+        if not mains:
+            raise DhHlError(
+                "no main problem is set (use `dh_hl set_main_problem`)")
+        raise DhHlError(
+            "multiple problems have `main` state (catalog is inconsistent):\n"
+            + "\n".join("  " + p.full_id for p in mains))
+
+    def resolve_problem(self, s):
+        return _resolve_problem(self, s)
+
+    def format_problem_id(self, p):
+        return _format_problem_short(self, p)
 
     def get_schedule(self, full_id):
         node = self.schedules.get(full_id)
@@ -1603,6 +1826,7 @@ class Catalog:
         safety.makedirs_tracked(self.idea_dir)
         safety.makedirs_tracked(self.session_dir)
         safety.makedirs_tracked(self.benchmark_sets_dir)
+        safety.makedirs_tracked(self.problem_dir)
         gi = os.path.join(self.catalog_dir, ".gitignore")
         if not os.path.exists(gi):
             # The whole per-session private workspace tree is gitignored; only
@@ -2003,3 +2227,38 @@ def _format_benchmark_short(catalog, b):
     except DhHlError:
         pass
     return b.full_id
+
+
+def _resolve_problem(catalog, s):
+    # `main`: the (unique) main problem.  Accepted, never generated (idea.md).
+    if s == "main":
+        return catalog.main_problem()
+    # Full ID = the 64-hex content hash.
+    if ids.is_problem_id(s):
+        return catalog.get_problem(s)
+    # Short form: problem.{short name}, matching ENABLED problems only (idea.md).
+    if s.startswith("problem."):
+        name = s[len("problem."):]
+        matches = [p for p in catalog.enabled_problems() if p.short_name == name]
+        if len(matches) == 1:
+            return matches[0]
+        if not matches:
+            raise DhHlError("no enabled problem matches short ID: " + repr(s))
+        ordered = sorted(matches, key=lambda p: p.full_id)
+        raise DhHlError("\n".join(
+            ["ambiguous problem ID; matches:"]
+            + ["  " + p.full_id for p in ordered]))
+    raise DhHlError("not a valid problem ID: " + repr(s))
+
+
+def _format_problem_short(catalog, p):
+    """A short problem ID "problem.{short name}" (only for enabled problems, and
+    only if it resolves unambiguously to *p*), else the full ID."""
+    if p.is_enabled():
+        cand = "problem." + p.short_name
+        try:
+            if catalog.resolve_problem(cand).full_id == p.full_id:
+                return cand
+        except DhHlError:
+            pass
+    return p.full_id
