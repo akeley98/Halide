@@ -179,6 +179,9 @@ It will be followed by:
 <!-- main -->
   Explain this to the user if they provided something else,
   and offer to fix it if you are capable of doing so.
+  Furthermore, the harness, being only a research prototype,
+  only supports runners of certain forms (usually RunGenMain);
+  see `dh_hl help new_problem` if needed.
 <!-- end main -->
 
 <!-- main -->
@@ -296,6 +299,13 @@ which all come with a canonical schedule (that don't implement the seed idea).
 
 The harness will add special "superseded by" links to paper over this
 semantic gap upon closing the session.
+<!-- This is really not a great design (doubling idea nodes as "session start" nodes -->
+<!-- and having a canonical schedule that implements nothing new. Ultimately the -->
+<!-- problem is there's no "recursion" in the beam-search inspired tree. -->
+<!-- The beam search analogy was just something comforting to start with; -->
+<!-- the real question is what is the true best structure to propagate information -->
+<!-- between parallel agents, and new agent sessions following the conclusion of old ones? -->
+<!-- Anyway, this current design has already caused some fair amount of agent confusion. -->
 
 
 ## Choice C: Launch Sub-agent
