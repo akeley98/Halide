@@ -2301,6 +2301,7 @@ Print info for the given golden object as a JSON object with key/value pairs
 ### New Problem Tool
 
     dh_hl new_problem -C ... {short name} ...
+<!-- impl -->
 
 IMPL TASK: the problem-object CLI commands are tested only IN-PROCESS
 (`test_problems.py` via `run_tool`, which bypasses argparse) plus new_problem /
@@ -2310,6 +2311,7 @@ Invalid short names and bad `<...>` args are checked at the MODEL level
 non-halide `run_cli` test exercising the `new_problem` argv REMAINDER parsing,
 the dispatch, the list/json output formatting, and the error EXIT CODES (dup /
 bad short name / bad `<...>`).
+<!-- end impl -->
 
 Add a new problem with the given short name,
 and problem CLI arguments as specified in the remaining arguments.
@@ -2367,9 +2369,11 @@ This only has to be done once, then left alone in the agent hot loop.
    "dh_hl_pipeline");` cast to the header's prototype.
 
 4. **Call it** with the buffers, exactly as a statically-linked call would.
-   (Verified end-to-end by `test_shared_lib_halide.py`.  NB: use
-   `reinterpret_cast`, not `static_cast` -- casting `dlsym`'s `void*` to a
-   function-pointer type with `static_cast` is ill-formed C++.)
+   Use `reinterpret_cast` (not `static_cast`) for the `dlsym` result -- casting a
+   `void*` to a function-pointer type with `static_cast` is ill-formed C++.
+   <!-- impl -->
+   (Verified end-to-end by `test_shared_lib_halide.py`.)
+   <!-- end impl -->
 
         void* h = dlopen(lib_path, RTLD_NOW | RTLD_LOCAL);
         if (!h) {

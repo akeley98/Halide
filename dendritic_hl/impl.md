@@ -598,16 +598,24 @@ steps, and drive everything param-dependent from Python `subprocess`:
   parallelism (yes, I know about pools).
 
 The steps performed are:
-* compile the C++ workspace file to a Halide generator executable (ninja)
-* run the generator to emit the AOT static library, header, `registration.cpp`,
-  and both the plain `.stmt` and `conceptual.stmt` files, using
-  `target=host-profile` (Python)
-* link `RunGenMain` against the generated `registration.cpp` + static library
-  to finish a standalone benchmarkable binary (Python)
+* compile the C++ workspace file to a Halide generator executable (ninja),
+  and the shared `RunGenMain.o` (ninja)
+* emit the standalone `halide_runtime.o` once per bin/ (Python; node/param
+  independent)
+* run the generator to emit the pipeline as a `no_runtime` **object**, plus the
+  header, `registration.cpp`, and the `.stmt`/`.conceptual.stmt` files, using
+  `target=host-profile-no_runtime` (Python)
+* link the RunGenMain binary from `RunGenMain.o` + `registration.cpp` + the
+  `no_runtime` object + `halide_runtime.o` (Python)
+* link the `no_runtime` object into a shared library `dh_hl_pipeline.{so,dylib}`
+  (Python) for external dlopen runners
 
-See the [Reference Build Commands](reference_build_commands.md) file for the
-tested build/link recipe. When profiling, keep the per-node generator executable
-from phase 1 and re-run the emit + link + benchmark steps for each parameter set.
+The pipeline is emitted ONCE (the `no_runtime` object) and feeds both the
+RunGenMain and shared-library links -- see the "-f layout" section above for the
+per-(node, i) subdirectory + stable-symbol details, and the
+[Reference Build Commands](reference_build_commands.md) file (Path A / Path B) for
+the tested recipes.  When profiling, keep the per-node generator executable from
+phase 1 and re-run the emit + link + benchmark steps for each parameter set.
 (`build` reads the node source/params from the catalog files named by
 `init_build.json`, not the workspace directly.)
 
@@ -1301,6 +1309,45 @@ on it; `test_private_benchmark_sets.py` also guards the lazy-load-once objects
 against the looped-mutation regression.  The Halide tier then re-checks the same
 tools against genuinely noisy real timings (above), where only *robust* facts
 (the parallel variant is much faster) can be asserted.
+
+IMPL TASK: close cost-tool "garbage value" test holes -- bugs that return a
+plausible-but-WRONG number (not a crash/None) are the worst, because they send
+agents in bad directions.  The current synthetic data is near-constant, so
+several load-bearing behaviours are undetected.  Add tests for, roughly in
+priority order:
+
+* **Batch pairing (highest).** The 2-way method's whole point is per-batch
+  pairing.  Construct batches with large cross-batch variance but a consistent
+  per-batch offset: correct pairing -> confident `improvement`; a bug that pairs
+  across batches / doesn't pair / uses a marginal (unpaired) CI -> `unknown`.
+  No current test distinguishes these.
+* **`parameters_raw_cost`: null vs 0.** An unbenchmarked params index must be
+  `null`, not `0` (a `0` reads as "infinitely fast").  2 params, only index 0
+  profiled -> assert `[cost, null]` exactly.
+* **Anchor ratio direction.** With an anchor, cost is `target/anchor`.
+  target=200, anchor=100 -> ratio ~= 2.0, not 0.5 (catch an inverted ratio).
+* **Representative recomputed per method + tie-break.** A schedule whose best
+  params index over ALL its batches differs from the best over the batches shared
+  with the RHS/anchor; assert compare/ranking use the right one.  Equal per-param
+  costs -> representative is the lower index (deterministic).
+* **Batch key includes set_id.** Two sets each with batches 0..2 for the same
+  schedules -> `batch_count == 6`, no cross-set pairing (a bug keying on batch
+  index alone collides them).
+* **profiler_stats percentiles with DISTINCT samples.** Many distinct samples ->
+  assert `p25 < median < p75` strictly (catch a "return mean x3" bug) and that
+  `time_ratio` uses the pipeline `time_ns` denominator (exact ratio).
+* **`representative` <-> `cost` consistency** with asymmetric per-param costs:
+  `cost == parameters_raw_cost[representative]` and `representative == argmin`.
+
+IMPL TASK: before writing the above, investigate the best *fixture mechanism*.
+`add_synthetic_benchmark_set` fabricates through the real model, which is honest
+but verbose for multi-set / multi-problem / per-batch-structured cases.  Weigh:
+(a) extending `test_build_fake.py`'s fake-toolchain seams so a fake `build
+--profile` mints structured benchmark sets, vs (b) a small backdoor
+"insert-fake-benchmark[-set]-into-catalog" test helper (or hidden `dh_hl` dev
+tool) that writes exactly the batch/problem/params structure a cost test needs.
+Pick whichever makes the pairing/multi-set tests above readable without obscuring
+what is being asserted; document the choice here.
 
 **Locking in tests.**
 
