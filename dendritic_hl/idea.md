@@ -1022,10 +1022,6 @@ for a parent schedule that's exclusively its own.
 
     dh_hl new_catalog -C ... {proposal name} {prompt file} {input C++ file} [input generator parameters]
 
-IMPL TASK: default problem.
-The new default problem should be functionally identical to the current hard-wired behavior.
-Inform me if for some reason, it isn't.
-
 Creates a new catalog directory with the bare minimum state to get started:
 
 * Two schedule nodes, both holding a copy of the input C++ file and
@@ -2056,11 +2052,6 @@ gave an `improvement`, `regression`, or `unknown` result, respectively.
 
     dh_hl json_profiler_stats -s ... [schedule ID]
 
-IMPL TASK: a real-Halide `test_build_cli_halide.py` test that varies the problem
-size with custom `["<RunGenMain>", ...]` problems and checks runtime changed as
-expected.  (`--problem` itself is implemented and unit-tested in
-`test_profiler_stats.py` / `test_cost_tools.py`.)
-
 Aggregate profiler statistics for the referenced schedule,
 considering only benchmarks reachable from the private benchmark set list
 that profiled using the main problem (by default).
@@ -2311,11 +2302,14 @@ Print info for the given golden object as a JSON object with key/value pairs
 
     dh_hl new_problem -C ... {short name} ...
 
-IMPL TASK: add command
-
-IMPL TASK: test invalid short name
-
-IMPL TASK: test incorrect `<...>` arguments.
+IMPL TASK: the problem-object CLI commands are tested only IN-PROCESS
+(`test_problems.py` via `run_tool`, which bypasses argparse) plus new_problem /
+disable_problem incidentally through `run_cli` in the halide-marked tests.
+Invalid short names and bad `<...>` args are checked at the MODEL level
+(`test_argv_validation_rejects`, `test_short_name_validation`).  Missing: a
+non-halide `run_cli` test exercising the `new_problem` argv REMAINDER parsing,
+the dispatch, the list/json output formatting, and the error EXIT CODES (dup /
+bad short name / bad `<...>`).
 
 Add a new problem with the given short name,
 and problem CLI arguments as specified in the remaining arguments.
@@ -2373,14 +2367,15 @@ This only has to be done once, then left alone in the agent hot loop.
    "dh_hl_pipeline");` cast to the header's prototype.
 
 4. **Call it** with the buffers, exactly as a statically-linked call would.
-
-IMPL TASK: as part of writing tests, check the code below is actually correct.
+   (Verified end-to-end by `test_shared_lib_halide.py`.  NB: use
+   `reinterpret_cast`, not `static_cast` -- casting `dlsym`'s `void*` to a
+   function-pointer type with `static_cast` is ill-formed C++.)
 
         void* h = dlopen(lib_path, RTLD_NOW | RTLD_LOCAL);
         if (!h) {
             ...
         }
-        auto fn = static_cast<decltype(&dh_hl_pipeline)>(dlsym(h, "dh_hl_pipeline"));
+        auto fn = reinterpret_cast<decltype(&dh_hl_pipeline)>(dlsym(h, "dh_hl_pipeline"));
         Halide::Runtime::Buffer<uint8_t> in(64, 64), out(64, 64);
         in.fill(100);
         int rc = fn(in, out);   // use whatever your real inputs/outputs are
@@ -2400,8 +2395,6 @@ Will test on the mystical "mantissa" Linux box eventually...
     dh_hl enable_problem -C ... {problem ID}
     dh_hl set_main_problem -C ... {problem ID}
 
-IMPL TASK: add commands
-
 Respectively,
 
 * Set problem state to `disabled`.
@@ -2417,16 +2410,12 @@ Respectively,
     dh_hl get_problem_short_name -C ... {problem ID}
     dh_hl set_problem_short_name -C ... {problem ID} {short name}
 
-IMPL TASK: add commands
-
 
 ### List Problems Tool
 
     dh_hl list_enabled_problems -C ...
     dh_hl list_all_problems -C ...
 <!-- help -->
-
-IMPL TASK: add command
 
 List all enabled problems or all problems, respectively.
 Each is printed separated by dividers.
@@ -2447,8 +2436,6 @@ Each problem is printed as four lines:
 
     dh_hl json_problem_info -C ... {problem ID}
 <!-- help -->
-
-IMPL TASK: add command
 
 Print info for the given problem object as a JSON object with key/value pairs
 
