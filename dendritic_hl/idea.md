@@ -710,11 +710,9 @@ This exposes the harness user to drift.
 
 ## Cost Model Benchmark Search Warnings
 
-IMPL TASK: `json_ranking_cost` and `json_compare_cost` emit this verbose warning
-(implemented + tested in `test_cost_tools.py`).  `list_private_ideas` does NOT --
-it surfaces per-idea null costs inline (bubbled to the top of each pool), so a
-per-idea breakdown would be noisy; decide whether a single frontier-level "no
-benchmarks for this problem" warning is wanted there.
+This applies to `json_ranking_cost` and `json_compare_cost`
+but not `list_private_ideas` due to excessive noise from ranking so many ideas.
+Can be debugged by the harness user with `json_ranking_cost` individually.
 
 Print a warning to `stderr` if 0 batches were found.
 
@@ -1426,14 +1424,6 @@ one made canonical), so editing the workspace to match that sibling still trips
 
     dh_hl build -s ...
 
-A runner that exits 0 but emits no (or a corrupt) profiler JSON is a "catalogued
-bad outcome", not a tool failure: the profile loop skips that benchmark and keeps
-going (no state rollback), the build exits nonzero, and the node still reaches
-`success` (the generators built).  Tested at both tiers --
-`test_build_fake.py::test_broken_runner_no_json_is_bad_outcome_not_crash` and the
-real-CLI `test_shared_lib_halide.py::test_broken_runner_no_json_is_catalogued_bad_outcome`
-(a broken `<Lib>` runner driven through `dh_hl build --profile`).
-
 Builds the schedule nodes selected by the latest `dh_hl init_build`
 done with the current session (state stored in the session private workspace)
 Optionally profiles them in batches (`--profile [N]`),
@@ -1493,11 +1483,6 @@ Flags:
 
 This tool exits successfully iff no harness errors occurred
 and all subprocesses succeeded.
-
-IMPL TASK: problem 3, settle on one benchmark set per selected problem.
-This way the problem is uniform for all benchmarks in the set.
-I actually completely missed the problem and didn't have this in mind at all,
-but your proposed solution is elegant.
 
 If at least 1 profiling batch occured,
 and `--only all` or `--only target` are in effect,
@@ -1604,6 +1589,14 @@ example file names.  It is deliberately NOT the source of truth for the
 catalog-specific `bin/` file names — those are named as in the pseudocode above
 (keyed by schedule full ID + parameters index), and `build.py` owns them.
 Don't try to keep the two in sync.
+
+A runner that exits 0 but emits no (or a corrupt) profiler JSON is a "catalogued
+bad outcome", not a tool failure: the profile loop skips that benchmark and keeps
+going (no state rollback), the build exits nonzero, and the node still reaches
+`success` (the generators built).  Tested at both tiers --
+`test_build_fake.py::test_broken_runner_no_json_is_bad_outcome_not_crash` and the
+real-CLI `test_shared_lib_halide.py::test_broken_runner_no_json_is_catalogued_bad_outcome`
+(a broken `<Lib>` runner driven through `dh_hl build --profile`).
 
 FUTURE: (not a task for current turn)
 check the profiler output provenance is correct,
@@ -3145,6 +3138,10 @@ this is load bearing for correctness, since it encodes more than a session full 
 
     dh_hl json_export -C ...
 <!-- help -->
+
+IMPL TASK: `goldens`, also the agent that implements this should advise
+me of the real status of `json_export` testing; is there any attempt
+to ensure actual functional correctness and not just key names LGTM?
 
 Exports the entire catalog as a JSON object, with key/value pairs
 
