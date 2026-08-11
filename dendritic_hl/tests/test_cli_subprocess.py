@@ -197,7 +197,7 @@ def test_new_golden_cli_dispatch_and_exit_codes(run_cli, tmp_path):
     assert json.loads(r.stdout) == {"remarks": "first remarks\n", "schedule": None}
 
     # The hlpipe gate: a real schedule with nothing built -> exit 1, clean error.
-    sid = run_cli("seed_schedule_short_id", "-s", handle).stdout.strip()
+    sid = run_cli("schedule_short_id", "-s", handle).stdout.strip()
     r = run_cli("new_golden", "-s", handle, str(tmp_path / "rem.txt"), sid)
     assert r.returncode == 1
     assert "no algorithm hlpipe built" in r.stderr and "Traceback" not in r.stderr
@@ -217,16 +217,59 @@ def test_init_build_positional_target(run_cli, tmp_path):
     """The mistake that bit an agent -- passing the target positionally instead
     of via --target -- now works (idea.md Init-Build Tool `--target` lenience)."""
     cat_dir, handle = _bootstrap_cli(run_cli, tmp_path)
-    sid = run_cli("seed_schedule_short_id", "-s", handle).stdout.strip()
+    sid = run_cli("schedule_short_id", "-s", handle).stdout.strip()
     r = run_cli("init_build", "-s", handle, sid, "--other", "none", "--anchor", "none")
     assert r.returncode == 0, r.stderr
     assert "dh_hl: init_build target:" in r.stdout
 
 
+def test_magic_schedule_ids_wired_into_non_default_args(run_cli, tmp_path):
+    """The magic `[schedule ID]` values (idea.md: "All schedule ID arguments
+    also accept ...") are wired into the non-`[schedule ID]`-alone argument
+    sites, not just the plain default: init_build's --target/--other/--anchor
+    and restore_schedule's {schedule ID}.  They all funnel through
+    ctx.resolve_schedule.  Halide-free -- init_build never compiles."""
+    cat_dir, handle = _bootstrap_cli(run_cli, tmp_path)
+    sid = run_cli("schedule_short_id", "-s", handle).stdout.strip()
+
+    def field(stdout, prefix):
+        return [l.split(prefix, 1)[1].strip()
+                for l in stdout.splitlines() if prefix in l][0]
+
+    # Close the session so `session_output` / `terminus` are defined (the seed
+    # canonical, given commentary, is the primary output).
+    (tmp_path / "c.txt").write_text("summary\n")
+    assert run_cli("comment", "-s", handle, str(tmp_path / "c.txt"),
+                   sid).returncode == 0
+    assert run_cli("close_session", "-s", handle,
+                   "--allow-failed-problems").returncode == 0
+
+    # --target session_output resolves to the closed session's output.
+    r = run_cli("init_build", "-s", handle, "--target", "session_output",
+                "--other", "none", "--anchor", "none")
+    assert r.returncode == 0, r.stderr
+    assert field(r.stdout, "dh_hl: init_build target: ") == sid
+    # --anchor terminus resolves (the unique terminus's output == that node).
+    r = run_cli("init_build", "-s", handle, "--target", "workspace",
+                "--other", "none", "--anchor", "terminus")
+    assert r.returncode == 0, r.stderr
+    assert field(r.stdout, "dh_hl: init_build anchor: ") == sid
+    # --other session_output resolves too.
+    r = run_cli("init_build", "-s", handle, "--target", "workspace",
+                "--other", "session_output", "--anchor", "none")
+    assert r.returncode == 0, r.stderr
+    assert field(r.stdout, "dh_hl: init_build other: ") == sid
+
+    # restore_schedule {schedule ID} accepts a magic value as well.
+    r = run_cli("restore_schedule", "-s", handle, "terminus")
+    assert r.returncode == 0, r.stderr
+    assert sid in r.stdout
+
+
 def test_init_build_positional_and_flag_conflict(run_cli, tmp_path):
     """Giving BOTH the positional target and --target is a clean error."""
     cat_dir, handle = _bootstrap_cli(run_cli, tmp_path)
-    sid = run_cli("seed_schedule_short_id", "-s", handle).stdout.strip()
+    sid = run_cli("schedule_short_id", "-s", handle).stdout.strip()
     r = run_cli("init_build", "-s", handle, sid, "--target", "workspace")
     assert r.returncode == 1
     assert "not both" in r.stderr
@@ -309,7 +352,7 @@ def test_review_cancels_cancelled_by_via_real_cli(run_cli, session):
     """Subprocess mirror of test_review.test_cancels_and_cancelled_by: drive the
     real `comment`/`json_schedule_info` CLI, computing the derived review and
     cancelled_by state end-to-end (comment text piped via stdin '-')."""
-    sid = run_cli("seed_schedule_full_id", *_cli(session)).stdout.strip()
+    sid = run_cli("schedule_full_id", *_cli(session)).stdout.strip()
 
     def sched_json():
         r = run_cli("json_schedule_info", "-C", session.catalog_dir, sid)

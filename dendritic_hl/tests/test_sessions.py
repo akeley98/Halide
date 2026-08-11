@@ -10,6 +10,7 @@ import os
 import pytest
 
 from dendritic_hl_lib import ids, safety, tools
+from dendritic_hl_lib.catalog import _resolve_schedule
 from dendritic_hl_lib.enums import Review
 from dendritic_hl_lib.errors import DhHlError
 from conftest import ns, open_catalog, add_synthetic_benchmark_set
@@ -292,7 +293,7 @@ def test_root_of(session, run_tool, capsys):
     # root_of prints a (short) ID resolving to the tree root.
     cat = open_catalog(session.catalog_dir)
     try:
-        assert cat.resolve_schedule(out.strip()).full_id == root_id
+        assert _resolve_schedule(cat, out.strip()).full_id == root_id
     finally:
         _reset()
 
@@ -438,16 +439,21 @@ def test_delist_session(session, run_tool, capsys):
 # ---- copy / id-of / workspace / views ------------------------------------
 
 def test_copy_and_id_getters(session, run_tool, capsys, tmp_path):
-    # seed-schedule getters (the seed idea's canonical, == the consistent dup).
-    seed_full = _out(run_tool, capsys, tools.cmd_seed_schedule_full_id,
-                     session.ns()).strip()
-    assert len(seed_full) == 90  # a schedule full ID
+    # The default [schedule ID] is the workspace's unambiguous schedule (the
+    # seed idea's canonical, == the consistent dup of DUMMY_SOURCE).
+    sched_full = _out(run_tool, capsys, tools.cmd_schedule_full_id,
+                      session.ns()).strip()
+    assert len(sched_full) == 90  # a schedule full ID
 
     dest = str(tmp_path / "copied.cpp")
-    run_tool(tools.cmd_copy_seed_schedule,
-             session.ns(output=dest))
+    run_tool(tools.cmd_copy_schedule, session.ns(output=dest))
     from conftest import DUMMY_SOURCE
     assert open(dest).read() == DUMMY_SOURCE
+
+    # --parameters copies generator_parameters.json instead of the C++.
+    pdest = str(tmp_path / "copied_params.json")
+    run_tool(tools.cmd_copy_schedule, session.ns(output=pdest, parameters=True))
+    assert json.loads(open(pdest).read()) == [{}]  # DEFAULT_PARAMETERS
 
     # workspace path getters point into private/{id}.
     wpath = _out(run_tool, capsys, tools.cmd_workspace_schedule,
@@ -464,14 +470,17 @@ def test_copy_and_id_getters(session, run_tool, capsys, tmp_path):
     assert handle.startswith("tmp.")
 
 
-def test_terminus_and_output_getters_after_close(session, run_tool, capsys, tmp_path):
+def test_terminus_and_output_magic_schedule_ids_after_close(session, run_tool,
+                                                            capsys, tmp_path):
     _comment(session, run_tool, tmp_path)
     run_tool(tools.cmd_close_session, session.ns(allow_failed_problems=True))
 
-    out_full = _out(run_tool, capsys, tools.cmd_session_output_full_id,
-                    session.ns()).strip()
-    term_full = _out(run_tool, capsys, tools.cmd_terminus_schedule_full_id,
-                     ns(catalog=session.catalog_dir)).strip()
+    # The `session_output` / `terminus` magic [schedule ID] values resolve
+    # through schedule_full_id now that the dedicated getters are gone.
+    out_full = _out(run_tool, capsys, tools.cmd_schedule_full_id,
+                    session.ns(schedule="session_output")).strip()
+    term_full = _out(run_tool, capsys, tools.cmd_schedule_full_id,
+                     ns(catalog=session.catalog_dir, schedule="terminus")).strip()
     # The unique terminus's output is this session's output.
     assert out_full == term_full
 

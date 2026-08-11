@@ -210,7 +210,7 @@ def _bootstrap(run_cli, tmp_path):
 def test_should_accept_and_close_override_cli(run_cli, tmp_path):
     cat_dir, handle = _bootstrap(run_cli, tmp_path)
     # Make the seed canonical a valid output: give it commentary.
-    sid = run_cli("seed_schedule_short_id", "-s", handle).stdout.strip()
+    sid = run_cli("schedule_short_id", "-s", handle).stdout.strip()
     (tmp_path / "c.txt").write_text("summary\n")
     assert run_cli("comment", "-s", handle, str(tmp_path / "c.txt"),
                    sid).returncode == 0

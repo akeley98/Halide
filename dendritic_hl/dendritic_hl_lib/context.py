@@ -21,7 +21,7 @@ from . import ids
 from . import locks
 from . import safety
 from .catalog import (Catalog, CurrentIdeaState, DEFAULT_PARAMETERS,
-                      dump_parameters, _UNLOADED)
+                      dump_parameters, _resolve_schedule, _UNLOADED)
 from .enums import IdeaStateKind
 from .errors import DhHlError
 
@@ -579,7 +579,11 @@ class SessionWorkspace:
             i, n = int(idx_str), int(n_str)
         except ValueError:
             raise DhHlError("not a valid benchmark short ID: " + repr(spec))
-        node = catalog.resolve_schedule(sched_part)
+        # The schedule part of a benchmark short ID is a structured sub-field
+        # (a full/short schedule ID), NOT a schedule-ID argument, so it resolves
+        # through the catalog-layer `_resolve_schedule` and deliberately does
+        # NOT accept terminus/session_output.
+        node = _resolve_schedule(catalog, sched_part)
         bid = self.benchmark_short_ids.lookup(node.full_id, i, n)
         if bid is None:
             raise DhHlError("no benchmark matches short ID: " + repr(spec))
@@ -787,22 +791,61 @@ class Context:
                 "pass an explicit [schedule ID] or fix the workspace/idea state")
         return node
 
-    def resolve_schedule_arg(self, arg):
-        """Resolve an optional [schedule ID]: explicit if given, else the
-        unambiguous schedule node (which requires a current session)."""
-        if arg is not None:
-            return self.catalog.resolve_schedule(arg)
-        # The default (omitted [schedule ID]) is the session workspace's
-        # unambiguous schedule -- so a -C-only tool needs -s to resolve it.  Catch
-        # the missing session HERE with an argument-specific message, rather than
-        # letting the generic `self.workspace` "need -s" error surface (idea.md /
-        # impl.md "Default [schedule ID] argument").
+    def resolve_schedule(self, spec):
+        """The single public resolver for a user-supplied `schedule ID`
+        argument.  Accepts every magic value idea.md promises ("All schedule ID
+        arguments also accept ..."): the session-scoped `terminus` /
+        `session_output` (handled here, since they need the current session),
+        plus `golden`, golden object IDs, and ordinary full/short IDs (delegated
+        to the catalog-layer `_resolve_schedule`).
+
+        `spec is None` selects the workspace's unambiguous schedule -- the
+        omitted `[schedule ID]` case, which requires `-s`.  Commands whose
+        grammar has no omissible default (a mandatory `{schedule ID}`, or
+        `--target`/`--other`/`--anchor`, which resolve their own special tokens
+        first) simply never pass None, so no separate "reject None" entry point
+        is needed.
+
+        This is deliberately the ONLY schedule resolver exposed to tool code:
+        there is no catalog-level `resolve_schedule`, whose
+        golden-but-not-terminus behavior was an incomplete-magic trap."""
+        if spec == "terminus":
+            return self._terminus_output_schedule()
+        if spec == "session_output":
+            return self._session_output_schedule()
+        if spec is not None:
+            return _resolve_schedule(self.catalog, spec)
+        # Omitted [schedule ID]: the workspace's unambiguous schedule.  A -C-only
+        # tool needs -s to resolve it; catch the missing session HERE with an
+        # argument-specific message rather than letting the generic
+        # `self.workspace` "need -s" error surface (idea.md "[schedule ID]").
         if self.session_id is None:
             raise DhHlError(
                 "-s required to resolve the default schedule node argument "
                 "(pass an explicit [schedule ID], or -s to use the session "
                 "workspace's schedule)")
         return self.require_unambiguous_schedule()
+
+    def _terminus_output_schedule(self):
+        """The primary output schedule of the unique terminus (the `terminus`
+        magic [schedule ID]).  Catalog-only, so it works with just -C."""
+        termini = [s for s in self.catalog.sessions.values()
+                   if self.catalog.session_is_terminus(s)]
+        if len(termini) != 1:
+            raise DhHlError(
+                "expected exactly one terminus, found {}".format(len(termini)))
+        term = termini[0]
+        if term.output_schedule_id is None:
+            raise DhHlError("the terminus session has no output schedule")
+        return self.catalog.get_schedule(term.output_schedule_id)
+
+    def _session_output_schedule(self):
+        """The current session's primary output schedule (the `session_output`
+        magic [schedule ID]).  `self.session` requires -s."""
+        sid = self.session.output_schedule_id
+        if sid is None:
+            raise DhHlError("the current session has no output schedule yet")
+        return self.catalog.get_schedule(sid)
 
     def resolve_benchmark_arg(self, spec):
         """Resolve a user-supplied benchmark ID: a full ID resolves against the

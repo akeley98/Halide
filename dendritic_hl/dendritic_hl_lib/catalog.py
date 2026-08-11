@@ -2092,9 +2092,11 @@ class Catalog:
     # here.  The catalog only resolves benchmark *full* IDs.
 
     # -- ID resolution ---------------------------------------------------
-    def resolve_schedule(self, s):
-        return _resolve_schedule(self, s)
-
+    # NB there is deliberately no `resolve_schedule` method: schedule IDs carry
+    # session-scoped magic values (terminus/session_output), so the sole public
+    # resolver is `Context.resolve_schedule`.  The catalog-layer, session-
+    # agnostic resolver is the module-private `_resolve_schedule` free function
+    # (full/short IDs + golden), used by Context and white-box tests.
     def resolve_idea(self, s):
         return _resolve_idea(self, s)
 
@@ -2396,7 +2398,7 @@ def _format_schedule_short(catalog, node):
         # it unambiguously resolves to the full ID we're shortening.
         # Silently convert "ambiguous" errors to False.
         try:
-            return catalog.resolve_schedule(cand).full_id == node.full_id
+            return _resolve_schedule(catalog, cand).full_id == node.full_id
         except DhHlError:
             return False
 

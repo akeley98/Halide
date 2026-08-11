@@ -23,7 +23,10 @@ _IDEA_MD = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 
 # A synopsis line inside a tool section, e.g. "    dh_hl status -s ..." (possibly
 # after a leading "# comment").  The command name is what we key sections by.
-_SYNOPSIS_RE = re.compile(r"^    (?:# .*)?dh_hl ([a-z_]+)\b")
+# Accepts A-Z so a mixed-case command (e.g. a future PascalCase noun) is still
+# parsed and checked against COMMAND_HELP, rather than silently slipping past the
+# documented==implemented consistency test.
+_SYNOPSIS_RE = re.compile(r"^    (?:# .*)?dh_hl ([A-Za-z_]+)\b")
 
 
 def _strip_maintainer_lines(lines):
@@ -180,17 +183,8 @@ COMMAND_HELP = {
     "join_session": "Merge another session's outputs into the current private lists.",
     "list_open_sessions": "List all open (not-closed) sessions with handles.",
     "list_termini": "List all termini (top-level, not-delisted, no successor).",
-    "copy_schedule": "Write a schedule node's C++ to a file ('-' for stdout).",
-    "copy_terminus_schedule": "Write the unique terminus's output schedule C++ to a file.",
-    "copy_seed_schedule": "Write the session seed idea's canonical C++ to a file.",
-    "copy_session_output": "Write the current session's output schedule C++ to a file.",
+    "copy_schedule": "Write a schedule node's C++ (or params with --parameters) to a file ('-' for stdout).",
     "catalog_location": "Print the catalog directory path (resolves a session handle).",
-    "terminus_schedule_full_id": "Print the terminus output schedule's full ID.",
-    "terminus_schedule_short_id": "Print the terminus output schedule's short ID.",
-    "seed_schedule_full_id": "Print the session seed idea's canonical schedule full ID.",
-    "seed_schedule_short_id": "Print the session seed idea's canonical schedule short ID.",
-    "session_output_full_id": "Print the current session's output schedule full ID.",
-    "session_output_short_id": "Print the current session's output schedule short ID.",
     "workspace_schedule": "Print the path of the session's workspace C++ file.",
     "workspace_parameters": "Print the path of the session's workspace generator parameters file.",
     "workspace_bin": "Print the path of the session's bin directory.",
@@ -222,6 +216,10 @@ COMMAND_HELP = {
     "json_problem_info": "Dump a problem object as JSON.",
     "problem_full_id": "Print a problem's full ID.",
     "problem_short_id": "Print a problem's short ID.",
+    "commentary_full_id": "Print a commentary sub-object's full ID.",
+    "commentary_short_id": "Print a commentary sub-object's short ID.",
+    "warning_toggle_full_id": "Print a WarningToggle's full ID.",
+    "warning_toggle_short_id": "Print a WarningToggle's short ID.",
     "prompt": "Print the assembled main-agent or sub-agent prompt.",
     "detail": "Print a supplemental document from the harness `detail/` dir.",
     "examples": "Print an example file from the harness `examples/` dir.",
@@ -522,24 +520,11 @@ def _build_parser():
     sp = add("copy_schedule")
     sp.add_argument("output", help="output file ('-' for stdout)")
     sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
-
-    sp = add("copy_terminus_schedule")
-    sp.add_argument("output", help="output file ('-' for stdout)")
-
-    sp = add("copy_seed_schedule")
-    sp.add_argument("output", help="output file ('-' for stdout)")
-
-    sp = add("copy_session_output")
-    sp.add_argument("output", help="output file ('-' for stdout)")
+    sp.add_argument("--parameters", action="store_true",
+                    help="copy generator_parameters.json instead of the C++")
 
     add("catalog_location")
 
-    add("terminus_schedule_full_id")
-    add("terminus_schedule_short_id")
-    add("seed_schedule_full_id")
-    add("seed_schedule_short_id")
-    add("session_output_full_id")
-    add("session_output_short_id")
     add("workspace_schedule")
     add("workspace_parameters")
     add("workspace_bin")
@@ -603,6 +588,13 @@ def _build_parser():
     sp = add("set_problem_short_name")
     sp.add_argument("problem", help="problem ID")
     sp.add_argument("short_name", help="new short name [A-Za-z0-9_]+")
+
+    for name in ("commentary_full_id", "commentary_short_id"):
+        sp = add(name)
+        sp.add_argument("commentary", help="commentary ID")
+    for name in ("warning_toggle_full_id", "warning_toggle_short_id"):
+        sp = add(name)
+        sp.add_argument("warning_toggle", help="WarningToggle ID")
 
     add("list_enabled_problems")
     add("list_all_problems")
@@ -683,16 +675,7 @@ _DISPATCH = {
     "list_open_sessions": tools.cmd_list_open_sessions,
     "list_termini": tools.cmd_list_termini,
     "copy_schedule": tools.cmd_copy_schedule,
-    "copy_terminus_schedule": tools.cmd_copy_terminus_schedule,
-    "copy_seed_schedule": tools.cmd_copy_seed_schedule,
-    "copy_session_output": tools.cmd_copy_session_output,
     "catalog_location": tools.cmd_catalog_location,
-    "terminus_schedule_full_id": tools.cmd_terminus_schedule_full_id,
-    "terminus_schedule_short_id": tools.cmd_terminus_schedule_short_id,
-    "seed_schedule_full_id": tools.cmd_seed_schedule_full_id,
-    "seed_schedule_short_id": tools.cmd_seed_schedule_short_id,
-    "session_output_full_id": tools.cmd_session_output_full_id,
-    "session_output_short_id": tools.cmd_session_output_short_id,
     "workspace_schedule": tools.cmd_workspace_schedule,
     "workspace_parameters": tools.cmd_workspace_parameters,
     "workspace_bin": tools.cmd_workspace_bin,
@@ -722,6 +705,10 @@ _DISPATCH = {
     "json_problem_info": tools.cmd_json_problem_info,
     "problem_full_id": tools.cmd_problem_full_id,
     "problem_short_id": tools.cmd_problem_short_id,
+    "commentary_full_id": tools.cmd_commentary_full_id,
+    "commentary_short_id": tools.cmd_commentary_short_id,
+    "warning_toggle_full_id": tools.cmd_warning_toggle_full_id,
+    "warning_toggle_short_id": tools.cmd_warning_toggle_short_id,
     "prompt": tools.cmd_prompt,
     "detail": tools.cmd_detail,
     "examples": tools.cmd_examples,

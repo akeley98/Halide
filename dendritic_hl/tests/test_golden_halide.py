@@ -46,7 +46,9 @@ def _bootstrap(run_cli, tmp_path):
 
 
 def _seed_id(run_cli, handle):
-    return run_cli("seed_schedule_short_id", "-s", handle).stdout.strip()
+    # The seed idea's canonical == the default (status) schedule after
+    # init_workspace, so the plain short-ID getter resolves it.
+    return run_cli("schedule_short_id", "-s", handle).stdout.strip()
 
 
 def _status_node(run_cli, handle):

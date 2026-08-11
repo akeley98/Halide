@@ -810,13 +810,21 @@ All `schedule ID` arguments also accept the following magic values:
 * any golden object ID: schedule node of the referenced golden (error if none)
 <!-- impl -->
 
-IMPL TASK: implement the `terminus` and `session_output` translations.
-The `golden` value and golden object IDs are done (handled in
-`catalog._resolve_schedule`, so `--other golden` and every `[schedule ID]`
-argument pick them up).  `terminus`/`session_output` still resolve only through
-their dedicated tools; wiring them into `_resolve_schedule` needs session
-context and is bundled with the dedicated-tool elimination.
-Can lift code from `terminus_schedule_full_id`, etc.  `seed` intentionally removed.
+Every schedule-ID argument funnels through the single public resolver
+`context.resolve_schedule`, so the magic values work uniformly -- not just the
+bare `[schedule ID]` default, but also `init_build --target/--other/--anchor`,
+`restore_schedule`, `add_warning_toggle`, the `json_compare_cost` RHS, the plural
+`[schedule IDs...]` lists (`new_sub_session`/`close_session`), and the `--anchor`
+of the cost tools.  It handles the session-scoped `terminus`/`session_output`
+(needing the current session) and `spec is None` (the omitted default), and
+delegates the rest -- `golden`, golden object IDs, and ordinary full/short IDs --
+to the catalog-layer, session-agnostic `catalog._resolve_schedule` (a
+module-private free function; there is deliberately **no** public
+`Catalog.resolve_schedule`, whose golden-but-not-terminus behavior was an
+incomplete-magic trap).  `seed` was intentionally removed.  (The one place a
+schedule ID appears but does NOT take these magic values is the `{schedule ID}`
+*inside* a `private.` benchmark short ID, a structured sub-field parsed by
+`resolve_benchmark_short_id`, not a schedule-ID argument.)
 
 The golden object IDs have a form that will never collide with
 schedule full IDs (can't start with `golden_`)
@@ -2934,10 +2942,6 @@ This fails if:
 
     dh_hl copy_schedule -C ... {output file} [schedule ID]
 
-IMPL TASK: huge number of tools eliminated thanks to new `[schedule ID]` magic arguments.
-
-IMPL TASK: `--parameters`
-
 Copy the referenced schedule node's C++ generator to the given file.
 The optional `--parameters` value causes the
 `generator_parameters.json` to be copied instead.
@@ -3104,12 +3108,10 @@ Non-trivial when the `-s {session handle}` option is used.
     dh_hl benchmark_full_id -s ... {benchmark ID}  # No benchmark_short_id
     dh_hl commentary_full_id -C ... {commentary ID}
     dh_hl commentary_short_id -C ... {commentary ID}
-    dh_hl WarningToggle_full_id -C ... {WarningToggle ID}
-    dh_hl WarningToggle_short_id -C ... {WarningToggle ID}
+    dh_hl warning_toggle_full_id -C ... {WarningToggle ID}
+    dh_hl warning_toggle_short_id -C ... {WarningToggle ID}
     dh_hl problem_full_id -C ... {problem ID}
     dh_hl problem_short_id -C ... {problem ID}
-
-IMPL TASK: add new ones
 
 On success: print out the ID/handle with a newline, and no other `stdout` output.
 

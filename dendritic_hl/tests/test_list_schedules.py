@@ -10,7 +10,7 @@ import pytest
 
 from dendritic_hl_lib import safety, tools
 from dendritic_hl_lib.enums import Result
-from dendritic_hl_lib.catalog import Catalog
+from dendritic_hl_lib.catalog import Catalog, _resolve_schedule
 from dendritic_hl_lib.errors import DhHlError
 from conftest import ns, open_catalog
 
@@ -43,7 +43,7 @@ def _resolved_headers(cat_dir, out):
     shorts = [ln.split("Schedule: ", 1)[1]
               for ln in out.splitlines() if ln.startswith("Schedule: ")]
     cat = open_catalog(cat_dir)
-    return [cat.resolve_schedule(s).full_id for s in shorts]
+    return [_resolve_schedule(cat, s).full_id for s in shorts]
 
 
 # ---- list_child_schedules -------------------------------------------------

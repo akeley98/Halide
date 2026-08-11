@@ -171,7 +171,7 @@ def cmd_status(args):
 
 def cmd_restore_schedule(args):
     ctx = Context.for_session(args, session_lock=True)
-    node = ctx.catalog.resolve_schedule(args.schedule)
+    node = ctx.resolve_schedule(args.schedule)
     ws = ctx.workspace
     ws.ensure_private_dir()
     cis = ws.current_idea_state
@@ -223,7 +223,7 @@ def cmd_restore_idea(args):
 
 def cmd_comment(args):
     ctx = Context.for_catalog(args)
-    node = ctx.resolve_schedule_arg(args.schedule)
+    node = ctx.resolve_schedule(args.schedule)
     text = _read_file_or_stdin(args.commentary)
     # --review is a wire string on the CLI; translate to a Review member, and
     # reject MIXED (a derived schedule/idea review only, never a commentary's).
@@ -312,7 +312,7 @@ def cmd_set_idea(args):
 
 def cmd_new_idea(args):
     ctx = Context.for_session(args, session_lock=True)
-    node = ctx.resolve_schedule_arg(args.schedule)
+    node = ctx.resolve_schedule(args.schedule)
     if not node.is_major():
         raise DhHlError(_minor_schedule_advice(ctx.catalog, node))
     text = _read_file_or_stdin(args.proposal)
@@ -404,7 +404,7 @@ def cmd_force_parent_idea(args):
     ctx = Context.for_catalog(args)
     catalog = ctx.catalog
     idea = catalog.resolve_idea(args.idea)
-    node = ctx.resolve_schedule_arg(args.schedule)
+    node = ctx.resolve_schedule(args.schedule)
     if not node.is_root():
         raise DhHlError("force_parent_idea requires a root schedule node")
     if idea.canonical is not None:
@@ -429,7 +429,7 @@ def cmd_force_parent_idea(args):
 
 def cmd_list_child_ideas(args):
     ctx = Context.for_catalog(args)
-    node = ctx.resolve_schedule_arg(args.schedule)
+    node = ctx.resolve_schedule(args.schedule)
     if not node.is_major():
         raise DhHlError("schedule node is not a major schedule")
     ideas = ctx.catalog.child_ideas(node)
@@ -524,7 +524,7 @@ def _print_schedule_node(ctx, node, marked_idea_id=None):
 
 def cmd_history(args):
     ctx = Context.for_catalog(args)
-    node = ctx.resolve_schedule_arg(args.schedule)
+    node = ctx.resolve_schedule(args.schedule)
     prev_idea_id = None  # the idea whose parent is the previously printed sched
     while node is not None:
         _print_schedule_node(ctx, node, marked_idea_id=prev_idea_id)
@@ -563,7 +563,7 @@ def _session_root_schedule(catalog, seed_idea_ids, node):
 def cmd_root_of(args):
     # Does not acquire the session lock (idea.md).
     ctx = Context.for_catalog(args)
-    node = ctx.resolve_schedule_arg(args.schedule)
+    node = ctx.resolve_schedule(args.schedule)
     root = ctx.catalog.schedule_path_to_root(node)[-1]
     print(ctx.catalog.format_schedule_id(root))
 
@@ -571,7 +571,7 @@ def cmd_root_of(args):
 def cmd_session_root_of(args):
     # Does not acquire the session lock (idea.md).
     ctx = Context.for_session(args, session_lock=False)
-    node = ctx.resolve_schedule_arg(args.schedule)
+    node = ctx.resolve_schedule(args.schedule)
     root = _session_root_schedule(ctx.catalog, ctx.session.seed_idea_ids, node)
     if root is None:
         raise DhHlError(
@@ -596,7 +596,7 @@ def _print_schedule_list(ctx, nodes):
 
 def cmd_list_sibling_schedules(args):
     ctx = Context.for_catalog(args)
-    node = ctx.resolve_schedule_arg(args.schedule)
+    node = ctx.resolve_schedule(args.schedule)
     if node.is_root():
         raise DhHlError(
             "list_sibling_schedules needs a non-root schedule; a root node has "
@@ -612,7 +612,7 @@ def cmd_list_child_schedules(args):
 
 def cmd_list_equal_schedules(args):
     ctx = Context.for_catalog(args)
-    node = ctx.resolve_schedule_arg(args.schedule)
+    node = ctx.resolve_schedule(args.schedule)
     equal = [n for n in ctx.catalog.schedules.values() if n.hash == node.hash]
     _print_schedule_list(ctx, equal)
 
@@ -705,7 +705,7 @@ def _session_json(catalog, session):
 
 def cmd_view_generator_parameters(args):
     ctx = Context.for_catalog(args)
-    node = ctx.resolve_schedule_arg(args.schedule)
+    node = ctx.resolve_schedule(args.schedule)
     # One line per parameters object: "{index} {JSON object as one line}".
     for i, obj in enumerate(node.parameters):
         print("{} {}".format(i, json.dumps(obj, sort_keys=True)))
@@ -713,7 +713,7 @@ def cmd_view_generator_parameters(args):
 
 def cmd_json_schedule_info(args):
     ctx = Context.for_catalog(args)
-    node = ctx.resolve_schedule_arg(args.schedule)
+    node = ctx.resolve_schedule(args.schedule)
     print(json.dumps(_schedule_json(ctx.catalog, node), indent=1))
 
 
@@ -765,7 +765,9 @@ def _resolve_anchor_arg(ctx, spec):
         return current
     if spec == "auto":
         return current
-    return ctx.catalog.resolve_schedule(spec).full_id
+    # Route through ctx.resolve_schedule so the magic [schedule ID] values
+    # (terminus/session_output/golden) resolve here too.
+    return ctx.resolve_schedule(spec).full_id
 
 
 def _confidence_arg(args):
@@ -836,7 +838,7 @@ def _warn_no_cost_batches(ctx, private_sets, problem_id, first, second,
 def cmd_json_ranking_cost(args):
     # Reads the private benchmark set list (private workspace) -> session lock.
     ctx = Context.for_session(args, session_lock=True)
-    node = ctx.resolve_schedule_arg(args.schedule)
+    node = ctx.resolve_schedule(args.schedule)
     anchor_spec = getattr(args, "anchor", None)
     anchor_id = _resolve_anchor_arg(ctx, anchor_spec)
     problem_id = _cost_problem_id(ctx, getattr(args, "problem", None))
@@ -863,10 +865,10 @@ def cmd_json_ranking_cost(args):
 
 def cmd_json_compare_cost(args):
     ctx = Context.for_session(args, session_lock=True)
-    lhs = ctx.resolve_schedule_arg(getattr(args, "lhs", None))
+    lhs = ctx.resolve_schedule(getattr(args, "lhs", None))
     rhs_spec = getattr(args, "rhs", None)
     if rhs_spec is not None:
-        rhs = ctx.catalog.resolve_schedule(rhs_spec)
+        rhs = ctx.resolve_schedule(rhs_spec)
     else:
         # Default RHS: the parent schedule of the LHS's parent idea (idea.md).
         if lhs.is_root():
@@ -930,7 +932,7 @@ def _reachable_benchmarks_by_param(catalog, private_sets, sched_id,
 
 def cmd_json_profiler_stats(args):
     ctx = Context.for_session(args, session_lock=True)
-    node = ctx.resolve_schedule_arg(args.schedule)
+    node = ctx.resolve_schedule(args.schedule)
     problem_id = _cost_problem_id(ctx, getattr(args, "problem", None))
     reachable = _reachable_benchmarks_by_param(
         ctx.catalog, ctx.workspace.read_private_benchmark_sets(), node.full_id,
@@ -1135,8 +1137,8 @@ def _resolve_schedule_list(ctx, schedule_args):
     """Resolve a `[schedule IDs...]` list; an empty list falls back to the
     default single [schedule ID] (the unambiguous workspace node)."""
     if not schedule_args:
-        return [ctx.resolve_schedule_arg(None)]
-    return [ctx.catalog.resolve_schedule(s) for s in schedule_args]
+        return [ctx.resolve_schedule(None)]
+    return [ctx.resolve_schedule(s) for s in schedule_args]
 
 
 def cmd_new_sub_session(args):
@@ -1320,7 +1322,7 @@ def should_accept_failures(ctx, node):
 def cmd_should_accept(args):
     # Read-only (private benchmark sets + bin/), so no session lock -- like status.
     ctx = Context.for_session(args, session_lock=False)
-    node = ctx.resolve_schedule_arg(getattr(args, "schedule", None))
+    node = ctx.resolve_schedule(getattr(args, "schedule", None))
     failures = should_accept_failures(ctx, node)
     print("schedule: " + ctx.catalog.format_schedule_id(node))
     if not failures:
@@ -1738,7 +1740,7 @@ def cmd_set_current_anchor(args):
         ctx.finish()
         print("Cleared current anchor")
         return
-    node = ctx.resolve_schedule_arg(spec)
+    node = ctx.resolve_schedule(spec)
     ws.set_current_anchor(node.full_id)
     ctx.finish()
     print("Set current anchor to " + ctx.catalog.format_schedule_id(node))
@@ -1774,33 +1776,7 @@ def cmd_list_termini(args):
         _print_session_line(catalog, s)
 
 
-# ---- copy / id-of schedule nouns ------------------------------------------
-
-def _the_terminus_output(catalog):
-    termini = [s for s in catalog.sessions.values()
-               if catalog.session_is_terminus(s)]
-    if len(termini) != 1:
-        raise DhHlError(
-            "expected exactly one terminus, found {}".format(len(termini)))
-    term = termini[0]
-    if term.output_schedule_id is None:
-        raise DhHlError("the terminus session has no output schedule")
-    return catalog.get_schedule(term.output_schedule_id)
-
-
-def _session_seed_schedule(ctx):
-    idea = ctx.catalog.get_idea(ctx.session.seed_idea_id)
-    if idea.canonical is None:
-        raise DhHlError("the session's seed idea has no canonical schedule")
-    return ctx.catalog.get_schedule(idea.canonical)
-
-
-def _session_output_schedule(ctx):
-    sid = ctx.session.output_schedule_id
-    if sid is None:
-        raise DhHlError("the current session has no output schedule yet")
-    return ctx.catalog.get_schedule(sid)
-
+# ---- copy schedule --------------------------------------------------------
 
 def _write_output(path, text):
     """Write a schedule's C++ to *path*; '-' means stdout."""
@@ -1813,52 +1789,9 @@ def _write_output(path, text):
 
 def cmd_copy_schedule(args):
     ctx = Context.for_catalog(args)
-    _write_output(args.output, ctx.resolve_schedule_arg(args.schedule).source)
-
-
-def cmd_copy_terminus_schedule(args):
-    ctx = Context.for_catalog(args)
-    _write_output(args.output, _the_terminus_output(ctx.catalog).source)
-
-
-def cmd_copy_seed_schedule(args):
-    ctx = Context.for_session(args, session_lock=False)
-    _write_output(args.output, _session_seed_schedule(ctx).source)
-
-
-def cmd_copy_session_output(args):
-    ctx = Context.for_session(args, session_lock=False)
-    _write_output(args.output, _session_output_schedule(ctx).source)
-
-
-def cmd_terminus_schedule_full_id(args):
-    ctx = Context.for_catalog(args)
-    print(_the_terminus_output(ctx.catalog).full_id)
-
-
-def cmd_terminus_schedule_short_id(args):
-    ctx = Context.for_catalog(args)
-    print(ctx.catalog.format_schedule_id(_the_terminus_output(ctx.catalog)))
-
-
-def cmd_seed_schedule_full_id(args):
-    ctx = Context.for_session(args, session_lock=False)
-    print(_session_seed_schedule(ctx).full_id)
-
-
-def cmd_seed_schedule_short_id(args):
-    ctx = Context.for_session(args, session_lock=False)
-    print(ctx.catalog.format_schedule_id(_session_seed_schedule(ctx)))
-
-
-def cmd_session_output_full_id(args):
-    ctx = Context.for_session(args, session_lock=False)
-    print(_session_output_schedule(ctx).full_id)
-
-
-def cmd_session_output_short_id(args):
-    ctx = Context.for_session(args, session_lock=False)
-    print(ctx.catalog.format_schedule_id(_session_output_schedule(ctx)))
+    node = ctx.resolve_schedule(args.schedule)
+    text = node.params_text if getattr(args, "parameters", False) else node.source
+    _write_output(args.output, text)
 
 
 # ---- workspace location ---------------------------------------------------
@@ -1894,12 +1827,12 @@ def cmd_catalog_location(args):
 
 def cmd_schedule_full_id(args):
     ctx = Context.for_catalog(args)
-    print(ctx.resolve_schedule_arg(args.schedule).full_id)
+    print(ctx.resolve_schedule(args.schedule).full_id)
 
 
 def cmd_schedule_short_id(args):
     ctx = Context.for_catalog(args)
-    print(ctx.catalog.format_schedule_id(ctx.resolve_schedule_arg(args.schedule)))
+    print(ctx.catalog.format_schedule_id(ctx.resolve_schedule(args.schedule)))
 
 
 def cmd_idea_full_id(args):
@@ -1987,7 +1920,7 @@ def cmd_view_commentary(args):
 
 def cmd_view_all_commentary(args):
     ctx = Context.for_catalog(args)
-    _print_all_commentary(ctx.catalog, ctx.resolve_schedule_arg(args.schedule),
+    _print_all_commentary(ctx.catalog, ctx.resolve_schedule(args.schedule),
                           brief=bool(getattr(args, "brief", False)))
 
 
@@ -2024,7 +1957,7 @@ def _sorted_toggles(toggles):
 def cmd_add_warning_toggle(args):
     ctx = Context.for_catalog(args)
     catalog = ctx.catalog
-    node = catalog.resolve_schedule(args.schedule)
+    node = ctx.resolve_schedule(args.schedule)
     citation = catalog.resolve_commentary(args.commentary).full_id
 
     block = getattr(args, "block", None)
@@ -2050,7 +1983,7 @@ def cmd_add_warning_toggle(args):
 def cmd_debug_warning_toggle(args):
     ctx = Context.for_catalog(args)
     catalog = ctx.catalog
-    node = ctx.resolve_schedule_arg(args.schedule)
+    node = ctx.resolve_schedule(args.schedule)
     toggles, cancelled_ids = catalog.warning_toggle_state(node)
 
     block = getattr(args, "block", None)
@@ -2182,7 +2115,7 @@ def cmd_new_golden(args):
     if spec == "none":
         schedule_id = None
     else:
-        node = ctx.resolve_schedule_arg(spec)
+        node = ctx.resolve_schedule(spec)
         # A golden schedule must be *satisfiable*: its algorithm hlpipe (from the
         # 0th generator parameters object) must already be built in THIS session,
         # otherwise no future golden check could ever pass against it (idea.md
@@ -2313,3 +2246,25 @@ def cmd_problem_short_id(args):
     ctx = Context.for_catalog(args)
     print(ctx.catalog.format_problem_id(
         ctx.catalog.resolve_problem(args.problem)))
+
+
+def cmd_commentary_full_id(args):
+    ctx = Context.for_catalog(args)
+    print(ctx.catalog.resolve_commentary(args.commentary).full_id)
+
+
+def cmd_commentary_short_id(args):
+    ctx = Context.for_catalog(args)
+    print(ctx.catalog.format_commentary_id(
+        ctx.catalog.resolve_commentary(args.commentary)))
+
+
+def cmd_warning_toggle_full_id(args):
+    ctx = Context.for_catalog(args)
+    print(ctx.catalog.resolve_warning_toggle(args.warning_toggle).full_id)
+
+
+def cmd_warning_toggle_short_id(args):
+    ctx = Context.for_catalog(args)
+    print(ctx.catalog.format_warning_toggle_id(
+        ctx.catalog.resolve_warning_toggle(args.warning_toggle)))

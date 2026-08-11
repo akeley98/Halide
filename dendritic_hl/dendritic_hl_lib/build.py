@@ -457,9 +457,10 @@ def _node_entry(catalog, role, node):
 
 
 def _resolve_target(ctx, spec):
-    """Resolve --target: an explicit schedule ID, or the special `workspace`."""
+    """Resolve --target: an explicit schedule ID (magic values included), or
+    the special `workspace`."""
     if spec != "workspace":
-        return ctx.catalog.resolve_schedule(spec)
+        return ctx.resolve_schedule(spec)
     unamb = ctx.unambiguous_schedule()
     if unamb is not None:
         return unamb
@@ -493,7 +494,7 @@ def _resolve_other(ctx, spec, target):
         if idea is None:
             return None
         return idea.parent_schedule()
-    return ctx.catalog.resolve_schedule(spec)
+    return ctx.resolve_schedule(spec)
 
 
 def _resolve_anchor(ctx, spec):
@@ -511,7 +512,7 @@ def _resolve_anchor(ctx, spec):
                     "(set one with `dh_hl set_current_anchor`)")
             return None
         return ctx.catalog.get_schedule(anchor_id)
-    return ctx.catalog.resolve_schedule(spec)
+    return ctx.resolve_schedule(spec)
 
 
 def cmd_init_build(args):
@@ -988,7 +989,7 @@ def cmd_copy_build_output(args):
     # Reads the session's private bin/ (built outputs) + resolves the schedule.
     # Read-only, so it does NOT take the session lock (like `status`).
     ctx = Context.for_session(args, session_lock=False)
-    node = ctx.resolve_schedule_arg(getattr(args, "schedule", None))
+    node = ctx.resolve_schedule(getattr(args, "schedule", None))
     what = args.what
     idx = _copy_output_params_index(
         len(node.parameters), what, getattr(args, "parameters", None))

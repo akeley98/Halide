@@ -40,10 +40,10 @@ def test_help_renders_full_idea_section(capsys):
 
 def test_help_multi_command_family_shows_whole_section(capsys):
     # A command in a multi-command section renders the whole family.
-    main.cmd_help(types.SimpleNamespace(topic="session_output_full_id"))
+    main.cmd_help(types.SimpleNamespace(topic="commentary_full_id"))
     out = capsys.readouterr().out
-    assert "Copy Schedule, ID-of Schedule Tools" in out
-    assert "dh_hl copy_schedule" in out  # sibling commands are visible
+    assert "### ID Translation Tools" in out
+    assert "dh_hl schedule_full_id" in out  # sibling commands are visible
 
 
 def test_help_strips_maintainer_only_lines(capsys):
