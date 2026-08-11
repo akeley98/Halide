@@ -42,7 +42,7 @@ from .catalog import (Catalog, PROBLEM_LIB, PROBLEM_RUNGENMAIN, best_result,
                       canonical_block_advice, validate_parameters)
 from .context import Context, SessionWorkspace, resolve_target
 from .enums import Result
-from .errors import DhHlError, HarnessError
+from .errors import DhHlError, HalideBuildError
 from . import ninja_syntax
 
 # ---- Halide location (magic constants; see impl.md FUTURE notes) -----------
@@ -224,7 +224,7 @@ def _ninja_build(bin_dir, ninja_path, targets):
 
 def _discover_generator_name(bin_dir, gen_exe):
     """Run *gen_exe* with no -g and scrape the single registered name.
-    Raises HarnessError if the count isn't exactly one."""
+    Raises HalideBuildError if the count isn't exactly one."""
     rc, out = _run_capture(["./" + gen_exe], cwd=bin_dir)
     names = []
     lines = out.splitlines()
@@ -237,7 +237,7 @@ def _discover_generator_name(bin_dir, gen_exe):
                     break
             break
     if len(names) != 1:
-        raise HarnessError(
+        raise HalideBuildError(
             "expected exactly one registered generator (single-generator "
             "assumption), found {}: {}".format(len(names), names))
     return names[0]
@@ -588,7 +588,7 @@ class _NodeBuild:
         with open(self.params_path, "r", encoding="utf-8") as f:
             self.params = validate_parameters(json.load(f))
         if not self.params:
-            raise HarnessError(
+            raise HalideBuildError(
                 "schedule node {} has 0 generator parameters objects; nothing "
                 "to build".format(self.full_id))
         self.cpp_ok = False
@@ -648,7 +648,7 @@ def cmd_build(args):
     # Which parameter indices to build per node.
     if only_kind == "index":
         if only_index >= len(target.params):
-            raise HarnessError(
+            raise HalideBuildError(
                 "--only {} is out of range for target's {} parameters "
                 "object(s)".format(only_index, len(target.params)))
         param_indices = {target.full_id: [only_index]}
@@ -737,7 +737,7 @@ def _compile_phase(bin_dir, nodes, param_indices):
             continue
         try:
             n.gen_name = _discover_generator_name(bin_dir, gen_exe)
-        except HarnessError as e:
+        except HalideBuildError as e:
             # Workspace-authoring problem, not a build outcome (impl.md): leave
             # the node's result untouched.
             n.harness_error = True
@@ -848,7 +848,7 @@ def _profile_phase(bin_dir, nodes, param_indices, sched, catalog, batches,
                     bench_obj = _build_benchmark_obj(
                         json_out, warnings_out, hostname, n.params[i], i,
                         problem.full_id, stdout_text, catalog.fresh_timestamp())
-                except HarnessError as e:
+                except HalideBuildError as e:
                     print("dh_hl: skipping benchmark: " + str(e), file=sys.stderr)
                     n.any_run_failed = True
                     all_ok = False
@@ -877,22 +877,22 @@ def _build_benchmark_obj(json_out, warnings_out, hostname, params,
                          parameters_index, problem_id, stdout_text, timestamp):
     # A runner can exit 0 yet emit no (or a corrupt) profiler JSON -- e.g. a
     # custom <Lib> runner that skips the profiler teardown.  That is a catalogued
-    # BAD OUTCOME, not a harness failure: raise HarnessError so the profile loop
+    # BAD OUTCOME, not a harness failure: raise HalideBuildError so the profile loop
     # catches it (skips this benchmark, keeps going), never an uncaught crash that
     # would roll back the whole build (idea.md Build Tool).
     try:
         with open(json_out, "r", encoding="utf-8") as f:
             prof = json.load(f)
     except FileNotFoundError:
-        raise HarnessError(
+        raise HalideBuildError(
             "the runner emitted no profiler JSON (expected at {})".format(
                 json_out))
     except ValueError as e:
-        raise HarnessError(
+        raise HalideBuildError(
             "the runner's profiler JSON was unparseable: {}".format(e))
     pipelines = prof.get("pipelines")
     if not isinstance(pipelines, list) or len(pipelines) != 1:
-        raise HarnessError(
+        raise HalideBuildError(
             "profiler JSON must have exactly one pipeline (got {})".format(
                 None if not isinstance(pipelines, list) else len(pipelines)))
     try:

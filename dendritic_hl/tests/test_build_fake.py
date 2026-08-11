@@ -17,7 +17,7 @@ import os
 import pytest
 
 from dendritic_hl_lib import build, tools
-from dendritic_hl_lib.errors import DhHlError, HarnessError
+from dendritic_hl_lib.errors import DhHlError, HalideBuildError
 from conftest import branch_fresh_idea, open_catalog
 
 
@@ -40,7 +40,7 @@ def fake_build(monkeypatch):
 
     def fake_discover(bin_dir, gen_exe):
         if knobs["gen_name"] is None:
-            raise HarnessError("generator count != 1 (injected)")
+            raise HalideBuildError("generator count != 1 (injected)")
         return knobs["gen_name"]
     monkeypatch.setattr(build, "_discover_generator_name", fake_discover)
 
@@ -279,7 +279,7 @@ def test_build_halide_error(session, run_tool, fake_build, capsys):
 def test_generator_count_harness_error_no_result_update(session, run_tool,
                                                         fake_build, capsys):
     _init(session, run_tool)
-    fake_build["gen_name"] = None  # discovery raises HarnessError
+    fake_build["gen_name"] = None  # discovery raises HalideBuildError
     assert _build(session, run_tool, profile=0) == 1
     # Node persists but result stays at the default (harness error, no update).
     assert _result(session, run_tool, capsys)["result"] == "unknown"

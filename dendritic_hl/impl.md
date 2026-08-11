@@ -1039,6 +1039,23 @@ the workspace, and `build` read + compile the catalog node files named by
 lock.
 
 
+### Tool Safety: Exception Safety
+
+Generally exception safety isn't so important.
+The policy is to roll back all changes anyway,
+so leaving things inconsistent isn't a big deal.
+Even file overwrites are largely safe, because they're deferred past
+all the "business logic" by the `safety` module.
+Some old code is written in a more complicated way due to exceptions,
+but in hindsight I don't think this was needed (leave this old code alone
+unless there's a reason to revisit and simplify).
+
+The major caveat to this is build tool errors.
+These are a catalogued bad outcome; the rollback does not happen.
+Hence, the `HalideBuildError` class exists to distinguish these cases,
+which require particular care.
+
+
 ### Tool Safety: Tree Structure Invariants
 
 Remember to check tree structure invariants whenever adding new edges.
@@ -1224,7 +1241,7 @@ strings.  The enums are for the closed vocabularies the model branches on.)
   machine lock, intercepts `exec`/`exec_exclusive`, dispatches, and turns
   `DhHlError` into a stderr message + exit 1.
 * `errors.py` — `DhHlError` (user-facing; exit 1, triggers rollback) and
-  `HarnessError` (subclass; build-environment problems).
+  `HalideBuildError` (subclass; build-environment problems).
 * `ids.py` — pure ID/timestamp/hash helpers for schedule, idea, and session IDs
   (`make_*_id`/`looks_like_*_id`/…, plus `sanitize_component` for session
   user/host).  See the `looks_like_*_id` naming note (Enum Policy is separate;

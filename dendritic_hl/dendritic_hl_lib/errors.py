@@ -8,6 +8,11 @@ class DhHlError(Exception):
     catalog mutation is undone."""
 
 
-class HarnessError(DhHlError):
+# Formerly HarnessError
+class HalideBuildError(DhHlError):
     """A build/environment problem that is not a normal build outcome to
-    catalogue (e.g. the single-generator assumption is violated)."""
+    catalogue (e.g. the single-generator assumption is violated).
+    These may be caught, so exception safety is more important here.
+    TODO: seems to be *some* usage of this for CLI problems, e.g.,
+    negative generator parameter index, that maybe should be DhHlError.
+    """

@@ -31,7 +31,7 @@ from . import profiler_warnings
 from . import safety
 from .enums import (COMMENTARY_REVIEWS, IdeaStateKind, ProblemState, Result,
                     Review, SideLink)
-from .errors import DhHlError, HarnessError
+from .errors import DhHlError
 
 # The profiler JSON schema version this harness understands (the `profiler_version`
 # field stamped into every pipeline object; see reference_build_commands.md and
