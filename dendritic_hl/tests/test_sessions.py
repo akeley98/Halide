@@ -10,6 +10,7 @@ import os
 import pytest
 
 from dendritic_hl_lib import ids, safety, tools
+from dendritic_hl_lib.enums import Review
 from dendritic_hl_lib.errors import DhHlError
 from conftest import ns, open_catalog, add_synthetic_benchmark_set
 
@@ -251,7 +252,7 @@ def _minor_child_of_seed(session):
     try:
         seed = cat.get_idea(cat.get_session(session.session_id).seed_idea_id)
         minor = cat.create_schedule("minor source\n", parent_idea=seed)
-        minor.add_commentary("summary\n", review="neutral")
+        minor.add_commentary("summary\n", review=Review.NEUTRAL)
         cat.flush()
         safety.commit()
         return minor.full_id

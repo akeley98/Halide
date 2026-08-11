@@ -11,7 +11,9 @@ which is a second line of defense against catastrophe.
 
 Overwrites of the small set of allowed-to-change files (workspace C++,
 current_idea_state.txt, result.txt, canonical.txt) are NOT rolled back; they
-are deferred to commit() so they happen as late as possible.
+are deferred to commit() so they happen as late as possible.  Those go through
+new_file(..., overwrite_allowed=True); everything else uses the default
+exclusive-create new_file().
 """
 
 import atexit
@@ -73,10 +75,31 @@ def makedirs_tracked(path):
         new_dir(d)
 
 
-def new_file(path, data):
-    """Create a brand-new file at *path* with exclusive ("x") mode and record
-    it for rollback.  *data* may be str (utf-8 encoded) or bytes.  The parent
-    directory must already exist (use makedirs_tracked first)."""
+def new_file(path, data, *, overwrite_allowed=False):
+    """Create a file at *path*, recording it for rollback.  *data* may be str
+    (utf-8 encoded) or bytes.  The parent directory must already exist (use
+    makedirs_tracked first).
+
+    By default the create is exclusive ("x" / O_EXCL): if *path* already exists
+    it raises FileExistsError.  This is the norm -- almost all catalog files are
+    write-once, and the O_EXCL is a hard guard against clobbering them.
+
+    Pass *overwrite_allowed=True* for the small set of allowed-to-change files
+    (workspace C++, current_idea_state.txt, result.txt, canonical.txt, problem
+    state/short_name -- see the impl.md "Tool Safety Requirements" list).  Then,
+    if *path* already exists, the overwrite is *deferred* to commit() (applied as
+    late as possible and NOT rolled back); if it is absent it is created and
+    recorded exactly as in the default case, so rollback can still remove it (and
+    rmdir the dir it lives in).  Existence is checked once; we assume no
+    concurrent changes.  overwrite_allowed=True with an absent target is thus how
+    `init_workspace --force` writes fresh workspace state, while the default
+    (overwrite_allowed=False) is how it refuses to clobber existing state."""
+    if overwrite_allowed and os.path.exists(path):
+        # Existing allowed-to-change file: defer the overwrite (not rolled back).
+        # No new file is created, so this does not count toward the test-only
+        # failure injection (that guards the rollback of *new* files).
+        queue_overwrite(path, data)
+        return
     if isinstance(data, str):
         data = data.encode("utf-8")
     # Record before writing: if the "x" create succeeds but the write dies
@@ -89,21 +112,22 @@ def new_file(path, data):
 
 
 # -- test-only failure injection --------------------------------------------
-# When DH_HL_TEST_FAIL_AFTER=<n> is set, raise after the n-th new_file this
-# run.  Lets subprocess tests prove the atexit rollback restores a partial
+# When DENDRITIC_HL_TEST_FAIL_AFTER=<n> is set, raise after the n-th new_file
+# this run.  Lets subprocess tests prove the atexit rollback restores a partial
 # mutation.  The file(s) already created remain recorded, so rollback undoes
-# them.  Guarded by the env var; a no-op in normal use.
+# them.  Guarded by the env var; a no-op in normal use.  (The DENDRITIC_HL_
+# prefix, not DH_HL_, follows the project-name-for-collisions policy in impl.md.)
 _new_file_count = 0
 
 
 def _maybe_inject_failure():
     global _new_file_count
     _new_file_count += 1
-    n = os.environ.get("DH_HL_TEST_FAIL_AFTER")
+    n = os.environ.get("DENDRITIC_HL_TEST_FAIL_AFTER")
     if n is not None and _new_file_count >= int(n):
         raise RuntimeError(
-            "DH_HL_TEST_FAIL_AFTER: injected failure after {} new file(s)"
-            .format(_new_file_count))
+            "DENDRITIC_HL_TEST_FAIL_AFTER: injected failure after {} new "
+            "file(s)".format(_new_file_count))
 
 
 def queue_overwrite(path, data):
@@ -112,22 +136,6 @@ def queue_overwrite(path, data):
     if isinstance(data, str):
         data = data.encode("utf-8")
     _pending_overwrites.append((path, data))
-
-
-def write_allowed(path, data, *, allow=True):
-    """Write one of the allowed-to-change files.  If it doesn't exist yet we
-    create it with new_file (recorded, so rollback removes it and the dir it
-    lives in can be rmdir'd).  If it exists we defer an overwrite that is NOT
-    rolled back.  Existence is checked once; we assume no concurrent changes.
-
-    *allow* (default True) permits overwriting an existing file.  When False,
-    an existing target falls through to new_file, whose O_EXCL create raises
-    FileExistsError -- this is how `init_workspace` (without --force) refuses to
-    clobber existing session workspace state."""
-    if allow and os.path.exists(path):
-        queue_overwrite(path, data)
-    else:
-        new_file(path, data)
 
 
 def commit(*, assert_no_writes=False):

@@ -9,6 +9,7 @@ import pytest
 
 from dendritic_hl_lib import catalog as catalog_mod
 from dendritic_hl_lib import safety, tools
+from dendritic_hl_lib.enums import ProblemState
 from dendritic_hl_lib.errors import DhHlError
 
 from conftest import ns, open_catalog
@@ -27,7 +28,7 @@ def _fresh_catalog(tmp_path):
 def test_create_reload_roundtrip(tmp_path, reset_safety):
     cat = _fresh_catalog(tmp_path)
     p = cat.create_problem(["<RunGenMain>", "--benchmarks=all"], "default",
-                           state="main")
+                           state=ProblemState.MAIN)
     full_id = p.full_id
     cat.flush()
     safety.commit()
@@ -35,7 +36,7 @@ def test_create_reload_roundtrip(tmp_path, reset_safety):
     cat2 = open_catalog(str(tmp_path / "proj.dh_hl"))
     q = cat2.get_problem(full_id)
     assert q.argv == ["<RunGenMain>", "--benchmarks=all"]
-    assert q.state == "main"
+    assert q.state == ProblemState.MAIN
     assert q.short_name == "default"
     # Full ID is the content hash of the canonical argv text.
     assert full_id == catalog_mod.ids.sha256_hex(
@@ -80,17 +81,17 @@ def test_short_name_validation(tmp_path, reset_safety):
 
 def test_main_uniqueness_and_transitions(tmp_path, reset_safety):
     cat = _fresh_catalog(tmp_path)
-    a = cat.create_problem(["<RunGenMain>", "1"], "a", state="main")
+    a = cat.create_problem(["<RunGenMain>", "1"], "a", state=ProblemState.MAIN)
     b = cat.create_problem(["<RunGenMain>", "2"], "b")
     cat.flush()
     safety.commit()
     assert cat.main_problem().full_id == a.full_id
 
     # Promote b -> main demotes a -> enabled.
-    b.set_state("main")
-    a.set_state("enabled")
+    b.set_state(ProblemState.MAIN)
+    a.set_state(ProblemState.ENABLED)
     assert cat.main_problem().full_id == b.full_id
-    assert a.state == "enabled"
+    assert a.state == ProblemState.ENABLED
 
 
 def test_main_problem_errors_when_absent_or_multiple(tmp_path, reset_safety):
@@ -103,9 +104,9 @@ def test_main_problem_errors_when_absent_or_multiple(tmp_path, reset_safety):
 
 def test_enabled_problems_excludes_disabled(tmp_path, reset_safety):
     cat = _fresh_catalog(tmp_path)
-    m = cat.create_problem(["<RunGenMain>", "1"], "m", state="main")
+    m = cat.create_problem(["<RunGenMain>", "1"], "m", state=ProblemState.MAIN)
     e = cat.create_problem(["<RunGenMain>", "2"], "e")
-    d = cat.create_problem(["<RunGenMain>", "3"], "d", state="disabled")
+    d = cat.create_problem(["<RunGenMain>", "3"], "d", state=ProblemState.DISABLED)
     ids_enabled = {p.full_id for p in cat.enabled_problems()}
     assert ids_enabled == {m.full_id, e.full_id}
     assert d.full_id not in ids_enabled
@@ -117,7 +118,7 @@ def test_enabled_problems_excludes_disabled(tmp_path, reset_safety):
 
 def test_resolve_main_full_and_short(tmp_path, reset_safety):
     cat = _fresh_catalog(tmp_path)
-    p = cat.create_problem(["<RunGenMain>", "1"], "solo", state="main")
+    p = cat.create_problem(["<RunGenMain>", "1"], "solo", state=ProblemState.MAIN)
     cat.flush()
     safety.commit()
     assert cat.resolve_problem("main").full_id == p.full_id
@@ -128,7 +129,7 @@ def test_resolve_main_full_and_short(tmp_path, reset_safety):
 
 def test_disabled_problem_has_no_short_id(tmp_path, reset_safety):
     cat = _fresh_catalog(tmp_path)
-    p = cat.create_problem(["<RunGenMain>", "1"], "hidden", state="disabled")
+    p = cat.create_problem(["<RunGenMain>", "1"], "hidden", state=ProblemState.DISABLED)
     # A disabled problem is not matched by problem.{name}, so it formats as full.
     assert cat.format_problem_id(p) == p.full_id
     with pytest.raises(DhHlError):
@@ -163,7 +164,7 @@ def test_malformed_or_missing_state_defaults_enabled_with_warning(
         with open(state_path, "w", encoding="utf-8") as f:
             f.write(corrupt + "\n")
     cat2 = open_catalog(str(tmp_path / "proj.dh_hl"))
-    assert cat2.get_problem(p.full_id).state == "enabled"
+    assert cat2.get_problem(p.full_id).state == ProblemState.ENABLED
     assert "malformed problem state" in capsys.readouterr().err
 
 

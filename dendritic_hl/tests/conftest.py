@@ -110,6 +110,7 @@ def make_catalog_session(cat_dir, source=DUMMY_SOURCE, idea_name="seed"):
     from dendritic_hl_lib.context import SessionWorkspace
     locks._fake_hold_for_tests(cat_dir)
     try:
+        from dendritic_hl_lib.enums import IdeaStateKind, ProblemState
         cat = Catalog(cat_dir)
         cat.ensure_created()
         root = cat.create_schedule(source, parent_idea=None)
@@ -118,7 +119,7 @@ def make_catalog_session(cat_dir, source=DUMMY_SOURCE, idea_name="seed"):
         idea.set_canonical(dup.full_id)
         sess = cat.create_session(idea, None, 0)
         ws = SessionWorkspace(cat.catalog_dir, sess.full_id, catalog=cat)
-        ws.initialize(source, ("idea", idea.full_id))
+        ws.initialize(source, (IdeaStateKind.IDEA, idea.full_id))
         # Mimic init_workspace: the seed idea is in the private idea list with
         # pool tag "default", so new_idea on its canonical inherits a tag.
         ws.set_pool_tag(idea.full_id, "default")
@@ -126,7 +127,7 @@ def make_catalog_session(cat_dir, source=DUMMY_SOURCE, idea_name="seed"):
         # profiling has a problem to run (idea.md "New Catalog Tool").
         cat.create_problem(
             ["<RunGenMain>", "--benchmarks=all", "--estimate_all"],
-            "default", state="main")
+            "default", state=ProblemState.MAIN)
         cat.flush()
         safety.commit()
         return cat.catalog_dir, sess.full_id

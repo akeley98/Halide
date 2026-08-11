@@ -57,18 +57,18 @@ def test_rollback_swallows_nonempty_dir(reset_safety, tmp_path):
     assert os.path.isdir(d)  # left intact because it wasn't empty
 
 
-def test_write_allowed_new_then_overwrite(reset_safety, tmp_path):
+def test_new_file_overwrite_allowed_new_then_overwrite(reset_safety, tmp_path):
     s = reset_safety
     p = str(tmp_path / "result.txt")
-    # First write: file absent -> created via new_file (rollback-eligible).
-    s.write_allowed(p, "success\n")
+    # First write: file absent -> exclusive create (rollback-eligible).
+    s.new_file(p, "success\n", overwrite_allowed=True)
     assert ("file", p) in s._new_entries
     assert os.path.exists(p)
     s.commit()  # clears entries; keeps file
     assert os.path.exists(p)
     assert s._new_entries == []
     # Second write: file present -> deferred overwrite, NOT recorded.
-    s.write_allowed(p, "halide error\n")
+    s.new_file(p, "halide error\n", overwrite_allowed=True)
     assert s._new_entries == []
     assert open(p).read() == "success\n"      # not yet applied
     s.commit()

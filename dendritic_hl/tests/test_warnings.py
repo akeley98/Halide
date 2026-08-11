@@ -17,6 +17,7 @@ import json
 import pytest
 
 from dendritic_hl_lib import build, ids, profiler_warnings, safety, tools
+from dendritic_hl_lib.enums import Result
 from dendritic_hl_lib.errors import DhHlError
 from conftest import ns, open_catalog, make_catalog_session, Sess
 
@@ -73,7 +74,7 @@ def _tricky_catalog(tmp_path):
     Ca = cat.create_schedule("ca", parent_idea=I)
     Cb = cat.create_schedule("cb", parent_idea=I)
     for c in (Ca, Cb):
-        c.set_result("success")
+        c.set_result(Result.SUCCESS)
     I.set_canonical(Ca.full_id)
 
     c_root = R.add_commentary("hist_rows is intentionally scalar; ignore.\n")
@@ -258,7 +259,7 @@ def _catalog_with_benchmark(tmp_path, with_block=False):
     cat = open_catalog(cat_dir)
     cat.ensure_created()
     R = cat.create_schedule("root", parent_idea=None)
-    R.set_result("success")
+    R.set_result(Result.SUCCESS)
     data = {"hostname": "Testbox", "cpu_count": 4, "parameters": {},
             "profiler": {"name": "p"}, "warnings": _bench_warnings()}
     bench = R.add_benchmark("Testbox", data)

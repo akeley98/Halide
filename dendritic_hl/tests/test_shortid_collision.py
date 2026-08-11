@@ -27,7 +27,7 @@ def _skeleton(tmp_path):
 def _make_root(cat_dir, ts, h):
     """Write a valid root schedule node on disk with a chosen hash *h*."""
     sid = ids.make_schedule_id(ts, h)
-    assert ids.is_schedule_id(sid)
+    assert ids.looks_like_schedule_id(sid)
     d = os.path.join(cat_dir, "sch", sid)
     os.makedirs(d)
     with open(os.path.join(d, "generator.cpp"), "w") as f:
@@ -90,6 +90,6 @@ def test_identical_hash_falls_back_to_full_id(tmp_path):
     cat = open_catalog(cat_dir)
     short1 = cat.format_schedule_id(cat.schedules[s1])
     assert short1 == s1                     # gave up on a short form
-    assert ids.is_schedule_id(short1)
+    assert ids.looks_like_schedule_id(short1)
     assert "." not in short1                # a full ID, not a short one
     assert cat.resolve_schedule(short1).full_id == s1

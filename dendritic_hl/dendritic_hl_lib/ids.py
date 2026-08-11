@@ -5,6 +5,18 @@ human/agent-facing form; they are *resolved* against a catalog (see catalog.py)
 rather than parsed in isolation, because a short ID only has meaning relative to
 the set of nodes that currently exist.
 
+**`looks_like_*_id` naming (important).**  The predicates here are named
+`looks_like_<kind>_id`, NOT `is_<kind>_id`, on purpose.  They test only whether a
+string has the *syntactic shape* of that kind of ID -- length, separators,
+character classes.  They do NOT prove the ID names a real object, and, crucially,
+**the per-kind shapes are not disjoint**: a commentary local ID has the exact
+shape of a schedule full ID; a benchmark local ID has the exact shape of a
+benchmark set full ID; a problem full ID is just a 64-char hash.  So a true
+`looks_like_schedule_id(x)` does not mean `x` is a schedule, and you cannot
+dispatch on "which kind is this ID?" by trying these in turn -- more than one can
+match the same string.  Kind is determined by *where* an ID is used/stored, not by
+its shape.  The `looks_like_` name is the standing reminder of both caveats.
+
 Formats (see idea.md):
 
 * Timestamp: strftime("%Y-%m-%dT%H%M%S_%fZ") in UTC, e.g. 2026-07-14T153045_123456Z
@@ -75,7 +87,7 @@ def make_schedule_id(timestamp, source_hash):
     return "{}_{}".format(timestamp, source_hash)
 
 
-def is_schedule_id(full_id):
+def looks_like_schedule_id(full_id):
     if len(full_id) != SCHEDULE_ID_LEN:
         return False
     ts, sep, h = full_id[:TIMESTAMP_LEN], full_id[TIMESTAMP_LEN], full_id[TIMESTAMP_LEN + 1:]
@@ -96,7 +108,7 @@ def make_idea_id(proposal_name, parent_schedule_id):
     return "{}_{}".format(proposal_name, parent_schedule_id)
 
 
-def is_idea_id(full_id):
+def looks_like_idea_id(full_id):
     # Idea ID = proposal_name + "_" + schedule_id(90).  Split off the fixed-width
     # tail; the char just before it must be the joining underscore.
     if len(full_id) < 1 + 1 + SCHEDULE_ID_LEN:
@@ -104,7 +116,7 @@ def is_idea_id(full_id):
     parent = full_id[-SCHEDULE_ID_LEN:]
     sep = full_id[-SCHEDULE_ID_LEN - 1]
     proposal = full_id[:-SCHEDULE_ID_LEN - 1]
-    return sep == "_" and is_schedule_id(parent) and is_proposal_name(proposal)
+    return sep == "_" and looks_like_schedule_id(parent) and is_proposal_name(proposal)
 
 
 def idea_proposal_name(full_id):
@@ -128,13 +140,13 @@ def make_warning_toggle_id(schedule_id, timestamp):
     return "{}_{}".format(schedule_id, timestamp)
 
 
-def is_warning_toggle_id(full_id):
+def looks_like_warning_toggle_id(full_id):
     if len(full_id) != WARNING_TOGGLE_ID_LEN:
         return False
     sched = full_id[:SCHEDULE_ID_LEN]
     sep = full_id[SCHEDULE_ID_LEN]
     ts = full_id[SCHEDULE_ID_LEN + 1:]
-    return sep == "_" and is_schedule_id(sched) and is_timestamp(ts)
+    return sep == "_" and looks_like_schedule_id(sched) and is_timestamp(ts)
 
 
 def warning_toggle_schedule_id(full_id):
@@ -162,7 +174,7 @@ def benchmark_local_id(hostname, timestamp):
     return "{}_{}".format(hostname, timestamp)
 
 
-def is_benchmark_local_id(local):
+def looks_like_benchmark_local_id(local):
     # "{hostname}_{timestamp}": strip the fixed-width timestamp tail; the char
     # before it must be '_', and the remaining hostname must be nonempty and
     # match the sanitized alphabet.
@@ -175,13 +187,13 @@ def is_benchmark_local_id(local):
             and re.match(r"[A-Za-z0-9_-]+\Z", host) is not None)
 
 
-def is_benchmark_id(full_id):
+def looks_like_benchmark_id(full_id):
     if len(full_id) < SCHEDULE_ID_LEN + 1:
         return False
     sched = full_id[:SCHEDULE_ID_LEN]
     sep = full_id[SCHEDULE_ID_LEN]
     local = full_id[SCHEDULE_ID_LEN + 1:]
-    return sep == "_" and is_schedule_id(sched) and is_benchmark_local_id(local)
+    return sep == "_" and looks_like_schedule_id(sched) and looks_like_benchmark_local_id(local)
 
 
 def benchmark_schedule_id(full_id):
@@ -225,7 +237,7 @@ def is_problem_short_name(s):
     return bool(_PROBLEM_SHORT_NAME_RE.match(s))
 
 
-def is_problem_id(full_id):
+def looks_like_problem_id(full_id):
     """A problem full ID is exactly the 64-char lowercase-hex content hash."""
     return is_hash(full_id)
 
@@ -234,7 +246,7 @@ def make_benchmark_set_id(hostname, timestamp):
     return "{}_{}".format(hostname, timestamp)
 
 
-def is_benchmark_set_id(full_id):
+def looks_like_benchmark_set_id(full_id):
     # "{hostname}_{timestamp}": strip the fixed-width timestamp tail; the char
     # before it must be '_', and the hostname must match the sanitized alphabet.
     if len(full_id) < 1 + 1 + TIMESTAMP_LEN:
@@ -308,7 +320,7 @@ def make_session_id(depth, timestamp, username, hostname):
                                   sanitize_component(hostname))
 
 
-def is_session_id(full_id):
+def looks_like_session_id(full_id):
     return bool(_SESSION_ID_RE.match(full_id))
 
 

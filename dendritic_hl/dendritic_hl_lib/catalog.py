@@ -12,8 +12,9 @@ TODO update for session changes.
   Catalog's dirty set; nothing dirties anything recursively.
 * Catalog.flush() calls each dirty object's single flush().  The physical
   ordering "all new files created before any existing file is overwritten" is
-  NOT provided by flush() -- it is guaranteed by the safety module: new_file
-  writes immediately, while write_allowed/queue_overwrite defer the overwrite to
+  NOT provided by flush() -- it is guaranteed by the safety module: an exclusive
+  new_file writes immediately, while new_file(overwrite_allowed=True)/
+  queue_overwrite defer the overwrite to
   safety.commit(), which Context.finish() runs strictly after the whole flush
   loop.  So flush() may create + queue in any object order safely (each on-disk
   file is owned by exactly one object, so there is never a cross-object race).
@@ -28,6 +29,8 @@ from . import ids
 from . import locks
 from . import profiler_warnings
 from . import safety
+from .enums import (COMMENTARY_REVIEWS, IdeaStateKind, ProblemState, Result,
+                    Review, SideLink)
 from .errors import DhHlError, HarnessError
 
 # The profiler JSON schema version this harness understands (the `profiler_version`
@@ -57,25 +60,19 @@ _UNLOADED = object()
 # Sub-objects
 # ---------------------------------------------------------------------------
 
-# The review value of a single commentary (idea.md "Commentary State").  A
-# schedule node's *derived* review may additionally be "mixed" (positive AND
-# negative present), but "mixed" is never a value a single commentary carries.
-COMMENTARY_REVIEWS = ("neutral", "negative", "positive", "lost_interest")
-
-# The two directional idea-side-link types (idea.md "Idea Node State").
-IDEA_SIDE_LINK_TYPES = ("borrows_from", "superseded_by")
-
-# Schedule node result states, worst -> best (idea.md "Schedule Node State").
-# The absence of result.txt reads as the worst value, "unknown".  "success"
-# means every Halide binary was BUILT (the generators emitted); whether a runner
-# then executes is a per-problem benchmark fact, not a node result state.
-RESULT_STATES = ("unknown", "c++ error", "halide error", "success")
-RESULT_RANK = {state: i for i, state in enumerate(RESULT_STATES)}
+# The enum-valued vocabularies (Review, SideLink, Result, ProblemState,
+# IdeaStateKind) now live in enums.py; COMMENTARY_REVIEWS (the subset of Review a
+# single commentary may carry) is re-exported from there.  Result members are
+# declared worst -> best, so their definition order is the ranking below.
+_RESULT_RANK = {state: i for i, state in enumerate(Result)}
 
 
 def best_result(a, b):
-    """The better (higher-ranked) of two result states."""
-    return a if RESULT_RANK[a] >= RESULT_RANK[b] else b
+    """The better (higher-ranked) of two Result members (idea.md "Schedule Node
+    State").  "success" means every Halide binary was BUILT (the generators
+    emitted); whether a runner then executes is a per-problem benchmark fact, not
+    a node result state."""
+    return a if _RESULT_RANK[a] >= _RESULT_RANK[b] else b
 
 
 def canonical_block_advice(catalog, canonical_id):
@@ -147,10 +144,9 @@ def load_parameters_text(text):
 # Problem objects (idea.md "Problem Object State")
 # ---------------------------------------------------------------------------
 
-# A problem object's tri-state enablement (idea.md).  "main" is the single
-# default problem for cost tools; "enabled" problems (which includes the main)
-# are the ones tested by default.
-PROBLEM_STATES = ("enabled", "disabled", "main")
+# A problem object's tri-state enablement is the ProblemState enum (enums.py):
+# MAIN is the single default problem for cost tools; ENABLED problems (which
+# includes the main) are the ones tested by default.
 
 # Special placeholder tokens allowed in a problem's argv (idea.md "New Problem
 # Tool").  <RunGenMain> (only as argv[0]) links a standalone RunGenMain binary;
@@ -244,7 +240,12 @@ class Commentary:
         with open(self.path, "r", encoding="utf-8") as f:
             obj = json.load(f)
         self._text = obj.get("text", "")
-        self._review = obj.get("review", "neutral")
+        # Lenient parse: an unknown/garbage review on disk degrades to NEUTRAL
+        # (it simply doesn't count toward the derived review) rather than raising.
+        try:
+            self._review = Review(obj.get("review", "neutral"))
+        except ValueError:
+            self._review = Review.NEUTRAL
         self._cancels = list(obj.get("cancels", []))
         self._loaded = True
 
@@ -265,7 +266,7 @@ class Commentary:
 
     def flush(self):
         safety.makedirs_tracked(self.schedule.comment_dir)
-        obj = {"text": self.text, "review": self.review,
+        obj = {"text": self.text, "review": self.review.value,
                "cancels": list(self.cancels)}
         safety.new_file(self.path, json.dumps(obj, indent=1) + "\n")
 
@@ -483,7 +484,7 @@ class Problem:
     mutable (both in the safety module's overwrite-allowed list)."""
 
     def __init__(self, catalog, full_id, is_new=False, argv=None,
-                 state="enabled", short_name=None):
+                 state=ProblemState.ENABLED, short_name=None):
         self.catalog = catalog
         self.full_id = full_id
         self._argv = argv if argv is not None else _UNLOADED
@@ -519,14 +520,14 @@ class Problem:
                     v = f.read().strip()
             except FileNotFoundError:
                 v = None
-            if v in PROBLEM_STATES:
-                self._state = v
-            else:
+            try:
+                self._state = ProblemState(v)
+            except ValueError:
                 shown = "missing" if v is None else repr(v)
                 print("dh_hl: warning: malformed problem state {} in {}; "
                       "treating as 'enabled'".format(shown, self.full_id),
                       file=sys.stderr)
-                self._state = "enabled"
+                self._state = ProblemState.ENABLED
         return self._state
 
     @property
@@ -541,12 +542,14 @@ class Problem:
         return self._short_name
 
     def is_enabled(self):
-        return self.state in ("enabled", "main")
+        return self.state in (ProblemState.ENABLED, ProblemState.MAIN)
 
     def set_state(self, value):
-        assert value in PROBLEM_STATES
-        if self.state == value:
-            return
+        # Unconditional dirty (no "skip if unchanged" short-circuit): every other
+        # setter in the model works this way, and comparing against the current
+        # value would refuse to heal a malformed state.txt that happens to resolve
+        # to the same default (see "A cautionary tale" in Tool Internal Design).
+        assert isinstance(value, ProblemState)
         self._state = value
         self._state_dirty = True
         self.catalog._mark_dirty(self)
@@ -556,8 +559,6 @@ class Problem:
             raise DhHlError(
                 "problem short name must be 1+ chars of [A-Za-z0-9_]: "
                 + repr(value))
-        if self.short_name == value:
-            return
         self._short_name = value
         self._short_name_dirty = True
         self.catalog._mark_dirty(self)
@@ -566,18 +567,19 @@ class Problem:
         # argv.json is immutable (it is the hash preimage), so it is written once
         # at creation.  state.txt / short_name.txt are the mutable files: a new
         # problem writes both, an existing one writes only what a setter dirtied.
-        # write_allowed handles both cases (new_file when absent, deferred
-        # overwrite when present), so there is one write path, not two.
+        # new_file(overwrite_allowed=True) handles both cases (exclusive create
+        # when absent, deferred overwrite when present), so there is one write
+        # path, not two.
         if self.is_new:
             safety.makedirs_tracked(self.dir)
             safety.new_file(os.path.join(self.dir, "argv.json"),
                             dump_problem_argv(self._argv))
         if self.is_new or self._state_dirty:
-            safety.write_allowed(os.path.join(self.dir, "state.txt"),
-                                 self._state + "\n")
+            safety.new_file(os.path.join(self.dir, "state.txt"),
+                            self._state.value + "\n", overwrite_allowed=True)
         if self.is_new or self._short_name_dirty:
-            safety.write_allowed(os.path.join(self.dir, "short_name.txt"),
-                                 self._short_name + "\n")
+            safety.new_file(os.path.join(self.dir, "short_name.txt"),
+                            self._short_name + "\n", overwrite_allowed=True)
 
 
 # ---------------------------------------------------------------------------
@@ -693,15 +695,35 @@ class ScheduleNode:
     def result(self):
         if self._result is _UNLOADED:
             p = os.path.join(self.dir, "result.txt")
-            if os.path.exists(p):
+            try:
                 with open(p, "r", encoding="utf-8") as f:
-                    self._result = f.read().strip()
+                    v = f.read().strip()
+            except FileNotFoundError:
+                v = None
+            if v is None:
+                # No result.txt: no compile attempted yet.  This is the NORMAL
+                # unbuilt state, so it is silent (unlike a Problem, whose missing
+                # state.txt is abnormal and warns).
+                self._result = Result.UNKNOWN
             else:
-                self._result = "unknown"  # default (worst): no compile attempted
+                try:
+                    self._result = Result(v)
+                except ValueError:
+                    # Malformed (e.g. a merge conflict left markers in
+                    # result.txt): degrade to UNKNOWN + warn, mirroring Problem
+                    # state.txt leniency.  Safe because best_result only moves a
+                    # node UPWARD and canon requires SUCCESS, so a spurious
+                    # UNKNOWN is merely pessimistic; a rebuild overwrites it
+                    # (set_result always dirties).  Reading it here does NOT
+                    # dirty, so the garbage is not silently rewritten.
+                    print("dh_hl: warning: malformed schedule result {} in {}; "
+                          "treating as 'unknown'".format(repr(v), self.full_id),
+                          file=sys.stderr)
+                    self._result = Result.UNKNOWN
         return self._result
 
     def set_result(self, value):
-        assert value in RESULT_STATES
+        assert isinstance(value, Result)
         self._result = value
         self._result_dirty = True
         self.catalog._mark_dirty(self)
@@ -719,14 +741,14 @@ class ScheduleNode:
                     stem = name[:-len(".json")]
                     # stem is the local ID "{ts}_{hash}" -- same shape as a
                     # schedule full ID, so reuse those parsers/guards.
-                    if not ids.is_schedule_id(stem):
+                    if not ids.looks_like_schedule_id(stem):
                         continue
                     self._commentary.append(
                         Commentary(self, ids.schedule_timestamp(stem),
                                    ids.schedule_hash(stem)))
         return self._commentary
 
-    def add_commentary(self, text, review="neutral", cancels=None):
+    def add_commentary(self, text, review=Review.NEUTRAL, cancels=None):
         assert review in COMMENTARY_REVIEWS
         h = ids.sha256_hex(text)
         ts = self.catalog.mint_timestamped_name(
@@ -762,21 +784,21 @@ class ScheduleNode:
             if c.local_id in cancelled:
                 continue
             r = c.review
-            if r == "positive":
+            if r is Review.POSITIVE:
                 pos = True
-            elif r == "negative":
+            elif r is Review.NEGATIVE:
                 neg = True
-            elif r == "lost_interest":
+            elif r is Review.LOST_INTEREST:
                 lost = True
         if pos and neg:
-            return "mixed"
+            return Review.MIXED
         if pos:
-            return "positive"
+            return Review.POSITIVE
         if neg:
-            return "negative"
+            return Review.NEGATIVE
         if lost:
-            return "lost_interest"
-        return "neutral"
+            return Review.LOST_INTEREST
+        return Review.NEUTRAL
 
     # -- benchmarks ------------------------------------------------------
     @property
@@ -849,11 +871,11 @@ class ScheduleNode:
             if self._parent_id_overwritten:
                 safety.queue_overwrite(os.path.join(self.dir, "parent.txt"),
                                        self._parent_id + "\n")
-        # result.txt: write_allowed picks new-file (new node) or deferred
-        # overwrite (existing node) automatically.
+        # result.txt: new_file(overwrite_allowed=True) picks exclusive-create
+        # (new node) or deferred overwrite (existing node) automatically.
         if self._result_dirty:
-            safety.write_allowed(os.path.join(self.dir, "result.txt"),
-                                 self._result + "\n")
+            safety.new_file(os.path.join(self.dir, "result.txt"),
+                            self._result.value + "\n", overwrite_allowed=True)
 
     # force_parent_idea sets this on an existing root node.
     _parent_id_added = False
@@ -961,22 +983,22 @@ class IdeaNode:
         there is no canonical schedule (idea.md "Idea Node State")."""
         canon_id = self.canonical
         if canon_id is None:
-            return "neutral"
+            return Review.NEUTRAL
         canon = self.catalog.schedules.get(canon_id)
         if canon is None:
-            return "neutral"  # dangling canonical (e.g. git checkout desync)
+            return Review.NEUTRAL  # dangling canonical (e.g. git checkout desync)
         return canon.review
 
     # -- idea side links (presence files) --------------------------------
     @property
     def side_links(self):
-        """Outgoing idea side links as a list of (type, dest idea full ID).
+        """Outgoing idea side links as a list of (SideLink, dest idea full ID).
         Encoded purely by the existence of empty files
         idea/{id}/{type}/{dest} (anti-merge-conflict design).  Read once."""
         if self._side_links is _UNLOADED:
             out = []
-            for link_type in IDEA_SIDE_LINK_TYPES:
-                d = os.path.join(self.dir, link_type)
+            for link_type in SideLink:
+                d = os.path.join(self.dir, link_type.value)
                 if os.path.isdir(d):
                     for name in os.listdir(d):
                         out.append((link_type, name))
@@ -986,7 +1008,7 @@ class IdeaNode:
     def add_side_link(self, link_type, dest_id):
         """Add an outgoing side link.  Silent no-op (returns False) if it exactly
         duplicates an existing link (same type + destination)."""
-        assert link_type in IDEA_SIDE_LINK_TYPES
+        assert isinstance(link_type, SideLink)
         if (link_type, dest_id) in self.side_links:
             return False
         self.side_links.append((link_type, dest_id))
@@ -999,14 +1021,14 @@ class IdeaNode:
             safety.makedirs_tracked(self.dir)
             safety.new_file(os.path.join(self.dir, "proposal.txt"),
                             self.proposal_text)
-        # canonical.txt: same in both cases; write_allowed picks new-file vs
-        # deferred overwrite automatically.
+        # canonical.txt: same in both cases; new_file(overwrite_allowed=True)
+        # picks exclusive-create vs deferred overwrite automatically.
         if self._canonical_dirty and self._canonical is not None:
-            safety.write_allowed(os.path.join(self.dir, "canonical.txt"),
-                                 self._canonical + "\n")
+            safety.new_file(os.path.join(self.dir, "canonical.txt"),
+                            self._canonical + "\n", overwrite_allowed=True)
         # Side links: one empty presence file per newly added link.
         for link_type, dest_id in self._new_side_links:
-            d = os.path.join(self.dir, link_type)
+            d = os.path.join(self.dir, link_type.value)
             safety.makedirs_tracked(d)
             safety.new_file(os.path.join(d, dest_id), "")
 
@@ -1222,7 +1244,7 @@ class CurrentIdeaState:
     """Parsed current_idea_state.txt.  Never raises on parse; competing/absent
     states are recorded and surfaced only when a caller needs a definite state.
 
-    kind is one of: 'missing', 'no_idea', 'idea', 'conflict'.
+    kind is an IdeaStateKind member (MISSING / NO_IDEA / IDEA / CONFLICT).
     """
 
     def __init__(self, private_dir, catalog=None):
@@ -1246,7 +1268,7 @@ class CurrentIdeaState:
 
     def problem_message(self):
         """Human-readable explanation when kind is 'missing' or 'conflict'."""
-        if self.kind == "missing":
+        if self.kind == IdeaStateKind.MISSING:
             return "current_idea_state.txt is missing"
         msg = ["current_idea_state.txt does not encode a single state."]
         if self.parsed_lines:
@@ -1259,9 +1281,9 @@ class CurrentIdeaState:
 
     def _load(self):
         if not os.path.exists(self.path):
-            self.kind = "missing"
+            self.kind = IdeaStateKind.MISSING
             return
-        found = []  # list of ('no_idea', ts) or ('idea', id)
+        found = []  # list of (IdeaStateKind.NO_IDEA, ts) / (IdeaStateKind.IDEA, id)
         with open(self.path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -1270,15 +1292,16 @@ class CurrentIdeaState:
                     found.append(v)
         self.parsed_lines = [_encode_state(v) for v in found]
         if len(found) == 0:
-            self.kind = "conflict"  # file exists but nothing parsed = cruft
+            # file exists but nothing parsed = cruft
+            self.kind = IdeaStateKind.CONFLICT
         elif len(found) == 1:
             v = found[0]
-            if v[0] == "no_idea":
-                self.kind, self.timestamp = "no_idea", v[1]
+            if v[0] is IdeaStateKind.NO_IDEA:
+                self.kind, self.timestamp = IdeaStateKind.NO_IDEA, v[1]
             else:
-                self.kind, self.idea_id = "idea", v[1]
+                self.kind, self.idea_id = IdeaStateKind.IDEA, v[1]
         else:
-            self.kind = "conflict"
+            self.kind = IdeaStateKind.CONFLICT
 
     def _require_catalog(self):
         if self.catalog is None:
@@ -1287,41 +1310,49 @@ class CurrentIdeaState:
 
     def set_no_idea(self, timestamp):
         self._require_catalog()
-        self.kind, self.timestamp, self.idea_id = "no_idea", timestamp, None
+        self.kind = IdeaStateKind.NO_IDEA
+        self.timestamp, self.idea_id = timestamp, None
         self._dirty = True
         self.catalog._mark_dirty(self)
 
     def set_idea(self, idea_id):
         self._require_catalog()
-        self.kind, self.idea_id, self.timestamp = "idea", idea_id, None
+        self.kind = IdeaStateKind.IDEA
+        self.idea_id, self.timestamp = idea_id, None
         self._dirty = True
         self.catalog._mark_dirty(self)
 
     def encode(self):
-        if self.kind == "no_idea":
-            return _encode_state(("no_idea", self.timestamp))
-        if self.kind == "idea":
-            return _encode_state(("idea", self.idea_id))
-        raise DhHlError("cannot encode current idea state of kind " + str(self.kind))
+        if self.kind is IdeaStateKind.NO_IDEA:
+            return _encode_state((IdeaStateKind.NO_IDEA, self.timestamp))
+        if self.kind is IdeaStateKind.IDEA:
+            return _encode_state((IdeaStateKind.IDEA, self.idea_id))
+        raise DhHlError("cannot encode current idea state of kind "
+                        + str(self.kind))
 
     def flush(self):
         if self._dirty:
             # The private dir is guaranteed to exist by the time we flush: every
             # current-idea-state mutation goes through a tool that first calls
             # SessionWorkspace.ensure_private_dir() (and session-lock tools also
-            # created it in locks.acquire_session).  write_allowed picks a
-            # new-file create or a deferred overwrite automatically.
-            safety.write_allowed(self.path, self.encode() + "\n")
+            # created it in locks.acquire_session).  new_file(overwrite_allowed=
+            # True) picks an exclusive create or a deferred overwrite
+            # automatically.
+            safety.new_file(self.path, self.encode() + "\n",
+                            overwrite_allowed=True)
 
 
 def _parse_state_line(line):
-    """Return ('no_idea', ts) / ('idea', idea_id) / None (cruft)."""
+    """Return (IdeaStateKind.NO_IDEA, ts) / (IdeaStateKind.IDEA, idea_id) / None
+    (cruft).  The `dendritic_hl_root(...)`/`dendritic_hl_idea(...)` wrapper is the
+    on-disk encoding (the project name avoids collisions, see impl.md); the
+    IdeaStateKind member is the in-memory tag."""
     inner = _unwrap(line, "dendritic_hl_root")
     if inner is not None and ids.is_timestamp(inner):
-        return ("no_idea", inner)
+        return (IdeaStateKind.NO_IDEA, inner)
     inner = _unwrap(line, "dendritic_hl_idea")
-    if inner is not None and ids.is_idea_id(inner):
-        return ("idea", inner)
+    if inner is not None and ids.looks_like_idea_id(inner):
+        return (IdeaStateKind.IDEA, inner)
     return None
 
 
@@ -1333,7 +1364,7 @@ def _unwrap(line, name):
 
 
 def _encode_state(v):
-    if v[0] == "no_idea":
+    if v[0] is IdeaStateKind.NO_IDEA:
         return "dendritic_hl_root({})".format(v[1])
     return "dendritic_hl_idea({})".format(v[1])
 
@@ -1428,7 +1459,7 @@ class Catalog:
             self._schedules = {}
             if os.path.isdir(self.sch_dir):
                 for name in os.listdir(self.sch_dir):
-                    if ids.is_schedule_id(name):
+                    if ids.looks_like_schedule_id(name):
                         self._schedules[name] = ScheduleNode(self, name)
         return self._schedules
 
@@ -1438,7 +1469,7 @@ class Catalog:
             self._ideas = {}
             if os.path.isdir(self.idea_dir):
                 for name in os.listdir(self.idea_dir):
-                    if ids.is_idea_id(name):
+                    if ids.looks_like_idea_id(name):
                         self._ideas[name] = IdeaNode(self, name)
         return self._ideas
 
@@ -1448,7 +1479,7 @@ class Catalog:
             self._sessions = {}
             if os.path.isdir(self.session_dir):
                 for name in os.listdir(self.session_dir):
-                    if ids.is_session_id(name):
+                    if ids.looks_like_session_id(name):
                         self._sessions[name] = SessionNode(self, name)
         return self._sessions
 
@@ -1460,7 +1491,7 @@ class Catalog:
                 for name in os.listdir(self.benchmark_sets_dir):
                     if name.endswith(".json"):
                         stem = name[:-len(".json")]
-                        if ids.is_benchmark_set_id(stem):
+                        if ids.looks_like_benchmark_set_id(stem):
                             self._benchmark_sets[stem] = BenchmarkSet(self, stem)
         return self._benchmark_sets
 
@@ -1490,13 +1521,13 @@ class Catalog:
             self._problems = {}
             if os.path.isdir(self.problem_dir):
                 for name in os.listdir(self.problem_dir):
-                    if ids.is_problem_id(name):
+                    if ids.looks_like_problem_id(name):
                         self._problems[name] = Problem(self, name)
         return self._problems
 
-    def create_problem(self, argv, short_name, state="enabled"):
+    def create_problem(self, argv, short_name, state=ProblemState.ENABLED):
         """Create a new problem from *argv* + *short_name* (default state
-        "enabled").  The full ID is the content hash of the canonical argv, so an
+        ENABLED).  The full ID is the content hash of the canonical argv, so an
         identical argv is the same object: error (naming the existing problem) if
         it already exists (idea.md "New Problem Tool")."""
         validate_problem_argv(argv)
@@ -1504,7 +1535,7 @@ class Catalog:
             raise DhHlError(
                 "problem short name must be 1+ chars of [A-Za-z0-9_]: "
                 + repr(short_name))
-        assert state in PROBLEM_STATES
+        assert isinstance(state, ProblemState)
         full_id = ids.sha256_hex(dump_problem_argv(argv))
         if full_id in self.problems:
             raise DhHlError("an identical problem already exists: "
@@ -1540,7 +1571,8 @@ class Catalog:
 
     def main_problem(self):
         """The unique problem with `main` state; error if not well-defined."""
-        mains = [p for p in self.problems.values() if p.state == "main"]
+        mains = [p for p in self.problems.values()
+                 if p.state == ProblemState.MAIN]
         if len(mains) == 1:
             return mains[0]
         if not mains:
@@ -1908,7 +1940,7 @@ class Catalog:
     def resolve_benchmark_set(self, s):
         """Benchmark sets have no short-ID form (idea.md), so resolution is an
         exact full-ID match against benchmark_sets/."""
-        if not ids.is_benchmark_set_id(s):
+        if not ids.looks_like_benchmark_set_id(s):
             raise DhHlError("not a valid benchmark set ID: " + s)
         return self.get_benchmark_set(s)
 
@@ -1941,7 +1973,7 @@ def _match_ideas(catalog, hash_prefix, name_prefix):
 
 def _resolve_idea(catalog, s):
     # Full ID?
-    if ids.is_idea_id(s):
+    if ids.looks_like_idea_id(s):
         node = catalog.ideas.get(s)
         if node is None:
             raise DhHlError("no such idea node: " + s)
@@ -1962,7 +1994,7 @@ def _resolve_idea(catalog, s):
 
 def _resolve_schedule(catalog, s):
     # Full ID?
-    if ids.is_schedule_id(s):
+    if ids.looks_like_schedule_id(s):
         node = catalog.schedules.get(s)
         if node is None:
             raise DhHlError("no such schedule node: " + s)
@@ -2023,7 +2055,7 @@ def _match_schedules(catalog, s):
 def _resolve_idea_matches_lenient(catalog, idea_part):
     """Like _resolve_idea but returns *all* matches (no single-match error);
     accepts a full idea ID or a {hp}.{pp} short form."""
-    if ids.is_idea_id(idea_part):
+    if ids.looks_like_idea_id(idea_part):
         node = catalog.ideas.get(idea_part)
         return [node] if node is not None else []
     hp, dot, pp = idea_part.partition(".")
@@ -2035,7 +2067,7 @@ def _resolve_idea_matches_lenient(catalog, idea_part):
 def _resolve_schedule_matches_lenient(catalog, s):
     """Like _resolve_schedule but returns *all* matches (no single-match /
     empty-match error); accepts a full or short schedule ID."""
-    if ids.is_schedule_id(s):
+    if ids.looks_like_schedule_id(s):
         node = catalog.schedules.get(s)
         return [node] if node is not None else []
     try:
@@ -2047,13 +2079,13 @@ def _resolve_schedule_matches_lenient(catalog, s):
 def _is_commentary_full_id(s):
     # Commentary full ID = "{schedule full id}_{ts}_{hash}".  The trailing
     # "{ts}_{hash}" (the local ID) has the exact shape of a schedule full ID, so
-    # both halves check with is_schedule_id.  Total = 90 + 1 + 90 = 181.
+    # both halves check with looks_like_schedule_id.  Total = 90 + 1 + 90 = 181.
     if len(s) != ids.SCHEDULE_ID_LEN * 2 + 1:
         return False
     sched = s[:ids.SCHEDULE_ID_LEN]
     sep = s[ids.SCHEDULE_ID_LEN]
     local = s[ids.SCHEDULE_ID_LEN + 1:]
-    return sep == "_" and ids.is_schedule_id(sched) and ids.is_schedule_id(local)
+    return sep == "_" and ids.looks_like_schedule_id(sched) and ids.looks_like_schedule_id(local)
 
 
 def _resolve_commentary(catalog, s):
@@ -2094,7 +2126,7 @@ def _resolve_commentary(catalog, s):
 
 def _resolve_warning_toggle(catalog, s):
     # Full ID?  "{schedule full id}_{timestamp}"
-    if ids.is_warning_toggle_id(s):
+    if ids.looks_like_warning_toggle_id(s):
         sched_id = ids.warning_toggle_schedule_id(s)
         ts = ids.warning_toggle_timestamp(s)
         node = catalog.schedules.get(sched_id)
@@ -2129,7 +2161,7 @@ def _resolve_warning_toggle(catalog, s):
 
 def _resolve_benchmark(catalog, s):
     # Full ID?  "{schedule full id}_{hostname}_{timestamp}"
-    if ids.is_benchmark_id(s):
+    if ids.looks_like_benchmark_id(s):
         sched_id = ids.benchmark_schedule_id(s)
         local = ids.benchmark_local_part(s)
         node = catalog.schedules.get(sched_id)
@@ -2141,7 +2173,7 @@ def _resolve_benchmark(catalog, s):
     # Short form: {schedule ID}.{hostname}_{timestamp}.  The schedule ID may
     # itself be a short ID containing '.'; the "{hostname}_{ts}" tail has none.
     sched_part, dot, local = s.rpartition(".")
-    if dot == "" or not ids.is_benchmark_local_id(local):
+    if dot == "" or not ids.looks_like_benchmark_local_id(local):
         raise DhHlError("not a valid benchmark ID: " + repr(s))
     matches = []
     for node in _resolve_schedule_matches_lenient(catalog, sched_part):
@@ -2201,7 +2233,7 @@ def _format_schedule_short(catalog, node):
         return node.full_id
     idea = node.parent_idea()
     idea_short = _format_idea_short(catalog, idea)
-    if "." not in idea_short and not ids.is_idea_id(idea_short):
+    if "." not in idea_short and not ids.looks_like_idea_id(idea_short):
         return node.full_id
     # Prefer .canon when applicable.
     if idea.canonical == node.full_id:
@@ -2258,10 +2290,11 @@ def _format_benchmark_short(catalog, b):
 
 def _resolve_problem(catalog, s):
     # `main`: the (unique) main problem.  Accepted, never generated (idea.md).
-    if s == "main":
+    # The reserved short-spec token is exactly the main state's wire value.
+    if s == ProblemState.MAIN.value:
         return catalog.main_problem()
     # Full ID = the 64-hex content hash.
-    if ids.is_problem_id(s):
+    if ids.looks_like_problem_id(s):
         return catalog.get_problem(s)
     # Short form: problem.{short name}, matching ENABLED problems only (idea.md).
     if s.startswith("problem."):

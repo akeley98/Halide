@@ -10,6 +10,7 @@ would miss a mis-attribution bug)."""
 from collections import defaultdict
 
 from dendritic_hl_lib import locks, safety, tools
+from dendritic_hl_lib.enums import Result
 from dendritic_hl_lib.context import SessionWorkspace
 from conftest import add_synthetic_benchmark_set, open_catalog
 
@@ -92,7 +93,7 @@ def _idea(cat, ws, parent_sched_id, name, pool, cost_batches=None):
     canon = None
     if cost_batches is not None:
         dup = cat.create_schedule(name + " src\n", parent_idea=idea)
-        dup.set_result("success")
+        dup.set_result(Result.SUCCESS)
         idea.set_canonical(dup.full_id)
         canon = dup.full_id
     ws.set_pool_tag(idea.full_id, pool)
@@ -228,7 +229,7 @@ def _obsoletion_setup(session, child_cost):
         _, cp = _idea(cat, ws, C0, "Parent", "a", [200, 201, 199, 200, 202])
         child = cat.create_idea(cat.get_schedule(cp), "Child", "child\n")
         cc = cat.create_schedule("child src\n", parent_idea=child)
-        cc.set_result("success")
+        cc.set_result(Result.SUCCESS)
         child.set_canonical(cc.full_id)
         ws.set_pool_tag(child.full_id, "a")
         child_batches = [child_cost + d for d in (0, 1, -1, 0, -2)]

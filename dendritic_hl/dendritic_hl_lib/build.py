@@ -41,6 +41,7 @@ from . import safety
 from .catalog import (Catalog, PROBLEM_LIB, PROBLEM_RUNGENMAIN, best_result,
                       canonical_block_advice, validate_parameters)
 from .context import Context, SessionWorkspace, resolve_target
+from .enums import Result
 from .errors import DhHlError, HarnessError
 from . import ninja_syntax
 
@@ -541,7 +542,8 @@ def cmd_init_build(args):
     }
     # Persist BEFORE finish so the new target node is flushed first.
     path = os.path.join(private_dir, _INIT_BUILD_FILE)
-    safety.write_allowed(path, json.dumps(selection, indent=1) + "\n")
+    safety.new_file(path, json.dumps(selection, indent=1) + "\n",
+                    overwrite_allowed=True)
     ctx.finish()
 
     cat = ctx.catalog
@@ -911,11 +913,11 @@ def _compute_result(n, indices, only_kind):
     should_accept, not node state.  best_result() at the call site keeps it
     monotone."""
     if not n.cpp_ok:
-        return "c++ error"
+        return Result.CPP_ERROR
     # --only [int] builds a single binary, so success is not provable.
     if only_kind == "index" or any(not n.gen_ok.get(i) for i in indices):
-        return "halide error"
-    return "success"
+        return Result.HALIDE_ERROR
+    return Result.SUCCESS
 
 
 # ---------------------------------------------------------------------------
