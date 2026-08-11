@@ -2092,11 +2092,9 @@ class Catalog:
     # here.  The catalog only resolves benchmark *full* IDs.
 
     # -- ID resolution ---------------------------------------------------
-    # NB there is deliberately no `resolve_schedule` method: schedule IDs carry
-    # session-scoped magic values (terminus/session_output), so the sole public
-    # resolver is `Context.resolve_schedule`.  The catalog-layer, session-
-    # agnostic resolver is the module-private `_resolve_schedule` free function
-    # (full/short IDs + golden), used by Context and white-box tests.
+    def resolve_schedule(self, s):
+        return _resolve_schedule(self, s)
+
     def resolve_idea(self, s):
         return _resolve_idea(self, s)
 
@@ -2165,25 +2163,6 @@ def _resolve_idea(catalog, s):
 
 
 def _resolve_schedule(catalog, s):
-    # Magic [schedule ID] values (idea.md "[schedule ID]" magic arguments).  Only
-    # the golden forms are handled at this catalog layer: `golden` and any golden
-    # object ID resolve without a session, so `--other golden`, `-C`-only tools,
-    # and the default resolver all pick them up here.  `terminus`/`session_output`
-    # need session context and are intentionally not handled here.
-    if s == "golden":
-        node = catalog.golden_schedule_node()
-        if node is None:
-            raise DhHlError(
-                "no golden schedule node (no golden object, or the most recent "
-                "golden references no schedule node)")
-        return node
-    if ids.looks_like_golden_id(s):
-        g = catalog.goldens.get(s)
-        if g is None:
-            raise DhHlError("no such golden: " + s)
-        if g.schedule_id is None:
-            raise DhHlError("golden {} references no schedule node".format(s))
-        return catalog.get_schedule(g.schedule_id)
     # Full ID?
     if ids.looks_like_schedule_id(s):
         node = catalog.schedules.get(s)

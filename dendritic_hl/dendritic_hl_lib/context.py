@@ -791,13 +791,17 @@ class Context:
                 "pass an explicit [schedule ID] or fix the workspace/idea state")
         return node
 
-    def resolve_schedule(self, spec):
+    def resolve_schedule_arg(self, spec):
         """The single public resolver for a user-supplied `schedule ID`
-        argument.  Accepts every magic value idea.md promises ("All schedule ID
-        arguments also accept ..."): the session-scoped `terminus` /
-        `session_output` (handled here, since they need the current session),
-        plus `golden`, golden object IDs, and ordinary full/short IDs (delegated
-        to the catalog-layer `_resolve_schedule`).
+        argument.  Accepts full and short IDs, and moreover
+        accepts every magic value idea.md promises ("All schedule ID
+        arguments also accept ..."):
+
+        * terminus
+        * session_output
+        * golden
+        * golden IDs
+        * None
 
         `spec is None` selects the workspace's unambiguous schedule -- the
         omitted `[schedule ID]` case, which requires `-s`.  Commands whose
@@ -805,16 +809,28 @@ class Context:
         `--target`/`--other`/`--anchor`, which resolve their own special tokens
         first) simply never pass None, so no separate "reject None" entry point
         is needed.
-
-        This is deliberately the ONLY schedule resolver exposed to tool code:
-        there is no catalog-level `resolve_schedule`, whose
-        golden-but-not-terminus behavior was an incomplete-magic trap."""
+        """
+        catalog = self.catalog
         if spec == "terminus":
             return self._terminus_output_schedule()
         if spec == "session_output":
             return self._session_output_schedule()
+        if spec == "golden":
+            node = catalog.golden_schedule_node()
+            if node is None:
+                raise DhHlError(
+                    "no golden schedule node (no golden object, or the most recent "
+                    "golden references no schedule node)")
+            return node
         if spec is not None:
-            return _resolve_schedule(self.catalog, spec)
+            if ids.looks_like_golden_id(spec):
+                g = catalog.goldens.get(spec)
+                if g is None:
+                    raise DhHlError("no such golden: " + spec)
+                if g.schedule_id is None:
+                    raise DhHlError("golden {} references no schedule node".format(spec))
+                return catalog.get_schedule(g.schedule_id)
+            return _resolve_schedule(catalog, spec)
         # Omitted [schedule ID]: the workspace's unambiguous schedule.  A -C-only
         # tool needs -s to resolve it; catch the missing session HERE with an
         # argument-specific message rather than letting the generic

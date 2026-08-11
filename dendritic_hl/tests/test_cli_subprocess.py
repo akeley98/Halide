@@ -228,7 +228,7 @@ def test_magic_schedule_ids_wired_into_non_default_args(run_cli, tmp_path):
     also accept ...") are wired into the non-`[schedule ID]`-alone argument
     sites, not just the plain default: init_build's --target/--other/--anchor
     and restore_schedule's {schedule ID}.  They all funnel through
-    ctx.resolve_schedule.  Halide-free -- init_build never compiles."""
+    ctx.resolve_schedule_arg.  Halide-free -- init_build never compiles."""
     cat_dir, handle = _bootstrap_cli(run_cli, tmp_path)
     sid = run_cli("schedule_short_id", "-s", handle).stdout.strip()
 

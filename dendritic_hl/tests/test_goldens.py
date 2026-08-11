@@ -11,7 +11,6 @@ import pytest
 from dendritic_hl_lib import build, locks, tools
 from dendritic_hl_lib.errors import DhHlError
 from conftest import open_catalog
-from dendritic_hl_lib.catalog import _resolve_schedule
 
 
 def _reset():
@@ -138,6 +137,12 @@ def test_json_golden_info_unknown_id_errors(session, run_tool):
 
 
 # ---- A3: golden magic values in [schedule ID] -----------------------------
+#
+# The magic `[schedule ID]` values (golden, golden object IDs, terminus,
+# session_output) are resolved by Context.resolve_schedule_arg -- NOT by the
+# catalog-layer _resolve_schedule, which handles only plain full/short IDs.  So
+# these drive resolution through a real tool (schedule_full_id, whose body is
+# `ctx.resolve_schedule_arg(args.schedule)`), never _resolve_schedule directly.
 
 def _make_golden(session, run_tool, capsys, tmp_path, name, schedule):
     _fake_hlpipe(session, schedule) if schedule != "none" else None
@@ -146,71 +151,68 @@ def _make_golden(session, run_tool, capsys, tmp_path, name, schedule):
                            schedule=schedule)).strip()
 
 
+def _resolved_full_id(run_tool, capsys, session, spec):
+    """Resolve *spec* through the magic-aware resolver (Context.
+    resolve_schedule_arg, via schedule_full_id) and return the printed full ID."""
+    return _out(run_tool, capsys, tools.cmd_schedule_full_id,
+                session.ns(schedule=spec)).strip()
+
+
 def test_resolve_golden_magic_value(session, run_tool, capsys, tmp_path):
     sid = _seed_canonical_id(session)
     _make_golden(session, run_tool, capsys, tmp_path, "g", sid)
-    cat = open_catalog(session.catalog_dir)
-    try:
-        # `golden` resolves to the golden schedule node...
-        assert _resolve_schedule(cat, "golden").full_id == sid
-    finally:
-        _reset()
+    # `golden` resolves to the golden schedule node.
+    assert _resolved_full_id(run_tool, capsys, session, "golden") == sid
 
 
 def test_resolve_golden_object_id(session, run_tool, capsys, tmp_path):
     sid = _seed_canonical_id(session)
     gid = _make_golden(session, run_tool, capsys, tmp_path, "g", sid)
-    cat = open_catalog(session.catalog_dir)
-    try:
-        # ...and a golden object ID resolves to *that* golden's schedule.
-        assert _resolve_schedule(cat, gid).full_id == sid
-    finally:
-        _reset()
+    # A golden object ID resolves to *that* golden's schedule.
+    assert _resolved_full_id(run_tool, capsys, session, gid) == sid
 
 
 def test_resolve_golden_errors(session, run_tool, capsys, tmp_path):
-    cat = open_catalog(session.catalog_dir)
-    try:
-        # No golden object at all.
-        with pytest.raises(DhHlError, match="no golden schedule node"):
-            _resolve_schedule(cat, "golden")
-    finally:
-        _reset()
+    # No golden object at all.
+    with pytest.raises(DhHlError, match="no golden schedule node"):
+        run_tool(tools.cmd_schedule_full_id, session.ns(schedule="golden"))
     # A golden whose most-recent reference is none -> `golden` still errors, and
-    # the golden ID errors "references no schedule node".
+    # a golden ID with no schedule errors "references no schedule node".
     gid = _make_golden(session, run_tool, capsys, tmp_path, "none_g", "none")
-    cat = open_catalog(session.catalog_dir)
-    try:
-        with pytest.raises(DhHlError, match="no golden schedule node"):
-            _resolve_schedule(cat, "golden")
-        with pytest.raises(DhHlError, match="references no schedule node"):
-            _resolve_schedule(cat, gid)
-        with pytest.raises(DhHlError, match="no such golden"):
-            _resolve_schedule(cat, "golden_2020-01-01T000000_000000Z")
-    finally:
-        _reset()
+    with pytest.raises(DhHlError, match="no golden schedule node"):
+        run_tool(tools.cmd_schedule_full_id, session.ns(schedule="golden"))
+    with pytest.raises(DhHlError, match="references no schedule node"):
+        run_tool(tools.cmd_schedule_full_id, session.ns(schedule=gid))
+    with pytest.raises(DhHlError, match="no such golden"):
+        run_tool(tools.cmd_schedule_full_id,
+                 session.ns(schedule="golden_2020-01-01T000000_000000Z"))
 
 
-def test_other_golden_resolves_via_resolve_schedule(session, run_tool, capsys,
-                                                     tmp_path):
-    """`init_build --other golden` works because build._resolve_other delegates
-    a non-none/parent spec to ctx.resolve_schedule (the sole magic-aware
-    resolver), which resolves `golden` at the catalog layer (the user's
-    observation that --other golden was blocked on this)."""
+def test_other_golden_delegates_to_resolve_schedule_arg(session, run_tool,
+                                                        capsys, tmp_path):
+    """`init_build --other golden` works because build._resolve_other delegates a
+    non-none/parent spec to ctx.resolve_schedule_arg (the sole magic-aware
+    resolver); `none` stays the disabled sentinel, and the resolver is not
+    consulted for it.  (The real end-to-end `--other golden` build is covered by
+    test_golden_halide.py.)"""
     from dendritic_hl_lib import build as build_mod
     sid = _seed_canonical_id(session)
-    _make_golden(session, run_tool, capsys, tmp_path, "g", sid)
     cat = open_catalog(session.catalog_dir)
     try:
-        class _Ctx:
-            catalog = cat
-
-            def resolve_schedule(self, spec):
-                # golden is a catalog-layer magic value (no session needed).
-                return _resolve_schedule(cat, spec)
         target = cat.get_schedule(sid)
-        assert build_mod._resolve_other(_Ctx(), "golden", target).full_id == sid
-        # `none` is still the disabled sentinel, not a resolution.
+        golden_node = cat.get_schedule(sid)
+        calls = []
+
+        class _Ctx:
+            def resolve_schedule_arg(self, spec):
+                calls.append(spec)
+                return golden_node
+
+        # A non-none/parent spec is delegated verbatim to resolve_schedule_arg.
+        assert build_mod._resolve_other(_Ctx(), "golden", target) is golden_node
+        assert calls == ["golden"]
+        # `none` is the disabled sentinel -- the resolver is never consulted.
         assert build_mod._resolve_other(_Ctx(), "none", target) is None
+        assert calls == ["golden"]
     finally:
         _reset()
