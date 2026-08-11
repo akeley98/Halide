@@ -310,8 +310,6 @@ different directories and brute forcing a timestamp collision)
 
 ### Golden Objects on Disk
 
-IMPL TASK: add these
-
 Stored in `golden/{timestamp}/golden.json` as a JSON object in the
 same format as `json_golden_info`.
 
