@@ -810,10 +810,25 @@ class Context:
         first) simply never pass None, so no separate "reject None" entry point
         is needed.
         """
+
+        def require_session(arg_name, what):
+            if self.session_id is None:
+                raise DhHlError(
+                    f"-s required to resolve the {arg_name} schedule node argument "
+                    f"(pass an explicit [schedule ID], or -s to use {what})")
+
         catalog = self.catalog
+        if spec is None:
+            # Omitted [schedule ID]: the workspace's unambiguous schedule.  A -C-only
+            # tool needs -s to resolve it; catch the missing session HERE with an
+            # argument-specific message rather than letting the generic
+            # `self.workspace` "need -s" error surface (idea.md "[schedule ID]").
+            require_session("default", "the session workspace's schedule")
+            return self.require_unambiguous_schedule()
         if spec == "terminus":
             return self._terminus_output_schedule()
         if spec == "session_output":
+            require_session("session_output", "that session's primary output schedule")
             return self._session_output_schedule()
         if spec == "golden":
             node = catalog.golden_schedule_node()
@@ -822,25 +837,15 @@ class Context:
                     "no golden schedule node (no golden object, or the most recent "
                     "golden references no schedule node)")
             return node
-        if spec is not None:
-            if ids.looks_like_golden_id(spec):
-                g = catalog.goldens.get(spec)
-                if g is None:
-                    raise DhHlError("no such golden: " + spec)
-                if g.schedule_id is None:
-                    raise DhHlError("golden {} references no schedule node".format(spec))
-                return catalog.get_schedule(g.schedule_id)
-            return _resolve_schedule(catalog, spec)
-        # Omitted [schedule ID]: the workspace's unambiguous schedule.  A -C-only
-        # tool needs -s to resolve it; catch the missing session HERE with an
-        # argument-specific message rather than letting the generic
-        # `self.workspace` "need -s" error surface (idea.md "[schedule ID]").
-        if self.session_id is None:
-            raise DhHlError(
-                "-s required to resolve the default schedule node argument "
-                "(pass an explicit [schedule ID], or -s to use the session "
-                "workspace's schedule)")
-        return self.require_unambiguous_schedule()
+        if ids.looks_like_golden_id(spec):
+            g = catalog.goldens.get(spec)
+            if g is None:
+                raise DhHlError("no such golden: " + spec)
+            if g.schedule_id is None:
+                raise DhHlError("golden {} references no schedule node".format(spec))
+            return catalog.get_schedule(g.schedule_id)
+        return _resolve_schedule(catalog, spec)
+
 
     def _terminus_output_schedule(self):
         """The primary output schedule of the unique terminus (the `terminus`

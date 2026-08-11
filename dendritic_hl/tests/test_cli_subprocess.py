@@ -266,6 +266,18 @@ def test_magic_schedule_ids_wired_into_non_default_args(run_cli, tmp_path):
     assert sid in r.stdout
 
 
+def test_session_output_without_session_is_clean_cli_error(run_cli, tmp_path):
+    """`session_output` is a magic [schedule ID] that needs -s.  Passing it to a
+    -C-only invocation must be a clean exit-1 dh_hl error that names the argument
+    -- NOT a raw Python traceback (context.resolve_schedule_arg `require_session`
+    guards the otherwise session-less resolution)."""
+    cat_dir, _ = _bootstrap_cli(run_cli, tmp_path)
+    r = run_cli("schedule_full_id", "-C", cat_dir, "session_output")
+    assert r.returncode == 1
+    assert "Traceback" not in r.stderr
+    assert "session_output schedule node argument" in r.stderr
+
+
 def test_init_build_positional_and_flag_conflict(run_cli, tmp_path):
     """Giving BOTH the positional target and --target is a clean error."""
     cat_dir, handle = _bootstrap_cli(run_cli, tmp_path)

@@ -216,6 +216,21 @@ def test_default_schedule_arg_without_session_errors_clearly(session, run_tool):
                  ns(catalog=session.catalog_dir, session=None, schedule=None))
 
 
+def test_session_output_schedule_arg_without_session_errors_clearly(
+        session, run_tool):
+    """`session_output` is a magic [schedule ID] that needs -s: there is no
+    current session to take a primary output from otherwise.  Without -s it must
+    be a clean dh_hl error that NAMES the argument -- not a raw Python crash, and
+    not the generic 'no current session' message (context.resolve_schedule_arg's
+    `require_session` guard)."""
+    with pytest.raises(
+            DhHlError,
+            match="resolve the session_output schedule node argument"):
+        run_tool(tools.cmd_schedule_full_id,
+                 ns(catalog=session.catalog_dir, session=None,
+                    schedule="session_output"))
+
+
 def test_explicit_schedule_arg_without_session_ok(session, run_tool, capsys):
     """The same -C-only tool needs no -s when given an explicit [schedule ID]:
     it resolves against the catalog and never touches the session workspace."""
