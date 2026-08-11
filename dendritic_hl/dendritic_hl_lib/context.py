@@ -509,6 +509,11 @@ def read_text_or_stdin(path):
 
 
 def _validate_catalog_dir(path):
+    """Abspath *path*, requiring the `.dh_hl` extension.  The extension check is
+    NEW-CATALOG ONLY (idea.md "-C/-s"): the naming convention is enforced when a
+    catalog is created, but every other tool accepts whatever `-C` directory it
+    is handed (a user may rename it).  `resolve_target` abspaths without this
+    check; only `cmd_new_catalog` calls here."""
     if not path.endswith(".dh_hl"):
         raise DhHlError("catalog directory must end with .dh_hl: " + path)
     return os.path.abspath(path)
@@ -524,7 +529,7 @@ def resolve_target(args):
     if s is not None and s.startswith("tmp."):
         cat_from_handle, session_id = locks.resolve_handle(s)
         if C is not None:
-            C_abs = _validate_catalog_dir(C)
+            C_abs = os.path.abspath(C)
             if C_abs != os.path.abspath(cat_from_handle):
                 raise DhHlError(
                     "-C {} does not match the catalog of session handle {} ({})"
@@ -537,10 +542,10 @@ def resolve_target(args):
         if C is None:
             raise DhHlError(
                 "-C is required when -s is a session full ID (not a handle)")
-        return _validate_catalog_dir(C), s
+        return os.path.abspath(C), s
     if C is None:
         raise DhHlError("a catalog (-C) or session (-s) is required")
-    return _validate_catalog_dir(C), None
+    return os.path.abspath(C), None
 
 
 class Context:

@@ -761,13 +761,14 @@ Replace all `...` with real arguments (except `--profile ...`).
 The tools are invoked with `dh_hl {tool name} args...`.
 There are two frequest arguments:
 
-* `-C`, `--catalog`: gives the directory name (must end with `.dh_hl`) for the current catalog.
+* `-C`, `--catalog`: gives the directory name for the current catalog.
+  The `.dh_hl` extension is required only by `new_catalog` (the naming
+  convention is enforced at creation); every other tool accepts whatever
+  catalog directory it is handed.
 
 * `-s`, `--session`: gives the session node full ID OR a session handle.
   A session handle may substitute for a mandatory `-C` argument;
   if both are given, the catalog directory must match.
-
-IMPL TASK: remove `-C` file extension check, except for `new_catalog`.
 
 Tools that *require* a current session have `-s` shown as an explicit argument,
 but note `-C` is implicitly required if `-s` passed a session node full ID.

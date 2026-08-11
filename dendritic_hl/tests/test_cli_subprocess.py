@@ -69,6 +69,27 @@ def test_new_catalog_end_to_end_cli(run_cli, tmp_path):
     assert sid in r.stdout
 
 
+def test_catalog_extension_required_only_by_new_catalog(run_cli, tmp_path):
+    """new_catalog enforces the `.dh_hl` naming convention, but every other tool
+    accepts a catalog directory with any name (idea.md "-C/-s")."""
+    (tmp_path / "in.cpp").write_text("// gen\n")
+    (tmp_path / "p.txt").write_text("explore\n")
+
+    # new_catalog rejects a directory without the extension.
+    r = run_cli("new_catalog", "-C", str(tmp_path / "noext"), "seed",
+                str(tmp_path / "p.txt"), str(tmp_path / "in.cpp"))
+    assert r.returncode == 1 and "must end with .dh_hl" in r.stderr
+
+    # A normal catalog, renamed to an extensionless path, is still readable by a
+    # -C tool (the extension check does NOT run outside new_catalog).
+    cat_dir, _ = _bootstrap_cli(run_cli, tmp_path)
+    renamed = str(tmp_path / "renamed_catalog")
+    os.rename(cat_dir, renamed)
+    r = run_cli("list_termini", "-C", renamed)
+    assert r.returncode == 0, r.stderr
+    assert "handle:" in r.stdout
+
+
 def test_missing_input_file_is_clean_error(run_cli, tmp_path):
     """A missing input file is a clean dh_hl error, not a traceback."""
     cat_dir = str(tmp_path / "proj.dh_hl")
