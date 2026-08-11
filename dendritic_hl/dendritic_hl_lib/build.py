@@ -681,7 +681,7 @@ def cmd_build(args):
                   "profile", file=sys.stderr)
         problem_indexes, problem_run_ok, prof_ok = _profile_phase(
             bin_dir, nodes, param_indices, sched, catalog, profile_batches,
-            selected)
+            selected, ws)
         all_ok = all_ok and prof_ok
 
     # Phase 3: result-state updates (monotone; never regress).  A harness error
@@ -790,7 +790,7 @@ def _compile_phase(bin_dir, nodes, param_indices):
 
 
 def _profile_phase(bin_dir, nodes, param_indices, sched, catalog, batches,
-                   problems):
+                   problems, ws):
     """For each problem, run *batches* interleaved profiling passes over every
     linked binary, attaching a benchmark sub-object (tagged with the problem full
     ID + parameters index) to each binary's source schedule node.
@@ -856,11 +856,18 @@ def _profile_phase(bin_dir, nodes, param_indices, sched, catalog, batches,
                     continue
                 bench = sched[n.full_id].add_benchmark(file_hostname, bench_obj)
                 bench_index[n.full_id][slot][batch] = bench.full_id
+                # Record this benchmark in the session's benchmark-short-ID shard
+                # so it prints (and later resolves) as private.{schedule}.{i}.{n}
+                # (idea.md "Benchmark short ID").  `record` returns this
+                # benchmark's `n`, so we format the short ID directly -- no reverse
+                # lookup over the (potentially huge) benchmark database.
+                bench_n = ws.record_benchmark(n.full_id, i, bench.full_id, catalog)
+                short_id = ws.format_benchmark_short_id(
+                    sched[n.full_id], i, bench_n, catalog)
                 # "... with" ties this line to the "Profiled ..." line just above,
                 # so the benchmark ID isn't misread as belonging to the profiler's
                 # own stdout printed around it (idea.md Build Tool pseudocode).
-                print("dh_hl: ... with Benchmark ID: "
-                      + catalog.format_benchmark_id(bench))
+                print("dh_hl: ... with Benchmark ID: " + short_id)
         problem_indexes[problem.full_id] = bench_index
         problem_run_ok[problem.full_id] = prob_ok
     return problem_indexes, problem_run_ok, all_ok

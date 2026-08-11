@@ -719,7 +719,7 @@ def cmd_json_schedule_info(args):
 
 def cmd_json_benchmark_info(args):
     ctx = Context.for_catalog(args)
-    bench = ctx.catalog.resolve_benchmark(args.benchmark)
+    bench = ctx.resolve_benchmark_arg(args.benchmark)
     print(json.dumps(bench.data, indent=1))
 
 
@@ -729,9 +729,17 @@ def cmd_json_benchmark_set_info(args):
     print(json.dumps(bs.data, indent=1))
 
 
+def cmd_benchmark_full_id(args):
+    # ID translation (idea.md "ID Translation Tools"): no session lock.  There is
+    # no `benchmark_short_id` getter -- benchmark short IDs are session-scoped, so
+    # only the full ID is a stable identifier (idea.md "Benchmark short ID").
+    ctx = Context.for_catalog(args)
+    print(ctx.resolve_benchmark_arg(args.benchmark).full_id)
+
+
 def cmd_view_benchmark_stdout(args):
     ctx = Context.for_catalog(args)
-    bench = ctx.catalog.resolve_benchmark(args.benchmark)
+    bench = ctx.resolve_benchmark_arg(args.benchmark)
     # Pre-stdout benchmarks default to "" (idea.md "Benchmark Sub-object State").
     sys.stdout.write(bench.data.get("stdout", ""))
 
@@ -2089,7 +2097,7 @@ def cmd_debug_warning_toggle(args):
 def cmd_view_benchmark_warnings(args):
     ctx = Context.for_catalog(args)
     catalog = ctx.catalog
-    bench = catalog.resolve_benchmark(args.benchmark)
+    bench = ctx.resolve_benchmark_arg(args.benchmark)
     node = bench.schedule
     always = bool(getattr(args, "always_show_message", False))
 

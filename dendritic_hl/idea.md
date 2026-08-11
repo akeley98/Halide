@@ -1510,13 +1510,13 @@ needlessly (despite they will be locked out soon by profiling).
 
 The `... with Benchmark ID:` line leads with `...` to tie it to the preceding
 `Profiled ...` line, so agents don't misread the ID as belonging to the
-profiler's own printf output printed nearby.
-
-IMPL TASK: print benchmark short IDs of the `private.{schedule}.{parameters
-index}.{n}` session-local form (idea.md "Benchmark short ID").  `build` currently
-prints the general `{schedule}.{host}_{ts}` short ID instead; the `private.` form
-depends on the not-yet-implemented `benchmark_short_id/` session state
-(impl.md "Session Private Workspace").
+profiler's own printf output printed nearby.  It prints the benchmark's
+`private.{schedule}.{parameters index}.{n}` session-local short ID (idea.md
+"Benchmark short ID"): `_profile_phase` appends each new benchmark to the
+session's sharded `benchmark_short_id/` state (`ws.record_benchmark`, which
+returns the benchmark's `n`) and formats the short ID directly from the
+`(schedule node, i, n)` it just recorded (`ws.format_benchmark_short_id`) -- no
+reverse lookup over the benchmark database.
 
 Pseudocode:
 

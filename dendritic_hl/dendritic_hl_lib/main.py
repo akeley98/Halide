@@ -156,6 +156,7 @@ COMMAND_HELP = {
     "json_idea_info": "Dump an idea node's full state as JSON.",
     "json_benchmark_info": "Dump a benchmark sub-object as JSON.",
     "json_benchmark_set_info": "Dump a benchmark set as JSON.",
+    "benchmark_full_id": "Print a benchmark's full ID (accepts a private short ID).",
     "json_ranking_cost": "Report a schedule's cost (with/without an anchor) as JSON.",
     "json_compare_cost": "Head-to-head 2-way cost comparison of two schedules as JSON.",
     "json_profiler_stats": "Aggregate profiler statistics for a schedule as JSON.",
@@ -394,6 +395,9 @@ def _build_parser():
 
     sp = add("json_benchmark_info")
     sp.add_argument("benchmark", help="benchmark ID")
+
+    sp = add("benchmark_full_id")
+    sp.add_argument("benchmark", help="benchmark ID (full or private short ID)")
 
     sp = add("json_benchmark_set_info")
     sp.add_argument("benchmark_set", help="benchmark set ID")
@@ -656,6 +660,7 @@ _DISPATCH = {
     "json_idea_info": tools.cmd_json_idea_info,
     "json_benchmark_info": tools.cmd_json_benchmark_info,
     "json_benchmark_set_info": tools.cmd_json_benchmark_set_info,
+    "benchmark_full_id": tools.cmd_benchmark_full_id,
     "json_ranking_cost": tools.cmd_json_ranking_cost,
     "json_compare_cost": tools.cmd_json_compare_cost,
     "json_profiler_stats": tools.cmd_json_profiler_stats,

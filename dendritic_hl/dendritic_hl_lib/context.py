@@ -155,6 +155,92 @@ class PrivateBenchmarkSetList(_PrivateMapState):
         self._remove_item(set_id)  # silent no-op if absent
 
 
+class PrivateBenchmarkShortIds:
+    """Backs the `private.{schedule}.{params index}.{n}` benchmark short ID form
+    (idea.md "Benchmark short ID"): for each (schedule, generator parameters
+    index) pair, the benchmark full IDs THIS session created, in creation order;
+    `n` is that 0-based index.
+
+    **Sharded on disk**, one JSON list per pair, at
+    `benchmark_short_id/{schedule full ID}/{params index}.json` (a missing file is
+    the empty list).  The sharding is load-bearing at scale: a hard Halide
+    campaign runs tens or hundreds of thousands of benchmarks, but any one
+    operation only ever touches a handful of schedules -- the set being profiled
+    (new benchmarks appended), or the single schedule named by a short ID being
+    resolved.  Keeping each schedule's lists in their own files means the O(n)
+    cost accumulates *per schedule*, never across the whole session's benchmark
+    database.  This is also why there is **no** reverse `benchmark full ID -> short
+    ID` lookup: it would have to scan every shard.  It is never needed -- the only
+    caller that formats a short ID is `build`, which knows the exact
+    `(schedule, params index, n)` from `record` (it just created the benchmark
+    while holding the exclusive machine lock), so it formats directly with no
+    search.
+
+    Follows the object discipline (lazy-load-once per shard + dirty + flush-once)
+    like the `_PrivateMapState` objects, but is NOT one of them -- it is a
+    directory of many small files, not a single JSON object."""
+
+    def __init__(self, root_dir, catalog=None):
+        self._root = root_dir      # .../private/{id}/benchmark_short_id
+        self._catalog = catalog
+        self._shards = {}          # (schedule_id, params_index) -> list (loaded)
+        self._dirty = set()        # keys whose in-memory shard must be flushed
+
+    def _shard_path(self, schedule_id, params_index):
+        return os.path.join(self._root, schedule_id,
+                            "{}.json".format(params_index))
+
+    def _shard(self, schedule_id, params_index):
+        """Lazy-load ONE shard's live list (absent file -> []).  Only shards
+        actually touched this run are read -- never the whole database.
+
+        This is the MUTABLE store, and it deliberately never escapes the class:
+        the two public methods are `record` (the sole mutator -- always dirties)
+        and `lookup` (returns one immutable string).  Nothing hands the live list
+        outside, so there is no way to mutate a shard while skipping the dirty
+        mark (the failure mode `_PrivateMapState`'s `view`/primitives guard
+        against).  Any future bulk reader MUST return a copy/tuple, not this."""
+        key = (schedule_id, int(params_index))
+        if key not in self._shards:
+            try:
+                with open(self._shard_path(*key), "r", encoding="utf-8") as f:
+                    self._shards[key] = json.load(f)
+            except FileNotFoundError:
+                self._shards[key] = []
+        return self._shards[key]
+
+    def record(self, schedule_id, params_index, benchmark_id, catalog=None):
+        """Append *benchmark_id* to the (schedule, params index) shard and return
+        its 0-based `n`.  The catalog check happens BEFORE the mutation, and the
+        dirty-mark immediately after with no intervening failure point, so an
+        appended-but-not-dirtied shard is impossible."""
+        catalog = catalog or self._catalog
+        if catalog is None:
+            raise DhHlError(
+                "cannot mutate private workspace state without a locked catalog")
+        seq = self._shard(schedule_id, params_index)
+        n = len(seq)
+        seq.append(benchmark_id)
+        self._catalog = catalog
+        self._dirty.add((schedule_id, int(params_index)))
+        catalog._mark_dirty(self)
+        return n
+
+    def lookup(self, schedule_id, params_index, n):
+        """The benchmark full ID at (schedule, params index, n), or None --
+        reading a single shard, not the whole database.  Returns an immutable
+        string, so the caller can never mutate the shard through it."""
+        seq = self._shard(schedule_id, params_index)
+        return seq[n] if 0 <= n < len(seq) else None
+
+    def flush(self):
+        for key in self._dirty:
+            path = self._shard_path(*key)
+            safety.makedirs_tracked(os.path.dirname(path))   # {root}/{schedule}/
+            safety.new_file(path, json.dumps(self._shards[key], indent=1) + "\n",
+                            overwrite_allowed=True)
+
+
 class CurrentAnchor:
     """current_anchor_schedule.txt: a single schedule full ID, or None (empty or
     absent file).  Lazy-load once + flush, per the object discipline."""
@@ -218,6 +304,7 @@ class SessionWorkspace:
         self._current_idea = None
         self._idea_list = None            # PrivateIdeaList
         self._benchmark_set_list = None   # PrivateBenchmarkSetList
+        self._benchmark_short_ids = None  # PrivateBenchmarkShortIds
         self._anchor = None               # CurrentAnchor
 
     @property
@@ -242,6 +329,13 @@ class SessionWorkspace:
             self._benchmark_set_list = PrivateBenchmarkSetList(
                 self.private_benchmark_sets_path, self.catalog)
         return self._benchmark_set_list
+
+    @property
+    def benchmark_short_ids(self):
+        if self._benchmark_short_ids is None:
+            self._benchmark_short_ids = PrivateBenchmarkShortIds(
+                self.benchmark_short_ids_dir, self.catalog)
+        return self._benchmark_short_ids
 
     @property
     def anchor(self):
@@ -440,6 +534,56 @@ class SessionWorkspace:
         is not present (idea.md "Add/Remove Private Benchmark Set Tools")."""
         self.ensure_private_dir()
         self.benchmark_set_list.remove(set_id)
+
+    # -- benchmark short IDs (private.{schedule}.{i}.{n}) ----------------
+    # private/{id}/benchmark_short_id/ (sharded), backed by
+    # PrivateBenchmarkShortIds.  These are the ONLY benchmark short IDs: session-
+    # scoped, so a full ID is the only stable/cross-session identifier (idea.md
+    # "Benchmark short ID").
+    @property
+    def benchmark_short_ids_dir(self):
+        return os.path.join(self.private_dir, "benchmark_short_id")
+
+    def record_benchmark(self, schedule_id, params_index, benchmark_id,
+                         catalog=None):
+        """Record *benchmark_id* as created by this session for (schedule,
+        params index), returning its 0-based `n`.  Called by `build`'s profile
+        phase under the catalog lock; *catalog* is passed explicitly because
+        build's workspace is constructed catalog-free."""
+        self.ensure_private_dir()
+        return self.benchmark_short_ids.record(
+            schedule_id, params_index, benchmark_id, catalog)
+
+    @staticmethod
+    def format_benchmark_short_id(schedule_node, params_index, n, catalog):
+        """The `private.{schedule short ID}.{params index}.{n}` short form, built
+        DIRECTLY from the (schedule, params index, n) the caller already has (from
+        `record_benchmark`).  Deliberately takes no benchmark object and does no
+        lookup -- there is no reverse full-ID -> short-ID search (see
+        `PrivateBenchmarkShortIds`)."""
+        return "private.{}.{}.{}".format(
+            catalog.format_schedule_id(schedule_node), params_index, n)
+
+    def resolve_benchmark_short_id(self, spec, catalog):
+        """Resolve a `private.{schedule ID}.{params index}.{n}` benchmark short ID
+        to its Benchmark (idea.md "Benchmark short ID").  The schedule ID may be
+        long or short; the last two `.` always split off the params index and
+        `n`."""
+        assert spec.startswith("private.")
+        rest = spec[len("private."):]
+        parts = rest.rsplit(".", 2)
+        if len(parts) != 3:
+            raise DhHlError("not a valid benchmark short ID: " + repr(spec))
+        sched_part, idx_str, n_str = parts
+        try:
+            i, n = int(idx_str), int(n_str)
+        except ValueError:
+            raise DhHlError("not a valid benchmark short ID: " + repr(spec))
+        node = catalog.resolve_schedule(sched_part)
+        bid = self.benchmark_short_ids.lookup(node.full_id, i, n)
+        if bid is None:
+            raise DhHlError("no benchmark matches short ID: " + repr(spec))
+        return catalog.resolve_benchmark(bid)
 
 
 def _benchmark_set_cache(catalog, set_id):
@@ -659,6 +803,15 @@ class Context:
                 "(pass an explicit [schedule ID], or -s to use the session "
                 "workspace's schedule)")
         return self.require_unambiguous_schedule()
+
+    def resolve_benchmark_arg(self, spec):
+        """Resolve a user-supplied benchmark ID: a full ID resolves against the
+        catalog alone, while the `private.{schedule}.{i}.{n}` short form needs the
+        session workspace (so `self.workspace` raises the "need -s" error if no
+        session was given).  There is no other benchmark short-ID form."""
+        if spec.startswith("private."):
+            return self.workspace.resolve_benchmark_short_id(spec, self.catalog)
+        return self.catalog.resolve_benchmark(spec)
 
     # -- current idea node ----------------------------------------------
     def current_idea_node(self):

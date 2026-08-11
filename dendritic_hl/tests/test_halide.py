@@ -111,9 +111,13 @@ def test_view_benchmark_warnings_real_halide(hist_session, run_tool, capsys):
     assert len(bench_ids) == 1
     bench_id = bench_ids[0]
 
-    # Unblocked view: both cited warnings show, with their messages.
+    # The printed ID is the session-scoped private.{schedule}.{i}.{n} form.
+    assert bench_id.startswith("private."), bench_id
+
+    # Unblocked view: both cited warnings show, with their messages.  The private
+    # short ID resolves only with the session (-s), so pass it via S.ns.
     run_tool(tools.cmd_view_benchmark_warnings,
-             ns(catalog=S.catalog_dir, benchmark=bench_id))
+             S.ns(benchmark=bench_id))
     out = capsys.readouterr().out
     assert "rule/func: no_vector_ops hist_rows" in out
     assert "rule/func: could_compute_further_inside equalize" in out
@@ -133,7 +137,7 @@ def test_view_benchmark_warnings_real_halide(hist_session, run_tool, capsys):
     # Re-view: the blocked warning hides its message + gains block/citation
     # lines; the other cited warning is untouched.
     run_tool(tools.cmd_view_benchmark_warnings,
-             ns(catalog=S.catalog_dir, benchmark=bench_id))
+             S.ns(benchmark=bench_id))
     blocked = capsys.readouterr().out
     assert "blocked by:" in blocked
     assert "citation:" in blocked

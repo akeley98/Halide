@@ -2087,8 +2087,9 @@ class Catalog:
     def format_warning_toggle_id(self, w):
         return _format_warning_toggle_short(self, w)
 
-    def format_benchmark_id(self, b):
-        return _format_benchmark_short(self, b)
+    # Benchmark short IDs are session-scoped (`private.{schedule}.{i}.{n}`), so
+    # they are formatted by `SessionWorkspace.format_benchmark_short_id`, not
+    # here.  The catalog only resolves benchmark *full* IDs.
 
     # -- ID resolution ---------------------------------------------------
     def resolve_schedule(self, s):
@@ -2348,7 +2349,12 @@ def _resolve_warning_toggle(catalog, s):
 
 
 def _resolve_benchmark(catalog, s):
-    # Full ID?  "{schedule full id}_{hostname}_{timestamp}"
+    # Benchmarks resolve ONLY by full ID at the catalog layer
+    # ("{schedule full id}_{hostname}_{timestamp}").  The sole short-ID form,
+    # `private.{schedule}.{i}.{n}`, is session-scoped and resolved by
+    # `SessionWorkspace.resolve_benchmark_short_id` (via `Context.
+    # resolve_benchmark_arg`), not here -- there is no general/catalog-wide
+    # benchmark short ID (idea.md "Benchmark short ID").
     if ids.looks_like_benchmark_id(s):
         sched_id = ids.benchmark_schedule_id(s)
         local = ids.benchmark_local_part(s)
@@ -2358,28 +2364,10 @@ def _resolve_benchmark(catalog, s):
                 if b.local_id == local:
                     return b
         raise DhHlError("no such benchmark: " + s)
-    # Short form: {schedule ID}.{hostname}_{timestamp}.  The schedule ID may
-    # itself be a short ID containing '.'; the "{hostname}_{ts}" tail has none.
-    sched_part, dot, local = s.rpartition(".")
-    if dot == "" or not ids.looks_like_benchmark_local_id(local):
-        raise DhHlError("not a valid benchmark ID: " + repr(s))
-    matches = []
-    for node in _resolve_schedule_matches_lenient(catalog, sched_part):
-        for b in node.benchmarks:
-            if b.local_id == local:
-                matches.append(b)
-    seen, uniq = set(), []
-    for b in matches:
-        if b.full_id not in seen:
-            seen.add(b.full_id)
-            uniq.append(b)
-    if len(uniq) == 1:
-        return uniq[0]
-    if not uniq:
-        raise DhHlError("no benchmark matches short ID: " + repr(s))
-    ordered = sorted(uniq, key=lambda b: b.full_id)
-    raise DhHlError("\n".join(
-        ["ambiguous benchmark ID; matches:"] + ["  " + b.full_id for b in ordered]))
+    raise DhHlError(
+        "not a valid benchmark full ID: " + repr(s)
+        + " (benchmark short IDs have the form private.{schedule}.{i}.{n} and "
+          "resolve only with a session, -s)")
 
 
 # ---------------------------------------------------------------------------
@@ -2461,19 +2449,6 @@ def _format_warning_toggle_short(catalog, w):
     except DhHlError:
         pass
     return w.full_id
-
-
-def _format_benchmark_short(catalog, b):
-    """A short benchmark ID "{schedule short id}.{hostname}_{timestamp}", falling
-    back to the full ID if that is somehow ambiguous."""
-    sched_short = _format_schedule_short(catalog, b.schedule)
-    cand = "{}.{}".format(sched_short, b.local_id)
-    try:
-        if catalog.resolve_benchmark(cand).full_id == b.full_id:
-            return cand
-    except DhHlError:
-        pass
-    return b.full_id
 
 
 def _resolve_problem(catalog, s):

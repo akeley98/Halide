@@ -126,18 +126,20 @@ This contains files and directories holding state:
 * **Benchmark Sub-objects:** store in `bench/{hostname}_{timestamp of benchmark}.json`
   (the `{hostname}` here is the *sanitized* stable hostname — see "Stable Hostname").
 
-  The `{hostname}_{timestamp of benchmark}` part is the benchmark's *local ID*;
-  it is exactly what's after the last `.` in a benchmark short ID (and exactly the
-  file-name stem), so don't parse files to resolve IDs.  The benchmark's *full ID*
-  prepends the parent schedule full ID
+  The `{hostname}_{timestamp of benchmark}` part is the benchmark's *local ID*
+  (exactly the file-name stem), so don't parse files to resolve IDs.  The
+  benchmark's *full ID* prepends the parent schedule full ID
   (`{parent schedule full ID}_{hostname}_{timestamp}`).  Because the timestamp is
   fixed width and the schedule prefix is fixed width, the hostname in the middle
-  parses out unambiguously even though it may itself contain `_`.  Implemented as
-  the `Benchmark` class in `catalog.py`; resolution/formatting are the
-  `_resolve_benchmark` / `_format_benchmark_short` free functions (exposed via
-  `Catalog.resolve_benchmark` / `Catalog.format_benchmark_id`).  The benchmark
-  JSON gains a `warnings` list (see idea.md "Benchmark Sub-object State" and the
-  `HL_PROFILER_JSON_TEMPORARY_WARNINGS` note in `reference_build_commands.md`).
+  parses out unambiguously even though it may itself contain `_`.  The local ID is
+  NOT the short ID: benchmark short IDs are the session-scoped
+  `private.{schedule}.{i}.{n}` form (see "benchmark short ID translation" below),
+  unrelated to the local ID.  Implemented as the `Benchmark` class in
+  `catalog.py`; full-ID resolution is the `_resolve_benchmark` free function
+  (exposed via `Catalog.resolve_benchmark`) -- there is no catalog-level short-ID
+  resolver or formatter.  The benchmark JSON gains a `warnings` list (see idea.md
+  "Benchmark Sub-object State" and the `HL_PROFILER_JSON_TEMPORARY_WARNINGS` note
+  in `reference_build_commands.md`).
 
 * **WarningToggle Files:** store in `warning_toggle/{timestamp}.json` with
   key-value pairs `citation` (a full commentary ID, from anywhere in the catalog),
@@ -359,14 +361,26 @@ Inside the `private/{session id}` sub-directory, there is
   delete files, so clearing it writes empty).  Modelled by the `CurrentAnchor`
   object (see "Private-workspace state objects").
 
-IMPL TASK: benchmark object short ID translation.
-Like the above, give brief pointer to object.
-Tweak the specified JSON design if needed.
-
 * `benchmark_short_id/{schedule node full ID}/{generator parameters index}.json`
-  holds list of benchmark full IDs generated with the current session
-  for the given (schedule, generator parameters) pair, in order of creation.
-  Missing file implies empty list.
+  backs the `private.{schedule}.{i}.{n}` benchmark short ID form (idea.md
+  "Benchmark short ID").  Each file is a JSON list of the benchmark full IDs THIS
+  session created for that (schedule, generator parameters index) pair, in
+  creation order; `n` is that 0-based index, and a missing file is the empty
+  list.  The **sharding is load-bearing at scale**: a hard Halide campaign can run
+  hundreds of thousands of benchmarks, but any one operation only ever touches a
+  handful of schedules -- the set being profiled (append), or the one schedule
+  named by a short ID being resolved.  One-file-per-pair keeps the O(n) cost
+  *per schedule* instead of loading/rewriting the whole session's benchmark
+  database.  It is also why there is **no** reverse full-ID -> short-ID lookup (it
+  would scan every shard) and no `benchmark_short_id` getter: the only formatter
+  is `build`, which already knows the exact `(schedule, params index, n)` from
+  `record` and formats directly.  Modelled by the `PrivateBenchmarkShortIds`
+  object (see "Private-workspace state objects").  Helpers:
+  `SessionWorkspace.record_benchmark` (append, returns `n`),
+  `format_benchmark_short_id` (a pure static formatter over an explicit
+  `(node, i, n)`), and `resolve_benchmark_short_id` (parse + single-shard
+  `lookup`); `Context.resolve_benchmark_arg` is the user-facing entry point (full
+  ID via the catalog, `private.` form via the workspace).
 
 * `private_ideas.json`, the session private idea list (a JSON object).
   The keys are the set of idea node full IDs comprising the list.
@@ -408,6 +422,15 @@ several pool tags, accumulate in the one in-memory map and flush together
 (the previous re-read-per-call code persisted only the last write).  `init_workspace`
 is the exception: as a pure initializer it writes every file directly with its
 `--force` `allow` flag (immediate `O_EXCL` refuse), bypassing these objects.
+
+`PrivateBenchmarkShortIds` follows the SAME discipline but is **not** a
+`_PrivateMapState`: it is a *sharded* directory (one JSON list per (schedule,
+params index), lazy-loaded per shard, dirty tracked per shard, each dirty shard
+flushed once).  It applies the same anti-leak principle without a `view`: it has
+no bulk reader, so the mutable list never escapes -- `record` is the sole mutator
+(catalog-check first, append, dirty, with no failure point between the append and
+the dirty) and `lookup` returns a single immutable string.  A future bulk reader
+would have to return a copy/tuple, never the live shard list.
 
 Any command that needs `private/{session id}` creates the *directory* lazily
 (`SessionWorkspace.ensure_private_dir`; the `session.lock` and `bin/` likewise).
