@@ -2379,9 +2379,6 @@ This only has to be done once, then left alone in the agent hot loop.
         in.fill(100);
         int rc = fn(in, out);   // use whatever your real inputs/outputs are
 
-IMPL TASK: make an effort to have your tests work on Linux too.
-Will test on the mystical "mantissa" Linux box eventually...
-
 5. **Build the runner once** (`-Wl,-export_dynamic` on macOS / `-rdynamic` on
    Linux, include `-I$HALIDE/include -I$HALIDE/../src/runtime -I.`,
    link the runtime object, `-lpthread -ldl`).
