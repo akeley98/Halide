@@ -805,9 +805,13 @@ All `schedule ID` arguments also accept the following magic values:
 * any golden object ID: schedule node of the referenced golden (error if none)
 <!-- impl -->
 
-IMPL TASK: implement the `schedule ID` translation.
-Can lift code from the removed `terminus_schedule_full_id`, etc.
-`seed` intentionally removed.
+IMPL TASK: implement the `terminus` and `session_output` translations.
+The `golden` value and golden object IDs are done (handled in
+`catalog._resolve_schedule`, so `--other golden` and every `[schedule ID]`
+argument pick them up).  `terminus`/`session_output` still resolve only through
+their dedicated tools; wiring them into `_resolve_schedule` needs session
+context and is bundled with the dedicated-tool elimination.
+Can lift code from `terminus_schedule_full_id`, etc.  `seed` intentionally removed.
 
 The golden object IDs have a form that will never collide with
 schedule full IDs (can't start with `golden_`)
@@ -981,8 +985,6 @@ passes only `impl` (see "Help Tool — Implementation Details").
 
 ## Session Creation Tools
 
-IMPL TASK: save "golden schedule node on opening" and "enabled problems on opening".
-
 Each session creation tool requires (or implies) an input proposal name,
 prompt file, and list of parent schedule nodes.
 
@@ -1002,6 +1004,8 @@ The tools perform the steps:
   and with the prompt from the prompt file.
   The session private workspace is not initialized.
   The new session's parent session and default anchor node is defined per-tool.
+  The session also snapshots the "golden schedule node on opening" and
+  "enabled problems on opening" as they exist at this moment.
 
 * For each seed idea, a new schedule node is created,
   holding a copy of the seed idea's parent's C++ and parameters files.
@@ -2224,8 +2228,6 @@ Error if the current session has no output yet.
     dh_hl new_golden -s ... {remarks file} [schedule ID]
 <!-- help -->
 
-IMPL TASK: add command
-
 Create a new golden object with remarks from a given file,
 and the given schedule node.
 The special value `none` encodes "no schedule node".
@@ -2274,15 +2276,13 @@ wrappers, clones, `compute_with`, and especially `rfactor`.
 
     dh_hl golden_history -C ...
 
-IMPL TASK: add command
-
 Prints most recent to least recent golden objects, separated by dividers.
 <!-- help -->
 Each is printed as
 
 * `timestamp: {timestamp}`
 
-* `schedule: {schedule ID}`
+* `schedule: {schedule ID}` (short if possible), or `schedule: none`
 
 * remarks
 <!-- end help -->
@@ -2292,8 +2292,6 @@ Each is printed as
 
     dh_hl json_golden_info -C ... {golden ID}
 <!-- help -->
-
-IMPL TASK: add command, fixed problem 4 (copy/paste SNAFU; emacs kill ring saved the day)
 
 Print info for the given golden object as a JSON object with key/value pairs
 
@@ -2308,17 +2306,6 @@ Print info for the given golden object as a JSON object with key/value pairs
 ### New Problem Tool
 
     dh_hl new_problem -C ... {short name} ...
-<!-- impl -->
-
-IMPL TASK: the problem-object CLI commands are tested only IN-PROCESS
-(`test_problems.py` via `run_tool`, which bypasses argparse) plus new_problem /
-disable_problem incidentally through `run_cli` in the halide-marked tests.
-Invalid short names and bad `<...>` args are checked at the MODEL level
-(`test_argv_validation_rejects`, `test_short_name_validation`).  Missing: a
-non-halide `run_cli` test exercising the `new_problem` argv REMAINDER parsing,
-the dispatch, the list/json output formatting, and the error EXIT CODES (dup /
-bad short name / bad `<...>`).
-<!-- end impl -->
 
 Add a new problem with the given short name,
 and problem CLI arguments as specified in the remaining arguments.
@@ -2486,12 +2473,6 @@ Give both full session IDs and session handles.
 
     dh_hl should_accept -s ... [schedule ID]
 
-IMPL TASK: add this
-
-IMPL TASK: test the last 3 checks actually are for top-level sessions only.
-
-IMPL TASK: include `run_cli` tests for all this functionality.
-
 Check the given schedule's suitability to be the primary output schedule.
 This tool gives the check-override flags that need to be passed to
 `dh_hl close_session` to force the primary output schedule anyway.
@@ -2560,8 +2541,6 @@ to think the end user will approve of this algorithm change.
 ### Close Session Tool
 
     dh_hl close_session -s ... [schedule IDs...]
-
-IMPL TASK: `dh_hl should_accept` checks.
 
 Add outputs to the current session, making it self-closed.
 This promotes a fair amount of private (not git tracked)
@@ -2687,6 +2666,12 @@ Prints the state of the current session as a JSON object, with key/value pairs
 
 * `default_anchor_schedule`: string or null,
   full ID of default anchor schedule node
+
+* `golden_schedule_on_opening`: string or null,
+  full ID of the golden schedule node when the session was created
+
+* `enabled_problems_on_opening`: list of strings,
+  full IDs of the problems enabled when the session was created
 
 * `seed_ideas`: list of strings, full ID of seed idea nodes
 
@@ -3136,10 +3121,6 @@ this is load bearing for correctness, since it encodes more than a session full 
 
     dh_hl json_export -C ...
 <!-- help -->
-
-IMPL TASK: `goldens`, also the agent that implements this should advise
-me of the real status of `json_export` testing; is there any attempt
-to ensure actual functional correctness and not just key names LGTM?
 
 Exports the entire catalog as a JSON object, with key/value pairs
 

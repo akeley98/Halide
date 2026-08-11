@@ -246,6 +246,29 @@ def is_benchmark_set_id(full_id):
             and re.match(r"[A-Za-z0-9_-]+\Z", host) is not None)
 
 
+# ---- Golden object full IDs ------------------------------------------------
+#
+# Golden full ID = "golden_{timestamp}".  The "golden_" prefix keeps it clear of
+# schedule full IDs (fixed-width {timestamp}_{hash}) and every short ID (which
+# always contains a '.'), so a golden object ID can double as a magic
+# [schedule ID] value without collision (idea.md "Golden Object State").
+
+GOLDEN_ID_PREFIX = "golden_"
+
+
+def make_golden_id(timestamp):
+    return GOLDEN_ID_PREFIX + timestamp
+
+
+def is_golden_id(full_id):
+    return (full_id.startswith(GOLDEN_ID_PREFIX)
+            and is_timestamp(full_id[len(GOLDEN_ID_PREFIX):]))
+
+
+def golden_timestamp(full_id):
+    return full_id[len(GOLDEN_ID_PREFIX):]
+
+
 # ---- Session node full IDs -------------------------------------------------
 #
 # Session full ID = "{depth}_{timestamp}_{username}@{hostname}" (see idea.md).

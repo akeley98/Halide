@@ -116,17 +116,19 @@ def make_catalog_session(cat_dir, source=DUMMY_SOURCE, idea_name="seed"):
         idea = cat.create_idea(root, idea_name, "seed proposal\n")
         dup = cat.create_schedule(source, parent_idea=idea)
         idea.set_canonical(dup.full_id)
+        # Mimic new_catalog's default problem (a main RunGenMain problem), so
+        # profiling has a problem to run (idea.md "New Catalog Tool").  Created
+        # BEFORE the session, matching new_catalog, so the session records it in
+        # "enabled problems on opening".
+        cat.create_problem(
+            ["<RunGenMain>", "--benchmarks=all", "--estimate_all"],
+            "default", state="main")
         sess = cat.create_session(idea, None, 0)
         ws = SessionWorkspace(cat.catalog_dir, sess.full_id, catalog=cat)
         ws.initialize(source, ("idea", idea.full_id))
         # Mimic init_workspace: the seed idea is in the private idea list with
         # pool tag "default", so new_idea on its canonical inherits a tag.
         ws.set_pool_tag(idea.full_id, "default")
-        # Mimic new_catalog's default problem (a main RunGenMain problem), so
-        # profiling has a problem to run (idea.md "New Catalog Tool").
-        cat.create_problem(
-            ["<RunGenMain>", "--benchmarks=all", "--estimate_all"],
-            "default", state="main")
         cat.flush()
         safety.commit()
         return cat.catalog_dir, sess.full_id

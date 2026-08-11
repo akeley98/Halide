@@ -6,6 +6,13 @@ behavior contract).  Keep the two in sync when changing a tool.
 For now this tool is an early prototype and backwards compatibility is a non-goal.
 So do not worry when implementing changes that would break reading old catalogs.
 
+NOTE TO AGENTS: the `halide`-marked tests (which build real Halide pipelines
+against the local `~/Halide` build) CAN be run in this environment.  Do not
+conclude the Halide build is unavailable and skip them -- it is present on both
+"David's MacBook Pro" and the "MantissaAmpere" Linux box.  Run them with
+`.venv/bin/python -m pytest` (no `-m "not halide"`), and prefer real end-to-end
+coverage over faking build artifacts where a `halide` test is feasible.
+
 IMPL TASK: paragraphs like these highlight where the doc describes features
 not yet implemented in the actual code (that's the agent's job).
 When you're reasonably confident the task is done, delete the IMPL TASK paragraph.

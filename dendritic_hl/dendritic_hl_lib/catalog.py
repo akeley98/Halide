@@ -580,6 +580,56 @@ class Problem:
                                  self._short_name + "\n")
 
 
+class Golden:
+    """One golden object: golden/{timestamp}/golden.json holding a JSON object
+    in the json_golden_info shape (idea.md "Golden Object State", impl.md
+    "Golden Objects on Disk").
+
+    Full ID is "golden_{timestamp}"; the directory is keyed by the bare
+    timestamp.  A golden is immutable once created (no setters), so golden.json
+    is written once at creation."""
+
+    def __init__(self, catalog, full_id, is_new=False, remarks=None,
+                 schedule=None):
+        self.catalog = catalog
+        self.full_id = full_id
+        self._data = ({"remarks": remarks, "schedule": schedule}
+                      if is_new else _UNLOADED)
+        self.is_new = is_new
+        if is_new:
+            self.catalog._mark_dirty(self)
+
+    @property
+    def timestamp(self):
+        return ids.golden_timestamp(self.full_id)
+
+    @property
+    def dir(self):
+        return os.path.join(self.catalog.golden_dir, self.timestamp)
+
+    @property
+    def data(self):
+        if self._data is _UNLOADED:
+            with open(os.path.join(self.dir, "golden.json"), "r",
+                      encoding="utf-8") as f:
+                self._data = json.load(f)
+        return self._data
+
+    @property
+    def remarks(self):
+        return self.data["remarks"]
+
+    @property
+    def schedule_id(self):
+        """The referenced schedule node full ID, or None for "no schedule"."""
+        return self.data["schedule"]
+
+    def flush(self):
+        safety.makedirs_tracked(self.dir)
+        safety.new_file(os.path.join(self.dir, "golden.json"),
+                        json.dumps(self.data, indent=1) + "\n")
+
+
 # ---------------------------------------------------------------------------
 # Schedule node
 # ---------------------------------------------------------------------------
@@ -1022,6 +1072,10 @@ class SessionNode:
     * ``seed_ideas.json`` (required): JSON list of seed idea full IDs (>= 1).
     * ``parent.txt`` (optional): parent session full ID.
     * ``default_anchor_schedule.txt`` (optional): a schedule full ID.
+    * ``golden_on_opening.txt`` (optional): the golden schedule node full ID at
+      session-creation time (absent = none then).
+    * ``enabled_problems_on_opening.json`` (written at creation): JSON list of the
+      problem full IDs enabled when the session was created.
     * ``outputs.json`` (optional): the session outputs, absent until closed.
       Shape: ``{"schedules": [{"id": <full id>, "pool_tag": <str>}, ...],
       "benchmark_sets": [<full id>, ...]}``.  The first schedule is the
@@ -1032,7 +1086,8 @@ class SessionNode:
     lives under private/{id}/ and is NOT owned by this node."""
 
     def __init__(self, catalog, full_id, is_new=False, seed_idea_ids=None,
-                 prompt=None, parent_id=None, default_anchor_schedule_id=None):
+                 prompt=None, parent_id=None, default_anchor_schedule_id=None,
+                 golden_on_opening_id=None, enabled_problems_on_opening=None):
         self.catalog = catalog
         self.full_id = full_id
         self.is_new = is_new
@@ -1044,6 +1099,14 @@ class SessionNode:
         self._parent_id = parent_id if is_new else _UNLOADED
         # default anchor tri-state; for a new node it's the passed value (or None).
         self._default_anchor = default_anchor_schedule_id if is_new else _UNLOADED
+        # "on opening" snapshots (idea.md "Session Node State"): the golden
+        # schedule node and the enabled problems as they were when the session was
+        # created.  Immutable once written.  golden tri-state: _UNLOADED / None /
+        # id str.  For a new node the enabled-problems list is always a list (a
+        # legacy session missing the file reads as []).
+        self._golden_on_opening = golden_on_opening_id if is_new else _UNLOADED
+        self._enabled_problems_on_opening = (
+            list(enabled_problems_on_opening or []) if is_new else _UNLOADED)
         self._outputs = _UNLOADED               # _UNLOADED / None / dict
         self._outputs_dirty = False
         self._delisted = _UNLOADED              # _UNLOADED / bool
@@ -1117,6 +1180,34 @@ class SessionNode:
             else:
                 self._default_anchor = None
         return self._default_anchor
+
+    # -- "on opening" snapshots (optional) ------------------------------
+    @property
+    def golden_schedule_id_on_opening(self):
+        """Full ID of the golden schedule node at session-creation time, or None
+        (idea.md "Session Node State")."""
+        if self._golden_on_opening is _UNLOADED:
+            p = os.path.join(self.dir, "golden_on_opening.txt")
+            if os.path.exists(p):
+                with open(p, "r", encoding="utf-8") as f:
+                    self._golden_on_opening = f.read().strip()
+            else:
+                self._golden_on_opening = None
+        return self._golden_on_opening
+
+    @property
+    def enabled_problem_ids_on_opening(self):
+        """Full IDs of the problems that were enabled when the session was
+        created (idea.md "Session Node State").  A legacy session predating this
+        snapshot (no file) reads as an empty list."""
+        if self._enabled_problems_on_opening is _UNLOADED:
+            p = os.path.join(self.dir, "enabled_problems_on_opening.json")
+            if os.path.exists(p):
+                with open(p, "r", encoding="utf-8") as f:
+                    self._enabled_problems_on_opening = json.load(f)
+            else:
+                self._enabled_problems_on_opening = []
+        return self._enabled_problems_on_opening
 
     # -- outputs (optional; absent until closed) ------------------------
     @property
@@ -1204,6 +1295,17 @@ class SessionNode:
                 safety.new_file(
                     os.path.join(self.dir, "default_anchor_schedule.txt"),
                     self._default_anchor + "\n")
+            # "On opening" snapshots: the golden pointer is optional (absent = no
+            # golden then), but the enabled-problems list is always written (even
+            # empty) so a present file distinguishes "none enabled" from a legacy
+            # session that predates the snapshot.
+            if self._golden_on_opening is not None:
+                safety.new_file(
+                    os.path.join(self.dir, "golden_on_opening.txt"),
+                    self._golden_on_opening + "\n")
+            safety.new_file(
+                os.path.join(self.dir, "enabled_problems_on_opening.json"),
+                json.dumps(self._enabled_problems_on_opening, indent=1) + "\n")
         # outputs.json / delisted.txt are presence/pointer files added once and
         # never modified -- created whether the node is new or pre-existing
         # (close_session / delist on an existing session).
@@ -1366,12 +1468,14 @@ class Catalog:
         self.session_dir = os.path.join(self.catalog_dir, "session")
         self.benchmark_sets_dir = os.path.join(self.catalog_dir, "benchmark_sets")
         self.problem_dir = os.path.join(self.catalog_dir, "problem")
+        self.golden_dir = os.path.join(self.catalog_dir, "golden")
         self.private_dir = os.path.join(self.catalog_dir, "private")
         self._schedules = None
         self._ideas = None
         self._sessions = None
         self._benchmark_sets = None
         self._problems = None
+        self._goldens = None
         self._linked = False
         self._session_linked = False
         self._dirty = {}            # id(obj) -> obj
@@ -1555,6 +1659,61 @@ class Catalog:
 
     def format_problem_id(self, p):
         return _format_problem_short(self, p)
+
+    # -- goldens ---------------------------------------------------------
+    @property
+    def goldens(self):
+        if self._goldens is None:
+            self._goldens = {}
+            if os.path.isdir(self.golden_dir):
+                for name in os.listdir(self.golden_dir):
+                    # Directories are keyed by the bare timestamp; the full ID
+                    # prepends "golden_".
+                    if ids.is_timestamp(name):
+                        full_id = ids.make_golden_id(name)
+                        self._goldens[full_id] = Golden(self, full_id)
+        return self._goldens
+
+    def create_golden(self, remarks, schedule_id):
+        """Create a new golden with *remarks* and *schedule_id* (a schedule full
+        ID, or None for "no schedule node"), idea.md "Golden Object State".  The
+        full ID is "golden_{timestamp}", minted under the catalog lock like every
+        other timestamped catalog name."""
+        if schedule_id is not None and schedule_id not in self.schedules:
+            raise DhHlError("no such schedule node: " + schedule_id)
+        ts = self.mint_timestamped_name(
+            lambda t: os.path.join(self.golden_dir, t))
+        full_id = ids.make_golden_id(ts)
+        g = Golden(self, full_id, is_new=True, remarks=remarks,
+                   schedule=schedule_id)
+        self.goldens[full_id] = g
+        return g
+
+    def get_golden(self, full_id):
+        g = self.goldens.get(full_id)
+        if g is None:
+            raise DhHlError("no such golden: " + full_id)
+        return g
+
+    def goldens_newest_first(self):
+        """All goldens, most recent first.  Golden full IDs share the "golden_"
+        prefix followed by a fixed-width timestamp, so lexicographic order on the
+        full ID is chronological order."""
+        return [self.goldens[k] for k in sorted(self.goldens, reverse=True)]
+
+    def most_recent_golden(self):
+        """The most recently created golden object, or None if there are none."""
+        goldens = self.goldens_newest_first()
+        return goldens[0] if goldens else None
+
+    def golden_schedule_node(self):
+        """The golden schedule node: the schedule referenced by the most recent
+        golden object.  None if the reference is none, or there is no golden
+        object at all (idea.md "Golden Object State")."""
+        g = self.most_recent_golden()
+        if g is None or g.schedule_id is None:
+            return None
+        return self.get_schedule(g.schedule_id)
 
     def get_schedule(self, full_id):
         node = self.schedules.get(full_id)
@@ -1833,9 +1992,18 @@ class Catalog:
         if not isinstance(seed_ideas, (list, tuple)):
             seed_ideas = [seed_ideas]
         seed_ids = [s.full_id if hasattr(s, "full_id") else s for s in seed_ideas]
+        # Snapshot the "on opening" catalog state (idea.md "Session Node State"):
+        # the current golden schedule node and the currently-enabled problems.
+        # Captured here, the single session-creation primitive, so every CLI
+        # session tool records them identically.
+        golden_node = self.golden_schedule_node()
+        golden_on_opening_id = golden_node.full_id if golden_node else None
+        enabled_problems_on_opening = [p.full_id for p in self.enabled_problems()]
         node = SessionNode(self, session_id, is_new=True, seed_idea_ids=seed_ids,
                            prompt=prompt, parent_id=parent_id,
-                           default_anchor_schedule_id=default_anchor_schedule_id)
+                           default_anchor_schedule_id=default_anchor_schedule_id,
+                           golden_on_opening_id=golden_on_opening_id,
+                           enabled_problems_on_opening=enabled_problems_on_opening)
         self.sessions[session_id] = node
         if self._session_linked:
             node.child_session_ids = []
@@ -1854,6 +2022,7 @@ class Catalog:
         safety.makedirs_tracked(self.session_dir)
         safety.makedirs_tracked(self.benchmark_sets_dir)
         safety.makedirs_tracked(self.problem_dir)
+        safety.makedirs_tracked(self.golden_dir)
         gi = os.path.join(self.catalog_dir, ".gitignore")
         if not os.path.exists(gi):
             # The whole per-session private workspace tree is gitignored; only
@@ -1961,6 +2130,25 @@ def _resolve_idea(catalog, s):
 
 
 def _resolve_schedule(catalog, s):
+    # Magic [schedule ID] values (idea.md "[schedule ID]" magic arguments).  Only
+    # the golden forms are handled at this catalog layer: `golden` and any golden
+    # object ID resolve without a session, so `--other golden`, `-C`-only tools,
+    # and the default resolver all pick them up here.  `terminus`/`session_output`
+    # need session context and are intentionally not handled here.
+    if s == "golden":
+        node = catalog.golden_schedule_node()
+        if node is None:
+            raise DhHlError(
+                "no golden schedule node (no golden object, or the most recent "
+                "golden references no schedule node)")
+        return node
+    if ids.is_golden_id(s):
+        g = catalog.goldens.get(s)
+        if g is None:
+            raise DhHlError("no such golden: " + s)
+        if g.schedule_id is None:
+            raise DhHlError("golden {} references no schedule node".format(s))
+        return catalog.get_schedule(g.schedule_id)
     # Full ID?
     if ids.is_schedule_id(s):
         node = catalog.schedules.get(s)

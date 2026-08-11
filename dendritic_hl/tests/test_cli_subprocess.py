@@ -151,6 +151,47 @@ def _bootstrap_cli(run_cli, tmp_path):
     return cat_dir, handle
 
 
+def test_new_golden_cli_dispatch_and_exit_codes(run_cli, tmp_path):
+    """CLI-layer coverage for the golden tools (idea.md "Golden Object Tools"):
+    the `none`-schedule create path, golden_history / json_golden_info dispatch
+    and formatting, and the genuine exit codes for the hlpipe gate, a missing
+    remarks file, and an unknown golden ID.  Halide-free (never builds)."""
+    cat_dir, handle = _bootstrap_cli(run_cli, tmp_path)
+    (tmp_path / "rem.txt").write_text("first remarks\n")
+
+    # new_golden with `none` -> creates a golden, prints only its full ID.
+    r = run_cli("new_golden", "-s", handle, str(tmp_path / "rem.txt"), "none")
+    assert r.returncode == 0, r.stderr
+    gid = r.stdout.strip()
+    assert gid.startswith("golden_") and "\n" not in gid
+
+    # golden_history dispatch + formatting (no schedule -> "schedule: none").
+    r = run_cli("golden_history", "-C", cat_dir)
+    assert r.returncode == 0 and "schedule: none" in r.stdout
+    assert "first remarks" in r.stdout
+
+    # json_golden_info round-trips the stored shape.
+    r = run_cli("json_golden_info", "-C", cat_dir, gid)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == {"remarks": "first remarks\n", "schedule": None}
+
+    # The hlpipe gate: a real schedule with nothing built -> exit 1, clean error.
+    sid = run_cli("seed_schedule_short_id", "-s", handle).stdout.strip()
+    r = run_cli("new_golden", "-s", handle, str(tmp_path / "rem.txt"), sid)
+    assert r.returncode == 1
+    assert "no algorithm hlpipe built" in r.stderr and "Traceback" not in r.stderr
+
+    # Missing remarks file -> exit 1, clean error (not a traceback).
+    r = run_cli("new_golden", "-s", handle, str(tmp_path / "nope.txt"), "none")
+    assert r.returncode == 1 and "Traceback" not in r.stderr
+
+    # Unknown golden ID -> exit 1, clean error.
+    r = run_cli("json_golden_info", "-C", cat_dir,
+                "golden_2020-01-01T000000_000000Z")
+    assert r.returncode == 1
+    assert "no such golden" in r.stderr and "Traceback" not in r.stderr
+
+
 def test_init_build_positional_target(run_cli, tmp_path):
     """The mistake that bit an agent -- passing the target positionally instead
     of via --target -- now works (idea.md Init-Build Tool `--target` lenience)."""

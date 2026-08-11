@@ -160,7 +160,9 @@ def test_close_session_requires_commentary(session, run_tool):
 
 def test_close_then_successor(session, run_tool, capsys, tmp_path):
     _comment(session, run_tool, tmp_path)
-    out = _out(run_tool, capsys, tools.cmd_close_session, session.ns())
+    # This fixture has no benchmarks; not exercising the problem check here.
+    out = _out(run_tool, capsys, tools.cmd_close_session,
+               session.ns(allow_failed_problems=True))
     assert "Closed session" in out
 
     info = json.loads(_out(run_tool, capsys, tools.cmd_json_session_info,
@@ -413,7 +415,7 @@ def test_view_session_commentary_and_outputs(session, run_tool, tmp_path, capsys
         run_tool(tools.cmd_list_output_schedules, session.ns())
 
     _comment(session, run_tool, tmp_path)
-    run_tool(tools.cmd_close_session, session.ns())
+    run_tool(tools.cmd_close_session, session.ns(allow_failed_problems=True))
 
     vc = _out(run_tool, capsys, tools.cmd_view_session_commentary, session.ns())
     assert "OUTPUT SCHEDULE:" in vc and "session summary" in vc
@@ -463,7 +465,7 @@ def test_copy_and_id_getters(session, run_tool, capsys, tmp_path):
 
 def test_terminus_and_output_getters_after_close(session, run_tool, capsys, tmp_path):
     _comment(session, run_tool, tmp_path)
-    run_tool(tools.cmd_close_session, session.ns())
+    run_tool(tools.cmd_close_session, session.ns(allow_failed_problems=True))
 
     out_full = _out(run_tool, capsys, tools.cmd_session_output_full_id,
                     session.ns()).strip()
@@ -485,7 +487,7 @@ def test_json_export_has_all_categories(session, run_tool, capsys):
     obj = json.loads(_out(run_tool, capsys, tools.cmd_json_export,
                           ns(catalog=session.catalog_dir)))
     assert set(obj) == {"ideas", "schedules", "sessions", "benchmark_sets",
-                        "problems"}
+                        "problems", "goldens"}
     assert session.session_id in obj["sessions"]
     assert len(obj["schedules"]) == 2  # root + canonical dup
     assert len(obj["ideas"]) == 1

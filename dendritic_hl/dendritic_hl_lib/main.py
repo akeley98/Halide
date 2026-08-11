@@ -173,6 +173,7 @@ COMMAND_HELP = {
     "new_catalog": "Create a brand-new catalog + first session from an input C++ file.",
     "new_sub_session": "Spawn a sub-agent session (depth+1) off a parent schedule.",
     "new_successor_session": "Start a successor to a self-closed top-level session.",
+    "should_accept": "Check a schedule's suitability as a primary output; print any close_session override flags.",
     "close_session": "Set the current session's output schedule (its final result).",
     "delist_session": "Mark the current session as delisted.",
     "join_session": "Merge another session's outputs into the current private lists.",
@@ -204,6 +205,10 @@ COMMAND_HELP = {
     "view_session_commentary": "Show all commentary of the current session's output schedule.",
     "json_session_info": "Dump the current session's state as JSON.",
     "json_export": "Dump the entire catalog (ideas, schedules, sessions) as JSON.",
+    # Golden objects
+    "new_golden": "Create a golden object (remarks + optional schedule node).",
+    "golden_history": "List golden objects, most recent first.",
+    "json_golden_info": "Dump a golden object as JSON.",
     # Problem objects
     "new_problem": "Create a problem (runner command line) with a short name.",
     "disable_problem": "Set a problem's state to disabled.",
@@ -481,9 +486,22 @@ def _build_parser():
     sp.add_argument("proposal_name", help="proposal name [A-Za-z0-9_]{1,72}")
     sp.add_argument("proposal", help="prompt file ('-' for stdin)")
 
+    sp = add("should_accept")
+    sp.add_argument("schedule", nargs="?", help="schedule ID (default: status)")
+
     sp = add("close_session")
     sp.add_argument("schedule", nargs="*",
                     help="output schedule IDs (default: status)")
+    # should_accept override flags (idea.md "Close Session Tool").
+    sp.add_argument("--allow-failed-problems", action="store_true",
+                    help="force close despite a failed problem check")
+    sp.add_argument("--allow-failed-golden", action="store_true",
+                    help="force close despite a failed golden check")
+    sp.add_argument("--allow-disabled-problems", action="store_true",
+                    help="force close despite an enabled-on-opening problem "
+                         "now being disabled")
+    sp.add_argument("--allow-changed-golden", action="store_true",
+                    help="force close despite the golden schedule node changing")
 
     add("delist_session")
 
@@ -551,6 +569,17 @@ def _build_parser():
                     help="print only the first line (up to 72 chars) of each")
     add("json_session_info")
     add("json_export")
+
+    # -- Golden objects ------------------------------------------------------
+    sp = add("new_golden")
+    sp.add_argument("remarks", help="remarks file ('-' for stdin)")
+    sp.add_argument("schedule", nargs="?",
+                    help="schedule ID, or 'none' for no schedule (default: status)")
+
+    add("golden_history")
+
+    sp = add("json_golden_info")
+    sp.add_argument("golden", help="golden object ID")
 
     # -- Problem objects -----------------------------------------------------
     sp = add("new_problem")
@@ -642,6 +671,7 @@ _DISPATCH = {
     "new_catalog": tools.cmd_new_catalog,
     "new_sub_session": tools.cmd_new_sub_session,
     "new_successor_session": tools.cmd_new_successor_session,
+    "should_accept": tools.cmd_should_accept,
     "close_session": tools.cmd_close_session,
     "delist_session": tools.cmd_delist_session,
     "join_session": tools.cmd_join_session,
@@ -673,6 +703,9 @@ _DISPATCH = {
     "view_session_commentary": tools.cmd_view_session_commentary,
     "json_session_info": tools.cmd_json_session_info,
     "json_export": tools.cmd_json_export,
+    "new_golden": tools.cmd_new_golden,
+    "golden_history": tools.cmd_golden_history,
+    "json_golden_info": tools.cmd_json_golden_info,
     "new_problem": tools.cmd_new_problem,
     "disable_problem": tools.cmd_disable_problem,
     "enable_problem": tools.cmd_enable_problem,

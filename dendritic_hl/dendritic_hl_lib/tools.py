@@ -10,6 +10,7 @@ import os
 import re
 import sys
 
+from . import build
 from . import cost
 from . import ids
 from . import locks
@@ -680,6 +681,8 @@ def _session_json(catalog, session):
         "children": [c.full_id for c in catalog.child_sessions(session)],
         "prompt": session.prompt,
         "default_anchor_schedule": session.default_anchor_schedule_id,
+        "golden_schedule_on_opening": session.golden_schedule_id_on_opening,
+        "enabled_problems_on_opening": list(session.enabled_problem_ids_on_opening),
         "seed_ideas": list(session.seed_idea_ids),
         "output_schedules": list(session.output_schedule_ids),
         "output_benchmark_sets": list(session.output_benchmark_set_ids),
@@ -959,6 +962,8 @@ def cmd_json_export(args):
                            for b in catalog.benchmark_sets.values()},
         "problems": {p.full_id: _problem_json(p)
                      for p in catalog.problems.values()},
+        "goldens": {g.full_id: _golden_json(g)
+                    for g in catalog.goldens.values()},
     }
     print(json.dumps(obj, indent=1))
 
@@ -1078,18 +1083,20 @@ def cmd_new_catalog(args):
     catalog.ensure_created()
     root = catalog.create_schedule(input_source, parent_idea=None,
                                    params_text=params_text)
-    # No parent session and no default anchor (a user-provided schedule may be
-    # poor, so it's not a safe anchor -- profiling might never terminate).
-    session, handle = _create_session(
-        catalog, [root], args.proposal_name, prompt_text,
-        parent_session=None, depth=0)
     # The default problem reproduces the harness's historical hard-wired runner
     # (idea.md "New Catalog Tool"): a standalone RunGenMain benchmarking all
     # outputs at their set_estimate sizes.  It is the `main` problem so the cost
-    # tools have a well-defined default.
+    # tools have a well-defined default.  Created BEFORE the session so the first
+    # session records it in "enabled problems on opening".
     catalog.create_problem(
         ["<RunGenMain>", "--benchmarks=all", "--estimate_all"],
         "default", state="main")
+    # No parent session and no default anchor (a user-provided schedule may be
+    # poor, so it's not a safe anchor -- profiling might never terminate).  No
+    # golden is added by default, so golden-on-opening is none.
+    session, handle = _create_session(
+        catalog, [root], args.proposal_name, prompt_text,
+        parent_session=None, depth=0)
     catalog.flush()
     safety.commit()
     print("Created catalog " + catalog_dir)
@@ -1149,6 +1156,156 @@ def cmd_new_successor_session(args):
 
 # ---- close / delist -------------------------------------------------------
 
+# ---- should_accept checks (shared with close_session) ---------------------
+
+# check kind -> the close_session flag that overrides it (idea.md "Should-accept
+# Schedule Tool" / "Close Session Tool").
+_ACCEPT_OVERRIDE_FLAGS = {
+    "failed_problems": "--allow-failed-problems",
+    "failed_golden": "--allow-failed-golden",
+    "disabled_problems": "--allow-disabled-problems",
+    "changed_golden": "--allow-changed-golden",
+}
+
+# check kind -> the argparse attribute set by its override flag (dashes to
+# underscores).  Used by close_session to see which failures were force-accepted.
+_ACCEPT_OVERRIDE_ATTRS = {
+    kind: flag[len("--"):].replace("-", "_")
+    for kind, flag in _ACCEPT_OVERRIDE_FLAGS.items()
+}
+
+
+def _hlpipe_path(ctx, schedule_id):
+    """Path in this session's bin/ of a schedule's algorithm hlpipe (0th
+    generator parameters -- the algorithm is params-independent, and 0 is the
+    canonical index new_golden uses)."""
+    return os.path.join(
+        ctx.workspace.bin_dir,
+        build._build_output_rel(schedule_id, "algorithm_hlpipe", 0))
+
+
+def _missing_problem_benchmarks(ctx, node):
+    """(problem, params index) pairs for which NO benchmark encoding (node, that
+    params index, that problem) is reachable from the private benchmark set list.
+    Each enabled problem x each of the node's parameters objects is required
+    (idea.md "Failed Problem Check").  Failed runs emit no benchmark, so presence
+    of a benchmark ID is proof the run succeeded."""
+    private = ctx.workspace.read_private_benchmark_sets()
+    covered = {}  # problem full ID -> set of params indices with >=1 benchmark
+    for cache in private.values():
+        cells = cache.get("schedules", {}).get(node.full_id)
+        if not cells:
+            continue
+        seen = covered.setdefault(cache.get("problem"), set())
+        for pidx, cell in enumerate(cells):
+            if cell.get("id"):
+                seen.add(pidx)
+    missing = []
+    for problem in ctx.catalog.enabled_problems():
+        have = covered.get(problem.full_id, set())
+        for pidx in range(len(node.parameters)):
+            if pidx not in have:
+                missing.append((problem, pidx))
+    return missing
+
+
+def _failed_golden_message(ctx, node):
+    """None if the golden check passes (or there is no golden schedule node),
+    else a diagnostic (idea.md "Failed Golden Check")."""
+    golden = ctx.catalog.golden_schedule_node()
+    if golden is None:
+        return None
+    nid = ctx.catalog.format_schedule_id(node)
+    tpath, gpath = _hlpipe_path(ctx, node.full_id), _hlpipe_path(ctx, golden.full_id)
+    if not os.path.isfile(tpath) or not os.path.isfile(gpath):
+        return ("failed golden check: the algorithm hlpipe is not built for both "
+                "{} and the golden schedule node; build them with `dh_hl "
+                "init_build --target {} --other golden && dh_hl build` (the "
+                "generator must emit the algorithm hlpipe)".format(nid, nid))
+    with open(tpath, "rb") as f:
+        target_bytes = f.read()
+    with open(gpath, "rb") as f:
+        golden_bytes = f.read()
+    if target_bytes != golden_bytes:
+        return ("failed golden check: {}'s algorithm hlpipe differs from the "
+                "golden schedule node -- the algorithm changed".format(nid))
+    return None
+
+
+def _disabled_opening_problems_message(ctx):
+    """None if every enabled-on-opening problem is still enabled, else a
+    diagnostic (idea.md "Deleted Problem Check")."""
+    catalog = ctx.catalog
+    bad = []
+    for pid in ctx.session.enabled_problem_ids_on_opening:
+        p = catalog.problems.get(pid)
+        if p is None or not p.is_enabled():
+            bad.append(catalog.format_problem_id(p) if p is not None else pid)
+    if not bad:
+        return None
+    return ("deleted problem check: problem(s) enabled when this session opened "
+            "are now disabled/gone:\n" + "\n".join("  " + b for b in bad))
+
+
+def _changed_golden_message(ctx):
+    """None if the golden schedule node is unchanged since the session opened,
+    else a diagnostic (idea.md "Changed Golden Check")."""
+    opening = ctx.session.golden_schedule_id_on_opening
+    if opening is None:
+        return None
+    current = ctx.catalog.golden_schedule_node()
+    if current is not None and current.full_id == opening:
+        return None
+    catalog = ctx.catalog
+    was = (catalog.format_schedule_id(catalog.get_schedule(opening))
+           if opening in catalog.schedules else opening)
+    now = catalog.format_schedule_id(current) if current is not None else "none"
+    return ("changed golden check: the golden schedule node changed since this "
+            "session opened (was {}, now {})".format(was, now))
+
+
+def should_accept_failures(ctx, node):
+    """The failed suitability checks for *node* as a primary output schedule, as
+    an ordered list of (kind, message).  The failed-problem check runs for every
+    session; the golden/deleted-problem checks run only for top-level (depth 0)
+    sessions (idea.md "Should-accept Schedule Tool").  Shared by should_accept
+    and close_session."""
+    catalog = ctx.catalog
+    failures = []
+    missing = _missing_problem_benchmarks(ctx, node)
+    if missing:
+        lines = ["failed problem check: no benchmark reachable for {} at:".format(
+            catalog.format_schedule_id(node))]
+        for problem, pidx in missing:
+            lines.append("  problem {} (parameters index {})".format(
+                catalog.format_problem_id(problem), pidx))
+        failures.append(("failed_problems", "\n".join(lines)))
+    if ctx.session.depth == 0:
+        for kind, msg in (
+                ("failed_golden", _failed_golden_message(ctx, node)),
+                ("disabled_problems", _disabled_opening_problems_message(ctx)),
+                ("changed_golden", _changed_golden_message(ctx))):
+            if msg is not None:
+                failures.append((kind, msg))
+    return failures
+
+
+def cmd_should_accept(args):
+    # Read-only (private benchmark sets + bin/), so no session lock -- like status.
+    ctx = Context.for_session(args, session_lock=False)
+    node = ctx.resolve_schedule_arg(getattr(args, "schedule", None))
+    failures = should_accept_failures(ctx, node)
+    print("schedule: " + ctx.catalog.format_schedule_id(node))
+    if not failures:
+        print("All checks passed; suitable as a primary output schedule.")
+        return
+    flags = []
+    for kind, message in failures:
+        print(message)
+        flags.append(_ACCEPT_OVERRIDE_FLAGS[kind])
+    print("Overrides needed for close_session: " + " ".join(flags))
+
+
 def cmd_close_session(args):
     ctx = Context.for_session(args, session_lock=True)
     catalog = ctx.catalog
@@ -1185,6 +1342,23 @@ def cmd_close_session(args):
                     catalog.format_schedule_id(node)))
         schedule_pool_pairs.append(
             (node.full_id, ws.get_pool_tag(parent_idea.full_id)))
+
+    # should_accept suitability checks on the PRIMARY output (idea.md "Close
+    # Session Tool"): each failure blocks the close unless its --allow-* override
+    # was passed.  Run before any mutation so a blocked close is a clean no-op.
+    primary = outputs[0]
+    unresolved = [(kind, message)
+                  for kind, message in should_accept_failures(ctx, primary)
+                  if not getattr(args, _ACCEPT_OVERRIDE_ATTRS[kind], False)]
+    if unresolved:
+        lines = ["cannot close session: {} failed suitability check(s) on the "
+                 "primary output {} (run `dh_hl should_accept` for detail); pass "
+                 "the named flag to force anyway:".format(
+                     len(unresolved), catalog.format_schedule_id(primary))]
+        for kind, message in unresolved:
+            lines.append(message)
+            lines.append("  override: " + _ACCEPT_OVERRIDE_FLAGS[kind])
+        raise DhHlError("\n".join(lines))
 
     benchmark_sets = list(ws.read_private_benchmark_sets().keys())
     session.set_outputs(schedule_pool_pairs, benchmark_sets)
@@ -1955,6 +2129,68 @@ def cmd_detail(args):
 def cmd_examples(args):
     """Print an example file from the harness source `examples/` dir."""
     sys.stdout.write(prompts.load_doc("examples", args.name))
+
+
+# ---------------------------------------------------------------------------
+# Golden object tools (idea.md "Golden Object Tools")
+# ---------------------------------------------------------------------------
+
+def _golden_json(g):
+    """json_golden_info format (idea.md): remarks / schedule (null or full ID).
+    The golden's stored data dict is already in exactly this shape."""
+    return {"remarks": g.remarks, "schedule": g.schedule_id}
+
+
+def cmd_new_golden(args):
+    # Creates a git-tracked golden object AND reads the session's private bin/
+    # (the algorithm-hlpipe satisfiability check), so it takes the session lock.
+    ctx = Context.for_session(args, session_lock=True)
+    catalog = ctx.catalog
+    remarks = _read_file_or_stdin(args.remarks)
+    spec = getattr(args, "schedule", None)
+    if spec == "none":
+        schedule_id = None
+    else:
+        node = ctx.resolve_schedule_arg(spec)
+        # A golden schedule must be *satisfiable*: its algorithm hlpipe (from the
+        # 0th generator parameters object) must already be built in THIS session,
+        # otherwise no future golden check could ever pass against it (idea.md
+        # "New Golden Tool").
+        src = os.path.join(
+            ctx.workspace.bin_dir,
+            build._build_output_rel(node.full_id, "algorithm_hlpipe", 0))
+        if not os.path.isfile(src):
+            sid = catalog.format_schedule_id(node)
+            raise DhHlError(
+                "no algorithm hlpipe built for {} (0th generator parameters) in "
+                "this session; build it first with `dh_hl init_build --target {} "
+                "&& dh_hl build`, and ensure the generator emits the algorithm "
+                "hlpipe (see `dh_hl help new_golden`)".format(sid, sid))
+        schedule_id = node.full_id
+    g = catalog.create_golden(remarks, schedule_id)
+    ctx.finish()
+    print(g.full_id)
+
+
+def cmd_golden_history(args):
+    ctx = Context.for_catalog(args)
+    catalog = ctx.catalog
+    for g in catalog.goldens_newest_first():
+        print("=" * 72)
+        print("timestamp: " + g.timestamp)
+        if g.schedule_id is None:
+            print("schedule: none")
+        else:
+            print("schedule: " + catalog.format_schedule_id(
+                catalog.get_schedule(g.schedule_id)))
+        # Remarks are stored verbatim; end the block on a newline either way.
+        print(g.remarks, end="" if g.remarks.endswith("\n") else "\n")
+
+
+def cmd_json_golden_info(args):
+    ctx = Context.for_catalog(args)
+    print(json.dumps(_golden_json(ctx.catalog.get_golden(args.golden)),
+                     indent=1))
 
 
 # ---------------------------------------------------------------------------
