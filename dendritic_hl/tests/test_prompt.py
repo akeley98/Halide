@@ -7,7 +7,7 @@ import types
 
 import pytest
 
-from dendritic_hl_lib import prompts, tools
+from dendritic_hl_lib import guide_flag, prompts, tools
 from dendritic_hl_lib.errors import DhHlError
 
 _SRC = """\
@@ -23,6 +23,42 @@ sub only
 
 common two
 """
+
+
+def _both_guide_flags(callback):
+    """Run *callback* once with the guide disabled and once with it enabled,
+    restoring the in-process flag afterward."""
+    original = guide_flag.enabled
+    try:
+        for f in (False, True):
+            guide_flag.enabled = f
+            callback()
+    finally:
+        guide_flag.enabled = original
+
+
+# A guide-fenced source: the `<!-- guide -->` region is dropped from every view
+# when the guide is disabled and kept (fence lines only removed) when enabled.
+_GUIDE_SRC = """\
+common head
+<!-- guide -->
+guide body
+<!-- end guide -->
+common tail
+"""
+
+
+def test_guide_region_dropped_when_disabled_kept_when_enabled():
+    """The `guide` detail word is centrally driven by `guide_flag.enabled`, not by
+    the caller's `remove_detail`: its region is dropped from every view when the
+    guide is off and kept (fence lines stripped) when it is on."""
+    def callback():
+        for out in (prompts.parse_prompt(_GUIDE_SRC, "main"),
+                    prompts.render_idea_help(_GUIDE_SRC)):
+            assert "common head" in out and "common tail" in out
+            assert "<!--" not in out
+            assert ("guide body" in out) == guide_flag.enabled
+    _both_guide_flags(callback)
 
 
 def test_main_view_keeps_common_and_main_drops_sub():
@@ -288,3 +324,95 @@ def test_cmd_detail_and_examples(capsys):
     assert capsys.readouterr().out.strip()
     tools.cmd_examples(types.SimpleNamespace(name="tile_basic.cpp"))
     assert capsys.readouterr().out.strip()
+
+
+# ---- guide ablation through the real CLI ----------------------------------
+#
+# The DENDRITIC_HL_GUIDE_ENABLED env var is read at import time by
+# dendritic_hl_lib.guide_flag, so it can only be exercised in a child process --
+# hence these run_cli (subprocess) tests, not in-process ones.
+
+# Markers that only appear when the guide is enabled: content from the appended
+# loopdoc / scheduling guide, plus the guide-fenced idea.md tool section.
+_GUIDE_MARKERS = (
+    "how Halide turns",                # loopdoc.md body
+    "A Concise Guide to CPU Scheduling",  # adams_opus_scheduling_guide.md title
+    "Supplemental Document Tools",     # guide-fenced idea.md section
+)
+
+
+def test_cli_prompt_includes_guide_content_by_default(run_cli):
+    """With the guide enabled (the default, no env override), `dh_hl prompt`
+    appends the loopdoc + scheduling guide and keeps the guide-fenced idea.md
+    tool section."""
+    r = run_cli("prompt", "--main")
+    assert r.returncode == 0, r.stderr
+    for marker in _GUIDE_MARKERS:
+        assert marker in r.stdout, marker
+
+
+def test_cli_prompt_omits_guide_content_when_disabled(run_cli):
+    """With DENDRITIC_HL_GUIDE_ENABLED=0, the assembled prompt drops the appended
+    loopdoc / scheduling guide and the guide-fenced idea.md content, while still
+    emitting the core prompt."""
+    r = run_cli("prompt", "--main", env={"DENDRITIC_HL_GUIDE_ENABLED": "0"})
+    assert r.returncode == 0, r.stderr
+    assert "Dendritic Halide Harness" in r.stdout   # core prompt still present
+    for marker in _GUIDE_MARKERS:
+        assert marker not in r.stdout, marker
+
+
+def test_cli_detail_examples_fail_and_silent_when_guide_disabled(run_cli):
+    """With the guide disabled the `detail`/`examples` subcommands do not exist:
+    invoking them exits non-zero and writes nothing to stdout (idea.md
+    "Supplemental Document Tools")."""
+    env = {"DENDRITIC_HL_GUIDE_ENABLED": "0"}
+    for cmd in ("detail", "examples"):
+        r = run_cli(cmd, "specialize.md", env=env)
+        assert r.returncode != 0, cmd
+        assert r.stdout == "", (cmd, r.stdout)
+
+
+def test_cli_detail_examples_work_when_guide_enabled(run_cli):
+    """The complementary case: with the guide enabled the subcommands resolve and
+    print their document to stdout."""
+    r = run_cli("detail", "specialize.md")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip()
+    r = run_cli("examples", "tile_basic.cpp")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip()
+
+
+# The secret env var must not leak to harness users: it is documented only in an
+# idea.md `impl` block (dropped from every prompt/help view) so agents cannot
+# discover and circumvent the ablation.  These guard against it slipping into any
+# user-visible output.  (Brittle to future doc edits, but trivially re-fixable.)
+_GUARD_WORD = "DENDRITIC_HL_GUIDE_ENABLED"
+
+
+def test_guard_env_var_never_leaks_into_prompt():
+    """The `DENDRITIC_HL_GUIDE_ENABLED` name appears in neither the main nor the
+    sub prompt, with the guide enabled or disabled."""
+    def callback():
+        for audience in ("main", "sub"):
+            assert _GUARD_WORD not in prompts.load_prompt(audience)
+    _both_guide_flags(callback)
+
+
+def test_guard_env_var_never_leaks_into_served_docs():
+    """No file served by `detail`/`examples` mentions the guard env var (checked
+    through `load_doc`, the exact output path the CLI prints)."""
+    import os
+    for kind in ("detail", "examples"):
+        for name in sorted(os.listdir(os.path.join(prompts._REPO_DIR, kind))):
+            assert _GUARD_WORD not in prompts.load_doc(kind, name), (kind, name)
+
+
+def test_cli_prompt_schedule_suggestion_bullet_iff_guide_enabled(run_cli):
+    """The guide-fenced prompt_common.md bullet promising the scheduling guide
+    appears in `dh_hl prompt` exactly when the guide is enabled."""
+    marker = "A guide giving suggestions on how to produce a Halide schedule"
+    assert marker in run_cli("prompt", "--main").stdout
+    r = run_cli("prompt", "--main", env={_GUARD_WORD: "0"})
+    assert marker not in r.stdout

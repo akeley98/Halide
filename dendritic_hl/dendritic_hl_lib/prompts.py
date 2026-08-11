@@ -3,7 +3,7 @@
 Both `prompt_common.md` and `idea.md` are human-edited sources from which the
 code emits an audience- and detail-specific view at runtime.  Content is COMMON
 (emitted everywhere) unless wrapped in a *fence* -- an HTML comment whose only
-word is one of four, on two orthogonal axes:
+word is one of five, on two orthogonal axes:
 
     common text ...
     <!-- main -->      audience axis: main / sub
@@ -12,6 +12,9 @@ word is one of four, on two orthogonal axes:
     <!-- impl -->      detail axis: help / impl
     implementer note ...
     <!-- end impl -->
+    <!-- guide -->     detail axis: guide (dropped from every view when the
+    guide-ablation text ...   guide is disabled; see `guide_flag`)
+    <!-- end guide -->
 
 `render_fenced` is the single engine (see its docstring); `parse_prompt` is the
 prompt view (pick an audience, drop both detail axes) and `render_idea_help` is
@@ -24,6 +27,7 @@ import os
 import re
 
 from .errors import DhHlError
+from . import guide_flag
 
 # The harness source dir sits one level above the package dir; it holds the
 # human-edited docs (prompt_common.md, idea.md, ...) and the detail/ + examples/
@@ -45,6 +49,14 @@ _DEFAULT_DOC_EXT = {"detail": ".md", "examples": ".cpp"}
 AUDIENCES = ("main", "sub")
 _DETAIL_WORDS = ("help", "impl")
 
+# The `guide` word is a third detail-axis tag, but unlike help/impl its removal is
+# not chosen per-view by callers: a `<!-- guide -->` region is dropped from EVERY
+# view when the guide ablation is active (`guide_flag.enabled` is False) and kept
+# (fence lines only removed) otherwise.  `render_fenced` folds it into
+# `remove_detail` centrally, so no caller passes it (idea.md "Supplemental
+# Document Tools").
+_GUIDE_WORD = "guide"
+
 # The four recognized fence words fall on two axes:
 #   * Audience axis (`main`/`sub`): a region is kept only if its word matches the
 #     view's target audience; `audience=None` keeps BOTH audiences (the `help`
@@ -59,7 +71,7 @@ _DETAIL_WORDS = ("help", "impl")
 # which is stripped from every view).  This single engine is shared by
 # `prompt_common.md` and `idea.md` (idea.md "Prompt Tools", "Help Tool --
 # Implementation Details", and the FORMAT CONTRACTs in both files).
-_FENCE_WORDS = frozenset(AUDIENCES + _DETAIL_WORDS)
+_FENCE_WORDS = frozenset(AUDIENCES + _DETAIL_WORDS + (_GUIDE_WORD,))
 
 # A fence line: an HTML comment whose only content is "<word>" or "end <word>".
 _FENCE_RE = re.compile(r"^<!--\s*(end\s+)?(\w+)\s*-->$")
@@ -73,14 +85,20 @@ def render_fenced(text, *, audience, remove_detail, source="prompt_common.md"):
 
     *audience* is 'main'/'sub' (keep that audience, drop the other) or None (keep
     both audiences).  *remove_detail* is the set of detail words ('help'/'impl')
-    whose regions are dropped.  Fence lines and all other HTML comments are
-    stripped; blank runs left behind are collapsed.
+    whose regions are dropped; `guide` is added to it automatically whenever the
+    guide ablation is active (`guide_flag.enabled` is False).  Fence lines and all
+    other HTML comments are stripped; blank runs left behind are collapsed.
 
     Raises DhHlError on malformed fencing: any nesting, an unmatched or dangling
     fence, or a fence-shaped comment naming an unknown word (single-word comments
     are reserved for fences, so a typo fails loudly rather than silently leaking a
     region).  *source* names the file in error messages."""
     assert audience is None or audience in AUDIENCES
+    # The guide ablation removes every `<!-- guide -->` region from all views; when
+    # the guide is enabled the word is a recognized-but-not-removed detail tag, so
+    # only its fence lines drop.  Callers never pass `guide` themselves.
+    if not guide_flag.enabled:
+        remove_detail = frozenset(remove_detail) | {_GUIDE_WORD}
     kept = []
     state = None          # the single open fence word, or None (common)
     in_comment = False    # inside a multi-line <!-- ... --> block (stripped)
@@ -96,7 +114,7 @@ def render_fenced(text, *, audience, remove_detail, source="prompt_common.md"):
             if word not in _FENCE_WORDS:
                 raise DhHlError(
                     "{} line {}: unknown fence tag {!r} (expected one of "
-                    "main/sub/help/impl)".format(source, lineno, s))
+                    "main/sub/help/impl/guide)".format(source, lineno, s))
             if not is_end:
                 if state is not None:
                     raise DhHlError(
@@ -177,6 +195,7 @@ def load_prompt(audience, path=_PROMPT_MD):
     """Assemble the full *audience* prompt: prompt_common.md (audience-fenced,
     comments stripped) followed by idea.md, loopdoc.md, and the Adams/Opus
     scheduling guide (each with HTML comments stripped), in that order.
+    The loopdoc.md and Adams/Opus scheduling guide are disabled if guide_flag.enabled=False.
 
     *path* locates prompt_common.md; the other docs are read from the same
     directory (idea.md "Prompt Tools")."""
@@ -191,7 +210,8 @@ def load_prompt(audience, path=_PROMPT_MD):
         if name == "idea.md":
             parts.append(parse_prompt(src, audience, source="idea.md"))
         else:
-            parts.append(strip_html_comments(src))
+            if guide_flag.enabled:
+                parts.append(strip_html_comments(src))
     # Single blank line between documents; exactly one trailing newline.
     return "".join(p.rstrip("\n") + "\n\n" for p in parts if p.strip()).rstrip("\n") + "\n"
 

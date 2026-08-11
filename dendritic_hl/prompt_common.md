@@ -1,13 +1,15 @@
 <!--
   FORMAT CONTRACT (dendritic_hl_lib/prompts.py): the "dh_hl prompt" command
   assembles either the main or the sub agent prompt from this file.  The SAME
-  fence engine (prompts.render_fenced) processes idea.md, so all four fence
+  fence engine (prompts.render_fenced) processes idea.md, so all five fence
   words work in both files.  Rules:
   * Text outside any fence is COMMON: it goes into both prompts.
-  * A fence is an HTML comment whose only word is one of four, on two axes:
+  * A fence is an HTML comment whose only word is one of five, on two axes:
       - audience: "main" / "sub" -- keeps the region only for that agent prompt.
-      - detail:   "help" / "impl" -- "help" text is kept by "dh_hl help" but
-        dropped from the prompt; "impl" text is dropped from both.
+      - detail:   "help" / "impl" / "guide" -- "help" text is kept by "dh_hl
+        help" but dropped from the prompt; "impl" text is dropped from both;
+        "guide" text is dropped from every view when the guide is disabled
+        (dendritic_hl_lib.guide_flag) and otherwise kept.
     Each opens a region closed by a matching "end <word>" HTML comment (e.g.
     "end main").  See the fences used in the body below.
   * Fences must not nest -- at most one is open at a time, of any word -- and
@@ -169,6 +171,7 @@ new idea nodes, implementing schedules for those ideas,
 or orchestrating sub-agents thath do those tasks.
 
 The following prompt gives a summary of the harness workflow.
+<!-- guide -->
 It will be followed by:
 
 * More detailed usage information on the Dendritic Halide Harness
@@ -177,6 +180,7 @@ It will be followed by:
   get converted into the output program's loop nest
 
 * A guide giving suggestions on how to produce a Halide schedule
+<!-- end guide -->
 
 
 # Important Requirements

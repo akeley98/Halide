@@ -12,6 +12,7 @@ from . import safety
 from . import tools
 from . import build as build_mod
 from .errors import DhHlError
+from . import guide_flag
 
 # idea.md is the human-facing spec; `dh_hl help <command>` renders the relevant
 # tool section from it so the detailed per-command docs have a single source.
@@ -224,6 +225,14 @@ COMMAND_HELP = {
     "detail": "Print a supplemental document from the harness `detail/` dir.",
     "examples": "Print an example file from the harness `examples/` dir.",
 }
+
+
+def get_command_help_dict():
+    result = dict(COMMAND_HELP)
+    if not guide_flag.enabled:
+        del result["detail"]
+        del result["examples"]
+    return result
 
 
 def _build_parser():
@@ -606,11 +615,12 @@ def _build_parser():
     grp.add_argument("--sub", action="store_true",
                      help="emit the sub-agent prompt")
 
-    sp = add("detail")
-    sp.add_argument("name", help="file name inside the detail/ directory")
+    if guide_flag.enabled:
+        sp = add("detail")
+        sp.add_argument("name", help="file name inside the detail/ directory")
 
-    sp = add("examples")
-    sp.add_argument("name", help="file name inside the examples/ directory")
+        sp = add("examples")
+        sp.add_argument("name", help="file name inside the examples/ directory")
 
     return p
 
@@ -716,23 +726,24 @@ _DISPATCH = {
 
 
 def cmd_help(args):
+    cmd_dict = get_command_help_dict()
     if args.topic is None:
         print("dh_hl commands:\n")
-        for name in COMMAND_HELP:
-            print("  {:20} {}".format(name, COMMAND_HELP[name]))
+        for name in cmd_dict:
+            print("  {:20} {}".format(name, cmd_dict[name]))
         intro, _ = _parse_idea_sections()
         if intro:
             print("\n" + intro)
         print("\nUse `dh_hl help <command>` or `dh_hl <command> -h` for details.")
         return
-    if args.topic not in COMMAND_HELP:
+    if args.topic not in cmd_dict:
         raise DhHlError("no such command: " + args.topic)
     # Detailed help: the idea.md tool section, if available; else the one-liner.
     section = _parse_idea_help().get(args.topic)
     if section is not None:
         print(section)
     else:
-        print("{}: {}".format(args.topic, COMMAND_HELP[args.topic]))
+        print("{}: {}".format(args.topic, cmd_dict[args.topic]))
 
 
 def _cmd_exec(kind, rest):

@@ -3,14 +3,30 @@ the doc<->code single-source drift guard."""
 
 import types
 
-from dendritic_hl_lib import main
+from dendritic_hl_lib import main, guide_flag
+
+
+def _both_guide_flags(callback):
+    """Run *callback* once with the guide disabled and once with it enabled,
+    restoring the flag afterward.  The doc<->code guards must hold either way."""
+    original = guide_flag.enabled
+    try:
+        for f in (False, True):
+            guide_flag.enabled = f
+            callback()
+    finally:
+        guide_flag.enabled = original
 
 
 def test_every_command_is_documented_in_idea_md():
     """The single-source guard: the set of CLI commands and the set of commands
     idea.md documents (via tool-section synopsis lines) must match exactly.
-    Adding a command without documenting it (or vice versa) fails here."""
-    assert set(main._parse_idea_help()) == set(main.COMMAND_HELP)
+    Adding a command without documenting it (or vice versa) fails here.  Holds
+    with the guide enabled (detail/examples present) and disabled (both gone)."""
+    def callback():
+        assert set(main._parse_idea_help()) == set(main.get_command_help_dict()), \
+            guide_flag.enabled
+    _both_guide_flags(callback)
 
 
 def test_top_level_help_includes_tools_intro(capsys):
@@ -26,9 +42,11 @@ def test_top_level_help_includes_tools_intro(capsys):
 
 
 def test_parse_sections_returns_intro_and_mapping():
-    intro, mapping = main._parse_idea_sections()
-    assert "The tools are invoked with" in intro
-    assert set(mapping) == set(main.COMMAND_HELP)
+    def callback():
+        intro, mapping = main._parse_idea_sections()
+        assert "The tools are invoked with" in intro
+        assert set(mapping) == set(main.get_command_help_dict()), guide_flag.enabled
+    _both_guide_flags(callback)
 
 
 def test_help_renders_full_idea_section(capsys):

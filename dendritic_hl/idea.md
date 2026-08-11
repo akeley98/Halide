@@ -754,8 +754,10 @@ Replace all `...` with real arguments (except `--profile ...`).
   * "NOTE: [link ...]" lines are stripped from the rendered help output, as are
     all HTML comments and the `impl`/`end impl` detail regions they fence
     (`prompts.render_idea_help`); `help`/`end help` regions are KEPT in the help
-    output but dropped from the assembled prompt.
-  * The same four fence words + no-nesting rule as prompt_common.md apply here
+    output but dropped from the assembled prompt.  `guide`/`end guide` regions
+    are kept in both views while the guide is enabled and dropped from both when
+    it is disabled (dendritic_hl_lib.guide_flag).
+  * The same five fence words + no-nesting rule as prompt_common.md apply here
     (one shared engine, `prompts.render_fenced`).  `dh_hl help` is audience-
     neutral, so it keeps BOTH `main` and `sub` regions; the assembled prompt
     picks one audience.  See the FORMAT CONTRACT atop prompt_common.md.
@@ -888,12 +890,10 @@ without an idea.md tool section (or vice versa) and it fails.
 <!-- end impl -->
 
 
-### Harness Prompt Tools
+### Harness Prompt Tool
 
     dh_hl prompt --main
     dh_hl prompt --sub
-    dh_hl detail {name}
-    dh_hl examples {name}
 
 The `prompt` tool prints the standing agent prompt,
 for either the main-agent (`--main`) or sub-agent (`--sub`) audience.
@@ -904,11 +904,20 @@ The audience is deliberately **not** inferred from the current session,
 so the prompt can double-check that the agent is running with the role it thinks
 it is (e.g. that a spawned sub-agent wasn't handed a main-agent's session).
 <!-- end help -->
+<!-- guide -->
+
+
+<!-- The detail/examples tools are removed for the guide ablation study -->
+### Supplemental Document Tools
+
+    dh_hl detail {name}
+    dh_hl examples {name}
 
 The prompt mentions supplemental documents in the `detail/` or
 `examples/` directory, which are part of the harness source repo.
 The `detail` and `examples` tools fetch a named file from those
 respective directories and prints it to `stdout`.
+<!-- end guide -->
 <!-- impl -->
 
 The `detail` tool quietly retries with `.md` appended if the file was not found.
@@ -919,6 +928,21 @@ so I just have this workaround.
 Note: you cannot just blindly append the extension;
 sometimes you really want a non `.md`/`.cpp` file (e.g. `.hpp`).
 
+For experiment purposes, the guide may be **disabled**.
+This is controlled by the `DENDRITIC_HL_GUIDE_ENABLED` flag (set to 0 or 1)
+or by the default value in `dendritic_hl_lib.guide_flag.enabled`.
+If the guide is disabled,
+
+* No `detail` tool exists
+
+* No `examples` tool exists
+
+* The `prompt` tool omits the loopdoc and scheduling guide
+
+Note, this is documented in this impl block so the secret environment variable
+isn't shown to the harness end-user.
+Furthermore, when the guide is disabled,
+content in between the `guide/end guide` fences is hidden.
 <!-- end impl -->
 <!-- impl -->
 
@@ -967,12 +991,15 @@ the fixed `detail/`/`examples/` directory.  A missing file is likewise a clean
 
 **One fence engine for both docs (`prompts.render_fenced`).** `prompt_common.md`
 and `idea.md` share ONE processor.  Content is COMMON unless wrapped in a *fence*
-— an HTML comment whose only word is one of four, on two axes: audience
-(`main`/`sub`) and detail (`help`/`impl`), each closed by a matching
+— an HTML comment whose only word is one of five, on two axes: audience
+(`main`/`sub`) and detail (`help`/`impl`/`guide`), each closed by a matching
 `end <word>`.  A view is `(audience, remove_detail)`: it drops the non-matching
 audience's regions (or none, when `audience=None`) and the regions whose detail
 word is in `remove_detail`, plus every fence line and HTML comment, then collapses
-the blank runs so the output reads cleanly.  Fences do **not** nest — at most one
+the blank runs so the output reads cleanly.  `guide` is special: callers never
+put it in `remove_detail`; `render_fenced` folds it in automatically whenever
+`guide_flag.enabled` is False, so a `<!-- guide -->` region is dropped from
+every view under the guide ablation and kept otherwise.  Fences do **not** nest — at most one
 is open at a time, of any word — so a maintainer note wanted inside an open region
 is a plain multi-word HTML comment (stripped from every view) rather than a nested
 fence.
@@ -991,7 +1018,7 @@ pair.
 
 `render_fenced` is the format guard: it raises `DhHlError` on any nesting, an
 unmatched/dangling fence, or a fence-shaped comment naming a word other than the
-four (single-word comments are reserved for fences, so a typo fails loudly rather
+five (single-word comments are reserved for fences, so a typo fails loudly rather
 than silently leaking a region).  The rules are spelled out in a FORMAT CONTRACT
 comment atop `prompt_common.md` (and above "# Tools" in idea.md).  Like idea.md,
 prompt_common.md sits above the package dir; if missing, `prompt` errors cleanly

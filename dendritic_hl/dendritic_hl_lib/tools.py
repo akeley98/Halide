@@ -13,6 +13,7 @@ import sys
 from . import build
 from . import cost
 from . import ids
+from . import guide_flag
 from . import locks
 from . import profiler_stats
 from . import profiler_warnings
@@ -2087,12 +2088,18 @@ def cmd_prompt(args):
 
 def cmd_detail(args):
     """Print a supplemental document from the harness source `detail/` dir."""
-    sys.stdout.write(prompts.load_doc("detail", args.name))
+    if guide_flag.enabled:
+        sys.stdout.write(prompts.load_doc("detail", args.name))
+    else:
+        raise DhHlError("detail tool has been disabled (guide_flag.enabled=False)")
 
 
 def cmd_examples(args):
     """Print an example file from the harness source `examples/` dir."""
-    sys.stdout.write(prompts.load_doc("examples", args.name))
+    if guide_flag.enabled:
+        sys.stdout.write(prompts.load_doc("examples", args.name))
+    else:
+        raise DhHlError("examples tool has been disabled (guide_flag.enabled=False)")
 
 
 # ---------------------------------------------------------------------------
