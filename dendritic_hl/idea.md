@@ -755,6 +755,10 @@ Replace all `...` with real arguments (except `--profile ...`).
     all HTML comments and the `impl`/`end impl` detail regions they fence
     (`prompts.render_idea_help`); `help`/`end help` regions are KEPT in the help
     output but dropped from the assembled prompt.
+  * The same four fence words + no-nesting rule as prompt_common.md apply here
+    (one shared engine, `prompts.render_fenced`).  `dh_hl help` is audience-
+    neutral, so it keeps BOTH `main` and `sub` regions; the assembled prompt
+    picks one audience.  See the FORMAT CONTRACT atop prompt_common.md.
 -->
 # Tools
 
@@ -859,9 +863,11 @@ Both help views render from **this repo's `idea.md`** (the single source), via
 
 `_parse_idea_sections` first runs the raw idea.md through
 `prompts.render_idea_help`, which drops the `<!-- impl -->`..`<!-- end impl -->`
-detail regions (implementer notes) but keeps the `<!-- help -->` regions, and
-strips every other HTML comment — the same fence machinery the `prompt` tool
-uses (`prompts._strip_idea_fences`), just removing only `impl` instead of both.
+detail regions (implementer notes) but keeps the `<!-- help -->` regions (and,
+being audience-neutral, keeps both `main` and `sub` regions), and strips every
+other HTML comment — the same fence engine the `prompt` tool uses
+(`prompts.render_fenced`), just with `audience=None` and removing only `impl`
+instead of both details.
 `NOTE: [link…]` lines are then stripped too.  The format
 `_parse_idea_sections` relies on is spelled out in a FORMAT CONTRACT comment just
 above "# Tools" in `idea.md`.  `idea.md` lives one level above the package dir,
@@ -921,7 +927,8 @@ separated by a single blank line:
 * `prompt_common.md`, with main/sub-agent specialization applied AND HTML
   comments removed (`parse_prompt`, below).
 
-* `idea.md`, with HTML comments removed and with details removed
+* `idea.md`, with main/sub-agent specialization applied, details removed, and
+  HTML comments removed (the SAME `parse_prompt` engine as prompt_common.md)
 
 * `loopdoc.md`, with HTML comments removed
 
@@ -950,37 +957,38 @@ So directory traversal is impossible: reads are confined to a direct child of
 the fixed `detail/`/`examples/` directory.  A missing file is likewise a clean
 `DhHlError`, not a traceback.
 
-**Main/sub-agent specialization:** `prompt_common.md` content is
-COMMON unless wrapped in an audience *fence* — an HTML comment whose
-only word is `main`/`sub`, closed by `end main`/`end sub`.
+**One fence engine for both docs (`prompts.render_fenced`).** `prompt_common.md`
+and `idea.md` share ONE processor.  Content is COMMON unless wrapped in a *fence*
+— an HTML comment whose only word is one of four, on two axes: audience
+(`main`/`sub`) and detail (`help`/`impl`), each closed by a matching
+`end <word>`.  A view is `(audience, remove_detail)`: it drops the non-matching
+audience's regions (or none, when `audience=None`) and the regions whose detail
+word is in `remove_detail`, plus every fence line and HTML comment, then collapses
+the blank runs so the output reads cleanly.  Fences do **not** nest — at most one
+is open at a time, of any word — so a maintainer note wanted inside an open region
+is a plain multi-word HTML comment (stripped from every view) rather than a nested
+fence.
 
-`parse_prompt(text, audience)` emits common lines plus
-matching-audience lines, dropping the other audience's fenced regions, fence
-lines, and all HTML comments (the format-contract comment included); it then
-collapses the blank runs so the output reads cleanly.
+`parse_prompt(text, audience, source)` is the prompt view: pick the audience,
+remove BOTH details.  `load_prompt` calls it on prompt_common.md AND idea.md, so
+idea.md's `<!-- main -->` sections are audience-specialized just like
+prompt_common.md's (that is why idea.md is not merely "HTML comments removed").
+`render_idea_help(text)` is the `dh_hl help` view: `audience=None` (keep both
+audiences), remove only `impl` (see "Help Tool — Implementation Details").
 
 The audience is **explicit only** — never inferred from the session — so the
 prompt can double-check the agent's role (e.g. catch a sub-agent that was handed
 a main session).  argparse makes `--main`/`--sub` a required mutually-exclusive
 pair.
 
-`parse_prompt` is the format guard: it raises `DhHlError` on nesting, an
-unmatched/dangling fence, or a fence-shaped comment naming a non-`main`/`sub`
-audience (single-word comments are reserved for fences, so a typo fails loudly
-rather than silently leaking a region into both prompts).  The rules are spelled
-out in a FORMAT CONTRACT comment atop `prompt_common.md`.  Like idea.md, the file
-sits above the package dir; if missing, `prompt` errors cleanly (no fallback —
-the prompt has no default content).  Covered by `tests/test_prompt.py`.
-
-**idea.md detail removal:** Similar to `main`/`sub` comments.
-`load_prompt` runs idea.md through `prompts.render_idea_prompt`, which removes
-all text wrapped with `help`/`end help` or `impl`/`end impl` comments (both
-detail views) before stripping the remaining HTML comments.  The shared engine is
-`prompts._strip_idea_fences(text, remove_words)`: it drops the whole
-`<!-- word -->`..`<!-- end word -->` region for each *word* in `remove_words`,
-and for a recognized fence word not in `remove_words` drops just the fence lines
-(keeping the content).  The prompt passes both `help` and `impl`; `dh_hl help`
-passes only `impl` (see "Help Tool — Implementation Details").
+`render_fenced` is the format guard: it raises `DhHlError` on any nesting, an
+unmatched/dangling fence, or a fence-shaped comment naming a word other than the
+four (single-word comments are reserved for fences, so a typo fails loudly rather
+than silently leaking a region).  The rules are spelled out in a FORMAT CONTRACT
+comment atop `prompt_common.md` (and above "# Tools" in idea.md).  Like idea.md,
+prompt_common.md sits above the package dir; if missing, `prompt` errors cleanly
+(no fallback — the prompt has no default content).  Covered by
+`tests/test_prompt.py`.
 <!-- end impl -->
 
 
@@ -1464,10 +1472,8 @@ Flags:
   adds the named problem to the set of selected problems to test with.
   If no `--problem` arguments exist,
   the testing is done for all enabled problems.
-  <!-- impl -->
-  CAUTION: use "selected problem" consistently in this section,
-  as "enabled problem" means something different.
-  <!-- end impl -->
+  <!-- CAUTION: use "selected problem" consistently in this section,
+  as "enabled problem" means something different. -->
 
 * `--profile [N]` (`N = 0` default, must be a non-negative integer).
   This enables `N` batches of profiler runs per problem.
@@ -2366,9 +2372,7 @@ This only has to be done once, then left alone in the agent hot loop.
 4. **Call it** with the buffers, exactly as a statically-linked call would.
    Use `reinterpret_cast` (not `static_cast`) for the `dlsym` result -- casting a
    `void*` to a function-pointer type with `static_cast` is ill-formed C++.
-   <!-- impl -->
-   (Verified end-to-end by `test_shared_lib_halide.py`.)
-   <!-- end impl -->
+   <!-- Verified end-to-end by test_shared_lib_halide.py. -->
 
         void* h = dlopen(lib_path, RTLD_NOW | RTLD_LOCAL);
         if (!h) {
@@ -3146,10 +3150,6 @@ Optimize this if needed, but this shouldn't be in the agent hot loop.
 
 
 # Main Agent Default Session Behavior
-
-IMPL TASK: unify the "fence" comments in `idea`.md and `prompt_common.md`.
-This file should be processed so that main/sub sections are conditionally stripped out,
-so this section shouldn't appear in `dh_hl prompt --sub`.
 
 This step gives reasonable defaults, which take second priority to the
 user's instructions or more authoritative prompts.

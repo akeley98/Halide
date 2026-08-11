@@ -1,13 +1,20 @@
 <!--
   FORMAT CONTRACT (dendritic_hl_lib/prompts.py): the "dh_hl prompt" command
-  assembles either the main or the sub agent prompt from this file.  Rules:
+  assembles either the main or the sub agent prompt from this file.  The SAME
+  fence engine (prompts.render_fenced) processes idea.md, so all four fence
+  words work in both files.  Rules:
   * Text outside any fence is COMMON: it goes into both prompts.
-  * A fence is an HTML comment whose only word is "main" (or "sub"); it opens a
-    region for that audience, closed by a matching "end main" ("end sub") HTML
-    comment.  See the fences used in the body below.
-  * Fences must not nest, and every opener needs a matching closer.
+  * A fence is an HTML comment whose only word is one of four, on two axes:
+      - audience: "main" / "sub" -- keeps the region only for that agent prompt.
+      - detail:   "help" / "impl" -- "help" text is kept by "dh_hl help" but
+        dropped from the prompt; "impl" text is dropped from both.
+    Each opens a region closed by a matching "end <word>" HTML comment (e.g.
+    "end main").  See the fences used in the body below.
+  * Fences must not nest -- at most one is open at a time, of any word -- and
+    every opener needs a matching closer.
   * Single word HTML comments are reserved for fences; use multi word comments
-    for maintainer notes.  Comments are stripped from the emitted prompt.
+    for maintainer notes (those, like fence lines, are stripped from every view,
+    so a note wanted inside an open region goes in one rather than nesting).
 -->
 # Dendritic Halide Harness: Agents Prompt
 
@@ -303,10 +310,6 @@ semantic gap upon closing the session.
 
 
 ### Side Note: Seed Ideas Found To Be Harmful
-
-IMPL TASK: unify the "fence" comments in `idea`.md and `prompt_common.md`.
-This file should be processed so that "impl" sections are stripped out,
-so this "Side Note: Seed Ideas Found To Be Harmful" shouldn't appear in `dh_hl prompt`.
 
 This is really not a great design (doubling idea nodes as "session start" nodes
 and having a canonical schedule that implements nothing new). Ultimately the

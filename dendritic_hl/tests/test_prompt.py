@@ -55,14 +55,53 @@ def test_multiline_comment_is_stripped():
 
 @pytest.mark.parametrize("bad", [
     "<!-- main -->\n<!-- sub -->\nx\n<!-- end sub -->\n<!-- end main -->\n",  # nested
+    "<!-- help -->\n<!-- impl -->\nx\n<!-- end impl -->\n<!-- end help -->\n",  # detail nested
+    "<!-- main -->\n<!-- impl -->\nx\n<!-- end impl -->\n<!-- end main -->\n",  # cross-axis nested
     "<!-- end main -->\n",                          # unmatched close
     "<!-- main -->\nx\n",                           # unclosed at EOF
     "<!-- main -->\nx\n<!-- end sub -->\n",         # close audience mismatch
-    "<!-- mian -->\nx\n<!-- end mian -->\n",        # unknown/typo'd audience tag
+    "<!-- mian -->\nx\n<!-- end mian -->\n",        # unknown/typo'd fence tag
 ])
 def test_malformed_fencing_raises(bad):
     with pytest.raises(DhHlError):
         prompts.parse_prompt(bad, "main")
+
+
+# ---- unified detail (help/impl) handling in the prompt view ---------------
+
+_DETAIL_SRC = """\
+common
+<!-- help -->
+help detail
+<!-- end help -->
+<!-- impl -->
+impl note
+<!-- end impl -->
+tail
+"""
+
+
+def test_prompt_view_drops_both_detail_axes():
+    """`parse_prompt` (prompt view) drops help AND impl regions in either file,
+    keeping only common text."""
+    out = prompts.parse_prompt(_DETAIL_SRC, "main")
+    assert "common" in out and "tail" in out
+    assert "help detail" not in out and "impl note" not in out
+
+
+def test_help_view_keeps_help_and_both_audiences_drops_impl():
+    """`render_idea_help` keeps help content and BOTH audiences, drops only impl."""
+    src = _DETAIL_SRC + _SRC
+    out = prompts.render_idea_help(src)
+    assert "help detail" in out          # help kept
+    assert "impl note" not in out        # impl dropped
+    assert "main only" in out and "sub only" in out   # audience-neutral
+
+
+def test_error_message_names_source_file():
+    with pytest.raises(DhHlError, match="idea.md line"):
+        prompts.render_fenced("<!-- bogus -->\n", audience=None,
+                              remove_detail=("impl",), source="idea.md")
 
 
 # ---- strip_html_comments --------------------------------------------------
@@ -219,6 +258,24 @@ def test_cmd_prompt_smoke(capsys):
     out = capsys.readouterr().out
     assert "Dendritic Halide Harness" in out
     assert len(out) > 1000  # the three appended docs are substantial
+
+
+def test_real_prompt_common_impl_section_absent_from_both_prompts():
+    """The `<!-- impl -->` "Side Note: Seed Ideas Found To Be Harmful" section in
+    prompt_common.md must not leak into either assembled prompt (the former
+    prompt_common.md self-check IMPL TASK)."""
+    for audience in ("main", "sub"):
+        out = prompts.load_prompt(audience)
+        assert "Seed Ideas Found To Be Harmful" not in out
+
+
+def test_real_idea_main_section_is_audience_specialized():
+    """idea.md's `<!-- main -->` "Main Agent Default Session Behavior" section
+    appears in the main prompt but NOT the sub prompt (the former idea.md
+    self-check IMPL TASK)."""
+    marker = "Main Agent Default Session Behavior"
+    assert marker in prompts.load_prompt("main")
+    assert marker not in prompts.load_prompt("sub")
 
 
 def test_cmd_prompt_requires_exactly_one_audience():

@@ -1,17 +1,23 @@
-"""Assemble the main- or sub-agent prompt from the single-source prompt_common.md.
+"""Assemble the agent prompt and `dh_hl help` docs from single-source Markdown.
 
-Mirrors the `dh_hl help` <- idea.md scheme: one human-edited source, code emits
-the audience-specific view at runtime.  Content is COMMON (emitted to both
-prompts) unless wrapped in an audience *fence* -- an HTML comment whose only word
-is `main` or `sub`, closed by a matching `end main` / `end sub` comment:
+Both `prompt_common.md` and `idea.md` are human-edited sources from which the
+code emits an audience- and detail-specific view at runtime.  Content is COMMON
+(emitted everywhere) unless wrapped in a *fence* -- an HTML comment whose only
+word is one of four, on two orthogonal axes:
 
     common text ...
-    <!-- main -->
+    <!-- main -->      audience axis: main / sub
     main-only text ...
     <!-- end main -->
+    <!-- impl -->      detail axis: help / impl
+    implementer note ...
+    <!-- end impl -->
 
-Fence lines and all other HTML comments are stripped from the output.  See the
-FORMAT CONTRACT comment at the top of prompt_common.md.
+`render_fenced` is the single engine (see its docstring); `parse_prompt` is the
+prompt view (pick an audience, drop both detail axes) and `render_idea_help` is
+the `dh_hl help` view (keep both audiences, drop impl, keep help).  Fence lines
+and all other HTML comments are stripped from the output.  See the FORMAT
+CONTRACT comments atop prompt_common.md and above "# Tools" in idea.md.
 """
 
 import os
@@ -37,6 +43,23 @@ _PROMPT_DOCS = ("idea.md", "loopdoc.md", "adams_opus_scheduling_guide.md")
 _DEFAULT_DOC_EXT = {"detail": ".md", "examples": ".cpp"}
 
 AUDIENCES = ("main", "sub")
+_DETAIL_WORDS = ("help", "impl")
+
+# The four recognized fence words fall on two axes:
+#   * Audience axis (`main`/`sub`): a region is kept only if its word matches the
+#     view's target audience; `audience=None` keeps BOTH audiences (the `help`
+#     view, which is audience-neutral).
+#   * Detail axis (`help`/`impl`): `<!-- help -->` wraps text meant for
+#     `dh_hl help <command>` but too verbose for the prompt; `<!-- impl -->` wraps
+#     implementer-only notes wanted by neither view.  A detail word in
+#     `remove_detail` drops its whole region; a recognized detail word NOT in
+#     `remove_detail` drops just its fence lines (keeping the content).
+# Fences do NOT nest -- at most one is open at a time, of any word (a maintainer
+# note wanted inside an open region is written as a plain multi-word HTML comment,
+# which is stripped from every view).  This single engine is shared by
+# `prompt_common.md` and `idea.md` (idea.md "Prompt Tools", "Help Tool --
+# Implementation Details", and the FORMAT CONTRACTs in both files).
+_FENCE_WORDS = frozenset(AUDIENCES + _DETAIL_WORDS)
 
 # A fence line: an HTML comment whose only content is "<word>" or "end <word>".
 _FENCE_RE = re.compile(r"^<!--\s*(end\s+)?(\w+)\s*-->$")
@@ -44,23 +67,22 @@ _FENCE_RE = re.compile(r"^<!--\s*(end\s+)?(\w+)\s*-->$")
 # Any HTML comment span (inline or multi-line); non-greedy, spanning newlines.
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 
-# idea.md "detail" fences: `<!-- help -->`..`<!-- end help -->` wraps text meant
-# for `dh_hl help <command>` but too verbose for the prompt, and
-# `<!-- impl -->`..`<!-- end impl -->` wraps implementer-only notes wanted by
-# neither view.  See the FORMAT CONTRACT above "# Tools" in idea.md.
-_IDEA_FENCE_WORDS = ("help", "impl")
 
+def render_fenced(text, *, audience, remove_detail, source="prompt_common.md"):
+    """Render the (audience, detail) view of fence-source *text*.
 
-def parse_prompt(text, audience):
-    """Return the *audience* ('main'/'sub') view of prompt-source *text*.
+    *audience* is 'main'/'sub' (keep that audience, drop the other) or None (keep
+    both audiences).  *remove_detail* is the set of detail words ('help'/'impl')
+    whose regions are dropped.  Fence lines and all other HTML comments are
+    stripped; blank runs left behind are collapsed.
 
-    Raises DhHlError on malformed fencing (nesting, an unmatched or dangling
-    fence, or a fence-shaped comment naming an unknown audience -- single-word
-    comments are reserved for fences, so a typo fails loudly rather than
-    silently leaking a region into both prompts)."""
-    assert audience in AUDIENCES
-    out = []
-    state = None          # None (common), or "main"/"sub" inside that fence
+    Raises DhHlError on malformed fencing: any nesting, an unmatched or dangling
+    fence, or a fence-shaped comment naming an unknown word (single-word comments
+    are reserved for fences, so a typo fails loudly rather than silently leaking a
+    region).  *source* names the file in error messages."""
+    assert audience is None or audience in AUDIENCES
+    kept = []
+    state = None          # the single open fence word, or None (common)
     in_comment = False    # inside a multi-line <!-- ... --> block (stripped)
     for lineno, raw in enumerate(text.split("\n"), 1):
         s = raw.strip()
@@ -71,33 +93,44 @@ def parse_prompt(text, audience):
         m = _FENCE_RE.match(s)
         if m:
             is_end, word = bool(m.group(1)), m.group(2)
-            if word not in AUDIENCES:
+            if word not in _FENCE_WORDS:
                 raise DhHlError(
-                    "prompt_common.md line {}: unknown audience tag {!r} "
-                    "(expected a main/sub fence)".format(lineno, s))
+                    "{} line {}: unknown fence tag {!r} (expected one of "
+                    "main/sub/help/impl)".format(source, lineno, s))
             if not is_end:
                 if state is not None:
                     raise DhHlError(
-                        "prompt_common.md line {}: fence {!r} nested inside an "
-                        "open {!r} fence".format(lineno, s, state))
+                        "{} line {}: fence {!r} nested inside an open {!r} "
+                        "fence".format(source, lineno, s, state))
                 state = word
             else:
                 if state != word:
                     raise DhHlError(
-                        "prompt_common.md line {}: {!r} with no matching open "
-                        "fence".format(lineno, s))
+                        "{} line {}: {!r} with no matching open fence".format(
+                            source, lineno, s))
                 state = None
             continue
-        if s.startswith("<!--"):        # a non-fence comment -> strip it
-            if "-->" not in s:
-                in_comment = True        # multi-line comment; strip until close
+        if s.startswith("<!--") and "-->" not in s:
+            in_comment = True            # multi-line comment; strip until close
             continue
-        if state is None or state == audience:
-            out.append(raw)
+        drop = (state in AUDIENCES and audience is not None and state != audience) \
+            or (state in remove_detail)
+        if not drop:
+            kept.append(raw)             # may still hold an inline comment
     if state is not None:
         raise DhHlError(
-            "prompt_common.md: unclosed {!r} fence at end of file".format(state))
-    return _collapse_blanks(out)
+            "{}: unclosed {!r} fence at end of file".format(source, state))
+    # A final pass drops any inline / mid-line comments the line loop kept.
+    return _collapse_blanks(_HTML_COMMENT_RE.sub("", "\n".join(kept)).split("\n"))
+
+
+def parse_prompt(text, audience, source="prompt_common.md"):
+    """The prompt view of *audience* ('main'/'sub'): keep that audience's regions,
+    drop the other's, and drop BOTH detail axes (help + impl).  Shared by
+    `prompt_common.md` and `idea.md` (idea.md "Prompt Tools"); *source* names the
+    file in error messages."""
+    return render_fenced(text, audience=audience, remove_detail=_DETAIL_WORDS,
+                         source=source)
 
 
 def _collapse_blanks(lines):
@@ -121,42 +154,15 @@ def strip_html_comments(text):
     return _collapse_blanks(_HTML_COMMENT_RE.sub("", text).split("\n"))
 
 
-def _strip_idea_fences(text, remove_words):
-    """Process idea.md "detail" fences (see `_IDEA_FENCE_WORDS`): drop the whole
-    `<!-- word -->`..`<!-- end word -->` region for every *word* in
-    *remove_words*, and for a recognized fence word NOT in *remove_words* drop
-    just the fence lines (keeping the region's content).  Then strip any
-    remaining HTML comments and collapse blank runs, exactly like
-    `strip_html_comments`.
-
-    The two idea.md detail views build on this: `render_idea_prompt` removes both
-    help and impl regions; `render_idea_help` removes impl but keeps help
-    content.  Fence tracking runs over the *whole* text before section parsing,
-    so a region that spans a heading boundary (e.g. an impl region wrapping an
-    entire "### ... Implementation Details" section) is handled correctly."""
-    out = []
-    skipping = False
-    for raw in text.split("\n"):
-        m = _FENCE_RE.match(raw.strip())
-        if m and m.group(2) in _IDEA_FENCE_WORDS:
-            if m.group(2) in remove_words:
-                skipping = not bool(m.group(1))  # open -> skip, close -> resume
-            continue  # drop every recognized idea fence line
-        if not skipping:
-            out.append(raw)
-    return strip_html_comments("\n".join(out))
-
-
-def render_idea_prompt(text):
-    """The idea.md view embedded in the assembled prompt: both help and impl
-    detail regions removed (idea.md "Prompt Tools" -> "idea.md detail removal")."""
-    return _strip_idea_fences(text, _IDEA_FENCE_WORDS)
-
-
 def render_idea_help(text):
     """The idea.md view rendered by `dh_hl help`: impl regions removed, help
-    regions kept (idea.md "Help Tool -- Implementation Details")."""
-    return _strip_idea_fences(text, ("impl",))
+    regions kept, and BOTH audiences kept (`dh_hl help` is audience-neutral;
+    idea.md "Help Tool -- Implementation Details").  Fence tracking runs over the
+    *whole* text before section parsing, so a region that spans a heading
+    boundary (e.g. an impl region wrapping an entire "### ... Implementation
+    Details" section) is handled correctly."""
+    return render_fenced(text, audience=None, remove_detail=("impl",),
+                         source="idea.md")
 
 
 def _read_source(path):
@@ -178,10 +184,12 @@ def load_prompt(audience, path=_PROMPT_MD):
     parts = [parse_prompt(_read_source(path), audience)]
     for name in _PROMPT_DOCS:
         src = _read_source(os.path.join(repo_dir, name))
-        # idea.md additionally has its help/impl detail regions removed; the
-        # other docs only need HTML comments stripped.
+        # idea.md runs through the same audience+detail fence engine as
+        # prompt_common.md (its `<!-- main -->` section is audience-fenced and its
+        # help/impl detail regions are dropped); the other docs, which use no
+        # fences, only need HTML comments stripped.
         if name == "idea.md":
-            parts.append(render_idea_prompt(src))
+            parts.append(parse_prompt(src, audience, source="idea.md"))
         else:
             parts.append(strip_html_comments(src))
     # Single blank line between documents; exactly one trailing newline.
