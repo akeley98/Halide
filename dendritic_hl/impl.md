@@ -25,8 +25,11 @@ Avoid extra blank lines after removing IMPL TASKs
 NOTE: I got tired of the split of per-tool information between
 `idea.md` and `impl.md`, so now the tool-specific implementation information
 is in `idea.md` only.
-At some time I'll figure out how to strip this from the prompt to avoid
-wasting tokens for agents using the harness (not implementing it).
+These things are bracketed by comments like these:
+<!-- impl -->
+(stuff in here is stripped out from the `dh_hl prompt`/`dh_hl help` output).
+<!-- end impl -->
+Obviously you can't see the comments if you're not looking at Markdown source.
 
 
 # Stable Hostname
