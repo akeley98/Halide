@@ -263,7 +263,7 @@ def _minor_child_of_seed(session):
 
 
 def test_close_rejects_minor_output(session, run_tool):
-    """IMPL TASK (idea.md "Close Session Tool"): output schedules must be major
+    """idea.md "Close Session Tool": output schedules must be major
     schedules; a minor (non-canonical) child is refused."""
     minor_id = _minor_child_of_seed(session)
     with pytest.raises(DhHlError, match="not a major schedule"):

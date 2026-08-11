@@ -262,8 +262,7 @@ def test_cmd_prompt_smoke(capsys):
 
 def test_real_prompt_common_impl_section_absent_from_both_prompts():
     """The `<!-- impl -->` "Side Note: Seed Ideas Found To Be Harmful" section in
-    prompt_common.md must not leak into either assembled prompt (the former
-    prompt_common.md self-check IMPL TASK)."""
+    prompt_common.md must not leak into either assembled prompt."""
     for audience in ("main", "sub"):
         out = prompts.load_prompt(audience)
         assert "Seed Ideas Found To Be Harmful" not in out
@@ -271,8 +270,7 @@ def test_real_prompt_common_impl_section_absent_from_both_prompts():
 
 def test_real_idea_main_section_is_audience_specialized():
     """idea.md's `<!-- main -->` "Main Agent Default Session Behavior" section
-    appears in the main prompt but NOT the sub prompt (the former idea.md
-    self-check IMPL TASK)."""
+    appears in the main prompt but NOT the sub prompt"""
     marker = "Main Agent Default Session Behavior"
     assert marker in prompts.load_prompt("main")
     assert marker not in prompts.load_prompt("sub")

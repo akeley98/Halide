@@ -1,6 +1,6 @@
 # `dh_hl` harness vs. `apps/resnet_50` — Gap Analysis
 
-Research note (2026-08-04) answering the idea.md IMPL TASK: "how hard would it be
+Research note (2026-08-04) answering the idea.md "how hard would it be
 to get the harness to deal with resnet_50's custom `process.cpp`?" Research only;
 no harness changes were made. Verbatim sub-agent findings, valid against the
 codebase at commit a5f4fefe5.
@@ -37,7 +37,7 @@ The harness build/profile driver is `dh_hl_lib/build.py`. Its assumptions, with 
 
 **Generators registered: exactly one** — `HALIDE_REGISTER_GENERATOR(Resnet50Generator, resnet50)` (Resnet50Generator.cpp:383). So A1's *count* is satisfied. But everything about how it is built and benchmarked differs.
 
-**Custom driver instead of RunGenMain.** `process.cpp` has its own `int main` (process.cpp:98-299). The Makefile builds it directly against the emitted `resnet50.a`/`resnet50.h` (Makefile:22-24) — it never compiles or links `RunGenMain.cpp`. This is the "custom `process.cpp`" the IMPL TASK refers to.
+**Custom driver instead of RunGenMain.** `process.cpp` has its own `int main` (process.cpp:98-299). The Makefile builds it directly against the emitted `resnet50.a`/`resnet50.h` (Makefile:22-24) — it never compiles or links `RunGenMain.cpp`. This is the "custom `process.cpp`" the task refers to.
 
 **Real weights + real input, loaded from files.**
 - `process.cpp` takes CLI args `iterations weight_dir seed output_file` (process.cpp:98-106).
