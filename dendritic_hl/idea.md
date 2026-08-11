@@ -3142,9 +3142,14 @@ being JSON objects in the same format as `json_schedule_info`,
 FUTURE: holds the exclusive catalog lock despite being conceptually read-only.
 Optimize this if needed, but this shouldn't be in the agent hot loop.
 <!-- end help -->
+<!-- main -->
 
 
 # Main Agent Default Session Behavior
+
+IMPL TASK: unify the "fence" comments in `idea`.md and `prompt_common.md`.
+This file should be processed so that main/sub sections are conditionally stripped out,
+so this section shouldn't appear in `dh_hl prompt --sub`.
 
 This step gives reasonable defaults, which take second priority to the
 user's instructions or more authoritative prompts.
@@ -3171,3 +3176,4 @@ If none of these cases (e.g. multiple termini),
 then the user needs to provide more specific intentions.
 The user may not be familiar with the harness.
 Try to advise of the implications of various actions.
+<!-- end main -->

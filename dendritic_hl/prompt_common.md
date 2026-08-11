@@ -299,13 +299,27 @@ which all come with a canonical schedule (that don't implement the seed idea).
 
 The harness will add special "superseded by" links to paper over this
 semantic gap upon closing the session.
-<!-- This is really not a great design (doubling idea nodes as "session start" nodes -->
-<!-- and having a canonical schedule that implements nothing new. Ultimately the -->
-<!-- problem is there's no "recursion" in the beam-search inspired tree. -->
-<!-- The beam search analogy was just something comforting to start with; -->
-<!-- the real question is what is the true best structure to propagate information -->
-<!-- between parallel agents, and new agent sessions following the conclusion of old ones? -->
-<!-- Anyway, this current design has already caused some fair amount of agent confusion. -->
+<!-- impl -->
+
+
+### Side Note: Seed Ideas Found To Be Harmful
+
+IMPL TASK: unify the "fence" comments in `idea`.md and `prompt_common.md`.
+This file should be processed so that "impl" sections are stripped out,
+so this "Side Note: Seed Ideas Found To Be Harmful" shouldn't appear in `dh_hl prompt`.
+
+This is really not a great design (doubling idea nodes as "session start" nodes
+and having a canonical schedule that implements nothing new). Ultimately the
+problem is there's no "recursion" in the beam-search inspired tree.
+The "ideas" in the original beam search are always small modifications
+that can be done immediately, but in the LLM context an "idea" can be
+a large scale exploration that requires a whole sub-campaign to flesh out.
+
+The beam search analogy was just something comforting to start with;
+the real question is, what is the true best structure to propagate information
+between parallel agents, and new agent sessions following the conclusion of old ones?
+Anyway, this current design has already caused some fair amount of agent confusion.
+<!-- end impl -->
 
 
 ## Choice C: Launch Sub-agent
