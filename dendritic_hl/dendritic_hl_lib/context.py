@@ -22,6 +22,7 @@ from . import locks
 from . import safety
 from .catalog import (Catalog, CurrentIdeaState, DEFAULT_PARAMETERS,
                       dump_parameters, _UNLOADED)
+from .enums import IdeaStateKind
 from .errors import DhHlError
 
 
@@ -102,8 +103,9 @@ class _PrivateMapState:
         # call ensure_private_dir / the session lock created it), matching the
         # CurrentIdeaState assumption.
         if self._dirty:
-            safety.write_allowed(self._path,
-                                 json.dumps(self._map, indent=1) + "\n")
+            safety.new_file(self._path,
+                            json.dumps(self._map, indent=1) + "\n",
+                            overwrite_allowed=True)
 
 
 class PrivateIdeaList(_PrivateMapState):
@@ -187,8 +189,9 @@ class CurrentAnchor:
 
     def flush(self):
         if self._dirty:
-            safety.write_allowed(
-                self._path, (self._value + "\n") if self._value else "")
+            safety.new_file(
+                self._path, (self._value + "\n") if self._value else "",
+                overwrite_allowed=True)
 
 
 class SessionWorkspace:
@@ -341,7 +344,8 @@ class SessionWorkspace:
         """Initialize a fresh private workspace: write generator.cpp and
         generator_parameters.json (deferred overwrites, never rolled back --
         honoring 'never delete the workspace file') and set the current idea
-        state.  *idea_state* is ('idea', id) or ('no_idea', timestamp).
+        state.  *idea_state* is (IdeaStateKind.IDEA, id) or
+        (IdeaStateKind.NO_IDEA, timestamp).
         *params_text* defaults to the canonical "[{}]"."""
         self.ensure_private_dir()
         if params_text is None:
@@ -352,7 +356,7 @@ class SessionWorkspace:
                                  if isinstance(source, str) else source)
         self._params_text = params_text
         kind, val = idea_state
-        if kind == "idea":
+        if kind is IdeaStateKind.IDEA:
             self.current_idea_state.set_idea(val)
         else:
             self.current_idea_state.set_no_idea(val)
@@ -528,7 +532,7 @@ def resolve_target(args):
             return C_abs, session_id
         return os.path.abspath(cat_from_handle), session_id
     if s is not None:
-        if not ids.is_session_id(s):
+        if not ids.looks_like_session_id(s):
             raise DhHlError("not a session handle or valid session ID: " + s)
         if C is None:
             raise DhHlError(
@@ -616,11 +620,11 @@ class Context:
         if not matching:
             return None
         cis = ws.current_idea_state
-        if cis.kind == "no_idea":
+        if cis.kind == IdeaStateKind.NO_IDEA:
             for n in matching:
                 if n.is_root() and n.timestamp == cis.timestamp:
                     return n
-        elif cis.kind == "idea":
+        elif cis.kind == IdeaStateKind.IDEA:
             for n in matching:
                 if n.parent_id == cis.idea_id:
                     return n
@@ -656,9 +660,9 @@ class Context:
         """The IdeaNode referenced by 'some current idea', or None for 'no
         idea'.  Raises on parse errors/conflict."""
         cis = self.workspace.current_idea_state
-        if cis.kind == "no_idea":
+        if cis.kind == IdeaStateKind.NO_IDEA:
             return None
-        if cis.kind == "idea":
+        if cis.kind == IdeaStateKind.IDEA:
             return self.catalog.get_idea(cis.idea_id)
         raise DhHlError(cis.problem_message())
 

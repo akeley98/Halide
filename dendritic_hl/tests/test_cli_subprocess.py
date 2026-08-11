@@ -106,7 +106,7 @@ def test_atexit_rollback_restores_partial_mutation(run_cli, session):
     before = _snapshot(cat_dir)
 
     r = run_cli("new_idea", *_cli(session), "vec", "-",
-                env={"DH_HL_TEST_FAIL_AFTER": "1"}, input="some proposal")
+                env={"DENDRITIC_HL_TEST_FAIL_AFTER": "1"}, input="some proposal")
     assert r.returncode != 0
 
     after = _snapshot(cat_dir)

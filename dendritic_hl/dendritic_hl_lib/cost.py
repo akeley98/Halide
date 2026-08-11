@@ -27,6 +27,7 @@ import sys
 from collections import defaultdict
 
 from .catalog import EXPECTED_PROFILER_VERSION
+from .enums import CostVerdict
 
 # Confidence level for the 2-way comparison CI (idea.md defaults 2-way to 95%).
 DEFAULT_CONFIDENCE = 0.95
@@ -159,10 +160,11 @@ class CostData:
     def compare(self, lhs_id, rhs_id, confidence=DEFAULT_CONFIDENCE,
                 bootstrap=DEFAULT_BOOTSTRAP):
         """Head-to-head "2-way Cost Comparison" of LHS vs RHS (idea.md).  Returns
-        a dict: ``batch_count``, ``result`` (improvement/regression/unknown),
-        ``lhs_raw_cost``/``lhs_representative``, ``rhs_raw_cost``/
-        ``rhs_representative``.  ``improvement`` means LHS is confidently cheaper
-        than RHS; ``regression`` means confidently dearer."""
+        a dict whose ``result`` is a CostVerdict (translate to ``.value`` at the
+        JSON boundary), plus ``batch_count``, ``lhs_raw_cost``/
+        ``lhs_representative``, ``rhs_raw_cost``/``rhs_representative``.
+        IMPROVEMENT means LHS is confidently cheaper than RHS; REGRESSION
+        confidently dearer."""
         keys = self.batches_of(lhs_id) & self.batches_of(rhs_id)
         l_rep, l_costs = self.representative(lhs_id, keys)
         r_rep, r_costs = self.representative(rhs_id, keys)
@@ -184,7 +186,7 @@ class CostData:
         """True iff LHS confidently improves over RHS (the obsoletion gate used
         by the list_private_ideas frontier, idea.md "Obsoleted By")."""
         return self.compare(lhs_id, rhs_id, confidence, bootstrap)["result"] \
-            == "improvement"
+            is CostVerdict.IMPROVEMENT
 
 
 # ---- bootstrap significance primitives ------------------------------------
@@ -208,14 +210,14 @@ def paired_diff_ci(diffs, confidence=DEFAULT_CONFIDENCE,
 
 
 def compare_verdict(lo, hi):
-    """Map a paired-difference CI of ``cost(LHS) - cost(RHS)`` to a verdict.
-    Entirely below zero -> LHS cheaper -> ``improvement``; entirely above zero ->
-    ``regression``; straddling zero or nan (too little data) -> ``unknown``
-    (idea.md "2-way Cost Comparison")."""
+    """Map a paired-difference CI of ``cost(LHS) - cost(RHS)`` to a CostVerdict.
+    Entirely below zero -> LHS cheaper -> IMPROVEMENT; entirely above zero ->
+    REGRESSION; straddling zero or nan (too little data) -> UNKNOWN (idea.md
+    "2-way Cost Comparison")."""
     if lo != lo or hi != hi:  # nan: insufficient data
-        return "unknown"
+        return CostVerdict.UNKNOWN
     if lo < 0 and hi < 0:
-        return "improvement"
+        return CostVerdict.IMPROVEMENT
     if lo > 0 and hi > 0:
-        return "regression"
-    return "unknown"
+        return CostVerdict.REGRESSION
+    return CostVerdict.UNKNOWN

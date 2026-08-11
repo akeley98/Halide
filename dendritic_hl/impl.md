@@ -106,10 +106,19 @@ This contains files and directories holding state:
   but just raised too many tough cases for a prototype with questionable payoff.
 
 * **Result:** `result.txt`,
-  holding `unknown`, `c++ error`, `halide error`, or `success`.
+  holding `unknown`, `c++ error`, `halide error`, or `success` (the `Result`
+  enum).
   The default value is `unknown`.
-  Ranked worst-to-best by `catalog.RESULT_RANK`; `build` only ever moves a node
-  to a better value (`catalog.best_result`).
+  Ranked worst-to-best by the `Result` definition order; `build` only ever moves a
+  node to a better value (`catalog.best_result`).
+  An **absent** `result.txt` is the normal unbuilt state and reads as `unknown`
+  *silently*.  A **malformed** `result.txt` (e.g. a merge conflict left markers in
+  it) also degrades to `unknown`, but with a `stderr` warning — mirroring the
+  Problem `state.txt` leniency.  This is safe: `best_result` only moves a node
+  upward and `canon` requires `success`, so a spurious `unknown` is merely
+  pessimistic, and a rebuild overwrites it (`set_result` always dirties).  Merely
+  *reading* the malformed value does not dirty the node, so it is not silently
+  rewritten.
 
 * **Benchmark Sub-objects:** store in `bench/{hostname}_{timestamp of benchmark}.json`
   (the `{hostname}` here is the *sanitized* stable hostname — see "Stable Hostname").
@@ -176,7 +185,9 @@ No automatic fix provided: this power should be used very sparingly anyway.
 *Merge risk:* `result.txt` conflict.
 Unlikely but could happen due to committing a failed build that
 later worked due to trying different generator parameters.
-No automatic fix provided.
+No automatic *resolution* is provided, but the conflict does not crash: a
+malformed `result.txt` degrades to `unknown` with a `stderr` warning (see the
+Result bullet above), and the next `build` overwrites it with a real value.
 
 *Merge risk:* (unlikely) incoming different benchmarks, advice, or commentaries with the same timestamp.
 No automatic fix provided.
@@ -264,7 +275,7 @@ of `username` (from `getpass.getuser()`, falling back to `"user"`) and `hostname
 to `_`, is truncated to 64 chars, and is never empty (an all-stripped value
 becomes `"_"`). De-anonymizing is intentional, so there is no hashing. The `@`
 between them is therefore the unique separator, and since the timestamp is fixed
-width, `is_session_id`/`session_depth`/`session_timestamp` parse the ID
+width, `looks_like_session_id`/`session_depth`/`session_timestamp` parse the ID
 unambiguously (`_SESSION_ID_RE` in `ids.py`).
 
 
@@ -322,7 +333,10 @@ Stored in `problem/{full id}/` as multiple files
 
 *Merge risk:* `cli.json` cannot have a merge problem except for full SHA256 collisions.
 `state.txt` and `short_name.txt` can fail due to mutability,
-but this is easy to fix by using public state/short name setters.
+but this is easy to fix by using public state/short name setters -- and
+genuinely so: those setters dirty *unconditionally* (no "skip if unchanged"
+short-circuit), so setting a malformed file to any value, including the one it
+already resolves to, rewrites it (see "A cautionary tale" in Tool Internal Design).
 
 
 ### Session Private Workspace
@@ -814,17 +828,23 @@ of possible crashes in between overwriting a file and tool exit.
 **As implemented** (`dendritic_hl_lib/safety.py`): the "common helper" is the
 `safety` module, a process-global registry.
 
-* `new_file(path, data)` creates a file with `O_CREAT|O_EXCL` and records it;
-  `new_dir(path)` / `makedirs_tracked(path)` create directories, recording only
-  the levels actually created. All recorded entries go on `_new_entries`
-  (a LIFO list of `("file"|"dir", path)`).
-* `write_allowed(path, data, *, allow=True)` is for the allowed-to-change files:
-  it `new_file`s when the target is absent (so rollback can remove it) and
-  otherwise defers an overwrite via `queue_overwrite`. Deferred overwrites are
-  applied by `commit()` and are NOT rolled back.  With `allow=False` an existing
-  target instead falls through to `new_file`, whose `O_EXCL` create raises — this
-  is how `init_workspace` (without `--force`) refuses to clobber existing
-  workspace state.
+* `new_file(path, data, *, overwrite_allowed=False)` is the single write helper.
+  By default (`overwrite_allowed=False`) it creates a file with `O_CREAT|O_EXCL`
+  and records it — the norm, since almost all catalog files are write-once and
+  the `O_EXCL` is a hard guard.  `new_dir(path)` / `makedirs_tracked(path)` create
+  directories, recording only the levels actually created. All recorded entries go
+  on `_new_entries` (a LIFO list of `("file"|"dir", path)`).
+* `new_file(path, data, overwrite_allowed=True)` is the mode for the
+  allowed-to-change files: it exclusive-creates + records when the target is
+  absent (so rollback can remove it) and otherwise defers an overwrite via
+  `queue_overwrite`. Deferred overwrites are applied by `commit()` and are NOT
+  rolled back.  (There is deliberately **no** separate `write_allowed` function —
+  an earlier split into `new_file` vs. `write_allowed` confused agents, since
+  "write_allowed" reads as a predicate rather than an action; the one flag on the
+  one `new_file` is the whole story.)  `overwrite_allowed=True` with an *absent*
+  target is how `init_workspace --force` writes fresh workspace state, while the
+  default `overwrite_allowed=False` is how it refuses to clobber existing state
+  (the `O_EXCL` create raises `FileExistsError`).
 * `arm()` (called at the top of `main()`) registers the `atexit` handler
   `_rollback` and maps `SIGQUIT`→`KeyboardInterrupt`.
 * `_rollback()` deletes `_new_entries` in reverse (files via `os.remove`, dirs
@@ -842,7 +862,7 @@ The flush itself lives on the model objects, not `safety`: `Catalog.flush()`
 calls every dirty object's `flush()` (see Tool Internal Design),
 and `Context.finish()` is `catalog.flush()` then `safety.commit()`.
 Test hook: `new_file` calls `_maybe_inject_failure()`,
-which honors `DH_HL_TEST_FAIL_AFTER` (see Tests).
+which honors `DENDRITIC_HL_TEST_FAIL_AFTER` (see Tests).
 
 Lock ordering: the lock layer is `locks.py` (not `safety.py`), and its fds are
 held open until process exit, so `_rollback` (an `atexit` handler) runs strictly
@@ -1092,6 +1112,82 @@ proposal name from `fresh_timestamp` for readability, but its uniqueness is
 still the idea-node collision check, so it does not use the mint helper.)
 
 
+# Project Name for Collision Avoidance
+
+**Policy:** wherever a dendritic_hl name shares a namespace with things outside our
+control — and so a short/cute prefix could collide — spell the project out in
+full as **`dendritic_hl`** (or `DENDRITIC_HL` for env vars).  The abbreviation
+`dh_hl` is reserved for the *user-facing CLI* (the `dh_hl` command, the `dh_hl:`
+banner lines, the `.dh_hl` catalog-dir suffix), where brevity is a feature and
+there is no foreign namespace to collide with.
+
+Concretely, use the full name for:
+
+* **Environment variables:** `DENDRITIC_HL_TEST_FAIL_AFTER` (the safety
+  rollback test hook), `DENDRITIC_HL_OUTPUT_LIB` / `DENDRITIC_HL_ALGORITHM_HLPIPE`
+  (build → runner hand-off).  These live in the process environment alongside
+  every other program's variables.
+* **"Global" / machine-shared directory names:** the machine directory is
+  `~/.cache/dendritic_hl/` (`locks.py`), which sits next to every other tool's
+  `~/.cache` entry.
+* **On-disk state tokens that could be mistaken for another format:** the
+  current-idea-state wrapper `dendritic_hl_root(...)` / `dendritic_hl_idea(...)`
+  (`catalog.py`).
+
+Per-catalog, per-session files that live *inside* our own directories (e.g.
+`sch/{id}`, `session.lock`, `init_build.json`) don't need the prefix — the
+enclosing catalog/private directory already namespaces them.
+
+
+# Enum Policy
+
+The small, fixed vocabularies in the model are **`enum.Enum` types** (in
+`enums.py`), not bare string literals.  Early code spelled every one of them as
+raw strings (`"success"`, `"neutral"`, `"enabled"`, `"improvement"`, …) threaded
+through the whole codebase; that made typos silent bugs, hid the valid set at the
+use site, and blurred the line between an in-memory concept and its wire form.
+The enums are:
+
+* `Result` — schedule build result (`result.txt`); members declared worst→best,
+  which *is* the `best_result` ranking.
+* `Review` — a commentary's review; plus the derived-only `MIXED`.
+  `COMMENTARY_REVIEWS` is the subset a single commentary may carry.
+* `ProblemState` — a problem's `enabled`/`disabled`/`main` state (`state.txt`).
+* `SideLink` — the `borrows_from`/`superseded_by` idea-side-link type.
+* `CostVerdict` — a 2-way cost comparison's `improvement`/`regression`/`unknown`
+  (JSON output only; never persisted).
+* `IdeaStateKind` — the parsed `current_idea_state.txt` kind (`missing`/`no_idea`/
+  `idea`/`conflict`).
+
+**In memory, code passes and compares enum *members*, never the strings.**  The
+strings live only on the **wire** — on-disk files, CLI arguments, and JSON output
+— and we translate at that boundary:
+
+* **Serialize:** `member.value` (e.g. `result.txt` ← `node.result.value`; a JSON
+  payload ← `{"review": c.review.value}`).
+* **Parse trusted input:** `SomeEnum(s)` / `SomeEnum.from_wire(s)` (the latter
+  raises a `DhHlError` naming the valid values).
+* **Parse possibly-corrupt disk state:** `try: SomeEnum(s) except ValueError:` +
+  a documented default (Problem `state.txt` → `ENABLED` with a warning; a
+  malformed schedule `result.txt` → `UNKNOWN` with a warning; a garbage
+  commentary `review` → `NEUTRAL`).
+
+The shared `WireEnum` base gives each enum `.value`-based `__str__` (readable
+`print`/f-strings), `from_wire`, and `wire_values` (for CLI help/error text).
+Crucially these are **plain `Enum`, not a `str` mixin**: a member does *not*
+silently serialize.  `json.dumps(member)` raises `TypeError`, and you cannot
+`+`-concatenate a member with a `str` — both are *features*, forcing every
+boundary to spell out `.value` so a wire format can't drift by accident.  That is
+also why the disk/CLI wire strings that stay literals are exactly the *inputs* we
+have not yet turned into members (an argparse `default=`, the `"neutral"` fallback
+for an absent JSON field): translation happens the instant a value becomes an
+in-memory concept.
+
+(Not every fixed token is an enum: the `<RunGenMain>`/`<Lib>` problem-argv
+placeholders are named string constants, and pool tags are free-form user
+strings.  The enums are for the closed vocabularies the model branches on.)
+
+
 # Tool Internal Design
 
 **Codebase map** (`dendritic_hl/dendritic_hl_lib/`):
@@ -1104,7 +1200,12 @@ still the idea-node collision check, so it does not use the mint helper.)
 * `errors.py` — `DhHlError` (user-facing; exit 1, triggers rollback) and
   `HarnessError` (subclass; build-environment problems).
 * `ids.py` — pure ID/timestamp/hash helpers for schedule, idea, and session IDs
-  (`make_*_id`/`is_*_id`/…, plus `sanitize_component` for session user/host).
+  (`make_*_id`/`looks_like_*_id`/…, plus `sanitize_component` for session
+  user/host).  See the `looks_like_*_id` naming note (Enum Policy is separate;
+  these are syntactic *shape* checks, deliberately not `is_*`).
+* `enums.py` — the fixed-vocabulary `Enum` types (`Result`, `Review`,
+  `ProblemState`, `SideLink`, `CostVerdict`, `IdeaStateKind`) and their shared
+  `WireEnum` base (see Enum Policy).
 * `safety.py` — the rollback/overwrite/commit registry (see File Rollback).
 * `locks.py` — the machine directory, the flock lock hierarchy, and the lock-free
   session-handle store (see Lock Hierarchy, Session Handles).
@@ -1113,7 +1214,7 @@ still the idea-node collision check, so it does not use the mint helper.)
   version the cost tools understand); schedule sub-objects `Commentary`,
   `Benchmark` (with `wall_time_min` / `profiler_version` cost accessors),
   `WarningToggle`; the top-level `BenchmarkSet`; nodes `ScheduleNode` (with generator parameters +
-  `RESULT_STATES`/`best_result`), `IdeaNode`, `SessionNode` (prompt, multiple
+  the `Result` enum / `best_result`), `IdeaNode`, `SessionNode` (prompt, multiple
   seed ideas, default anchor, `outputs.json`); the `CurrentIdeaState` parser; the
   parameter helpers (`DEFAULT_PARAMETERS`/`dump_parameters`/`validate_parameters`/
   `load_parameters_text`); and the top-level `Catalog` (lazy
@@ -1187,6 +1288,24 @@ Each object
 * has `flush` callbacks that uses the `safety` module to write changes to disk.
 * may own lazily-created sub-objects corresponding to some piece of conceptual state;
   for example, a schedule node object owns commentary sub-objects.
+
+**Setters dirty *unconditionally* — a cautionary tale.**  A setter must always
+mark dirty; do NOT add a `if self.x == value: return` "skip if unchanged" guard.
+
+* Two setters (`Problem.set_state`/`set_short_name`) once had that guard; every
+  other setter did not.  The inconsistency alone was a trap for readers.
+* The guard compares against the value the getter *returns*, which for a
+  malformed on-disk file is the **lenient default** (a corrupt `state.txt`
+  resolves to `enabled`).  So `set_state(enabled)` saw "already enabled" and
+  no-op'd — refusing to heal the garbage, and re-emitting the warning every run.
+* It bought nothing: the avoided write is a deferred, tiny, already-locked
+  overwrite, and git diffs on content so an identical rewrite is invisible.
+* Net: a real correctness bug (unhealable corruption) traded for a non-benefit.
+  Lazy loading is good; "lazy writing" via value comparison is not.
+* Human Note 2026-08-10, David Zhao Akeley:
+  if a circumstance shows up where this rule should be revisited
+  (optimization is actually significant, and not easy to implement otherwise)
+  ask for human judgment on whether this rule should be waived.
 
 Furthermore, each node contains a lazily-initialized derived list of
 child nodes. This is **all-or-nothing** for each category of node.
@@ -1267,7 +1386,7 @@ object as representative, `json_profiler_stats` aggregating real per-func
 samples, and `json_compare_cost` calling a serial-vs-parallel regression).
 
 **Test-only hook in shipped code.** `safety.new_file` honors a
-`DH_HL_TEST_FAIL_AFTER=<n>` environment variable that raises after the n-th new
+`DENDRITIC_HL_TEST_FAIL_AFTER=<n>` environment variable that raises after the n-th new
 file created in a run. It is a no-op unless that variable is set, and exists
 solely so a subprocess test can prove the `atexit` rollback restores a partial
 mutation end-to-end (the real rollback path only fires at true interpreter

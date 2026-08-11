@@ -36,7 +36,7 @@ def test_schedule_id_is_exactly_90_chars():
     h = "a" * 64
     sid = ids.make_schedule_id(ts, h)
     assert len(sid) == 90
-    assert ids.is_schedule_id(sid)
+    assert ids.looks_like_schedule_id(sid)
     assert ids.schedule_timestamp(sid) == ts
     assert ids.schedule_hash(sid) == h
 
@@ -47,15 +47,15 @@ def test_idea_id_split_is_unambiguous():
     # A proposal name that itself contains underscores must still round-trip,
     # because the schedule ID tail is fixed width.
     iid = ids.make_idea_id("my_cool_idea", sid)
-    assert ids.is_idea_id(iid)
+    assert ids.looks_like_idea_id(iid)
     assert ids.idea_proposal_name(iid) == "my_cool_idea"
     assert ids.idea_parent_id(iid) == sid
 
 
 def test_bad_ids_rejected():
-    assert not ids.is_schedule_id("too short")
-    assert not ids.is_schedule_id("x" * 90)          # not hex tail / bad ts
-    assert not ids.is_idea_id("noparent")
+    assert not ids.looks_like_schedule_id("too short")
+    assert not ids.looks_like_schedule_id("x" * 90)          # not hex tail / bad ts
+    assert not ids.looks_like_idea_id("noparent")
     assert not ids.is_timestamp("2026-7-14T2019_0Z")  # wrong widths
 
 
@@ -71,7 +71,7 @@ _timestamps = st.builds(
 def test_schedule_id_roundtrip(h):
     ts = ids.now_timestamp()
     sid = ids.make_schedule_id(ts, h)
-    assert ids.is_schedule_id(sid)
+    assert ids.looks_like_schedule_id(sid)
     assert ids.schedule_hash(sid) == h
     assert ids.schedule_timestamp(sid) == ts
 
@@ -80,7 +80,7 @@ def test_schedule_id_roundtrip(h):
 def test_idea_id_roundtrip(name, h):
     sid = ids.make_schedule_id(ids.now_timestamp(), h)
     iid = ids.make_idea_id(name, sid)
-    assert ids.is_idea_id(iid)
+    assert ids.looks_like_idea_id(iid)
     assert ids.idea_proposal_name(iid) == name
     assert ids.idea_parent_id(iid) == sid
 

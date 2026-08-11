@@ -18,11 +18,12 @@ from . import profiler_stats
 from . import profiler_warnings
 from . import prompts
 from . import safety
-from .catalog import (Catalog, COMMENTARY_REVIEWS, DEFAULT_PARAMETERS,
-                      IDEA_SIDE_LINK_TYPES, canonical_block_advice,
+from .catalog import (Catalog, DEFAULT_PARAMETERS, canonical_block_advice,
                       dump_parameters, load_parameters_text)
 from .context import (Context, SessionWorkspace, resolve_target,
                       _validate_catalog_dir, read_text_or_stdin)
+from .enums import (COMMENTARY_REVIEWS, CostVerdict, IdeaStateKind, ProblemState,
+                    Result, Review, SideLink)
 from .errors import DhHlError
 
 
@@ -71,8 +72,8 @@ def _print_idea_listing(ctx, idea, marker="", include_proposal_text=True):
         print("  " + line)
 
 
-_SIDE_LINK_LABELS = {"borrows_from": "borrowed from",
-                     "superseded_by": "superseded by"}
+_SIDE_LINK_LABELS = {SideLink.BORROWS_FROM: "borrowed from",
+                     SideLink.SUPERSEDED_BY: "superseded by"}
 
 
 def _side_link_lines(catalog, idea):
@@ -87,11 +88,11 @@ def _side_link_lines(catalog, idea):
 
 
 def _current_idea_description(cis):
-    if cis.kind == "missing":
+    if cis.kind == IdeaStateKind.MISSING:
         return "missing"
-    if cis.kind == "no_idea":
+    if cis.kind == IdeaStateKind.NO_IDEA:
         return "no current idea (root, timestamp {})".format(cis.timestamp)
-    if cis.kind == "idea":
+    if cis.kind == IdeaStateKind.IDEA:
         return "current idea: {}".format(cis.idea_id)
     # conflict
     if cis.parsed_lines:
@@ -103,7 +104,7 @@ def _current_idea_description(cis):
 def _print_current_idea_details(catalog, cis):
     """If the current idea state names an idea, report on it: whether the idea
     node actually exists, and (if so) the status of its canonical schedule."""
-    if cis.kind != "idea":
+    if cis.kind != IdeaStateKind.IDEA:
         return
     idea = catalog.ideas.get(cis.idea_id)
     if idea is None:
@@ -224,11 +225,18 @@ def cmd_comment(args):
     ctx = Context.for_catalog(args)
     node = ctx.resolve_schedule_arg(args.schedule)
     text = _read_file_or_stdin(args.commentary)
-    review = getattr(args, "review", None) or "neutral"
+    # --review is a wire string on the CLI; translate to a Review member, and
+    # reject MIXED (a derived schedule/idea review only, never a commentary's).
+    review_arg = getattr(args, "review", None) or Review.NEUTRAL.value
+    try:
+        review = Review(review_arg)
+    except ValueError:
+        review = None
     if review not in COMMENTARY_REVIEWS:
         raise DhHlError(
             "--review must be one of {} (not 'mixed', which is a derived "
-            "schedule review only)".format(", ".join(COMMENTARY_REVIEWS)))
+            "schedule review only)".format(
+                ", ".join(r.value for r in COMMENTARY_REVIEWS)))
     # Resolve each --cancels target and require it to belong to THIS schedule
     # node (a commentary can only cancel same-node commentary).
     cancels = []
@@ -245,7 +253,7 @@ def cmd_comment(args):
     ctx.finish()
     # Print the new commentary's ID so it can be cited (e.g. by a WarningToggle).
     print("Added {} commentary {} to {}".format(
-        review, ctx.catalog.format_commentary_id(c),
+        review.value, ctx.catalog.format_commentary_id(c),
         ctx.catalog.format_schedule_id(node)))
 
 
@@ -269,7 +277,8 @@ def cmd_new_root(args):
                                       for n in majors))
     # Capture competing current-idea-state lines before overwriting.
     cis = ws.current_idea_state
-    conflict_lines = list(cis.parsed_lines) if cis.kind == "conflict" else []
+    conflict_lines = (list(cis.parsed_lines)
+                      if cis.kind == IdeaStateKind.CONFLICT else [])
 
     node = catalog.create_schedule(ws.workspace_source, parent_idea=None,
                                    params_text=ws.workspace_params_text)
@@ -370,10 +379,10 @@ def cmd_canon(args):
     if idea is None:
         raise DhHlError("no current idea node; nothing to make canonical for")
     node = ctx.require_unambiguous_schedule()
-    if node.result != "success":
+    if node.result is not Result.SUCCESS:
         raise DhHlError(
             "schedule must have result 'success' to be canonical (is {!r})"
-            .format(node.result))
+            .format(node.result.value))
     if idea.canonical is not None:
         if idea.canonical == node.full_id:
             raise DhHlError("this schedule is already the canonical schedule")
@@ -467,16 +476,19 @@ def cmd_view_idea(args):
 
 def cmd_add_idea_side_link(args):
     ctx = Context.for_catalog(args)
-    if args.type not in IDEA_SIDE_LINK_TYPES:
+    # args.type is the CLI wire string; translate to a SideLink member.
+    try:
+        link_type = SideLink(args.type)
+    except ValueError:
         raise DhHlError("link type must be one of {}".format(
-            ", ".join(IDEA_SIDE_LINK_TYPES)))
+            ", ".join(SideLink.wire_values())))
     lhs = ctx.catalog.resolve_idea(args.idea_lhs)
     rhs = ctx.catalog.resolve_idea(args.idea_rhs)
-    added = lhs.add_side_link(args.type, rhs.full_id)
+    added = lhs.add_side_link(link_type, rhs.full_id)
     ctx.finish()
     if added:
         print("Added side link: {} {} {}".format(
-            ctx.catalog.format_idea_id(lhs), args.type,
+            ctx.catalog.format_idea_id(lhs), link_type.value,
             ctx.catalog.format_idea_id(rhs)))
     else:
         print("Side link already present (no-op)")
@@ -636,13 +648,13 @@ def _schedule_json(catalog, node):
         "parameters": node.parameters,
         "timestamp": node.timestamp,
         "hash": node.hash,
-        "result": node.result,
-        "review": node.review,
+        "result": node.result.value,
+        "review": node.review.value,
         "benchmark": [b.data for b in node.benchmarks],
         "commentary": [
             {"id": c.full_id,
              "text": c.text,
-             "review": c.review,
+             "review": c.review.value,
              "cancels": [full(x) for x in c.cancels],
              "cancelled_by": [full(x) for x in cancelled_by.get(c.local_id, [])]}
             for c in sorted(node.commentary, key=lambda c: c.timestamp)
@@ -667,10 +679,10 @@ def _idea_json(catalog, idea):
         "proposal_text": idea.proposal_text,
         "canonical_schedule": idea.canonical,
         "idea_side_links": [
-            {"id": dest, "type": link_type}
+            {"id": dest, "type": link_type.value}
             for link_type, dest in idea.side_links
         ],
-        "review": idea.review,
+        "review": idea.review.value,
     }
 
 
@@ -861,19 +873,26 @@ def cmd_json_compare_cost(args):
     private_sets = ctx.workspace.read_private_benchmark_sets()
     rhs_tail = "--other {}".format(ctx.catalog.format_schedule_id(rhs))
     results = []
+    verdicts = []
     for problem in problems:
         r = cost.CostData.from_private_sets(private_sets, problem.full_id).compare(
             lhs.full_id, rhs.full_id, confidence, bootstrap)
+        # r["result"] is a CostVerdict; keep the member for the boolean rollup and
+        # translate to its wire value for the JSON payload.
+        verdict = r["result"]
+        verdicts.append(verdict)
         results.append({"problem": problem.full_id,
                         "problem_short_id": ctx.catalog.format_problem_id(problem),
-                        **r})
+                        **r, "result": verdict.value})
         if r["batch_count"] == 0:
             _warn_no_cost_batches(ctx, private_sets, problem.full_id, lhs, rhs,
                                   "RHS", rhs_tail)
     if getattr(args, "boolean", False):
-        out = {"any_improvement": any(r["result"] == "improvement" for r in results),
-               "any_regression": any(r["result"] == "regression" for r in results),
-               "any_unknown": any(r["result"] == "unknown" for r in results)}
+        out = {"any_improvement":
+               any(v is CostVerdict.IMPROVEMENT for v in verdicts),
+               "any_regression":
+               any(v is CostVerdict.REGRESSION for v in verdicts),
+               "any_unknown": any(v is CostVerdict.UNKNOWN for v in verdicts)}
         print(json.dumps(out, indent=1))
     else:
         print(json.dumps(results, indent=1))
@@ -1090,7 +1109,7 @@ def cmd_new_catalog(args):
     # session records it in "enabled problems on opening".
     catalog.create_problem(
         ["<RunGenMain>", "--benchmarks=all", "--estimate_all"],
-        "default", state="main")
+        "default", state=ProblemState.MAIN)
     # No parent session and no default anchor (a user-provided schedule may be
     # poor, so it's not a safe anchor -- profiling might never terminate).  No
     # golden is added by default, so golden-on-opening is none.
@@ -1370,7 +1389,7 @@ def cmd_close_session(args):
         root = _session_root_schedule(catalog, session.seed_idea_ids, node)
         if root is None:
             continue
-        root.parent_idea().add_side_link("superseded_by",
+        root.parent_idea().add_side_link(SideLink.SUPERSEDED_BY,
                                          node.parent_idea().full_id)
 
     ctx.finish()
@@ -1396,7 +1415,7 @@ def _resolve_other_session(catalog, spec):
             raise DhHlError(
                 "joined session handle {} is for a different catalog".format(spec))
         return catalog.get_session(sid)
-    if not ids.is_session_id(spec):
+    if not ids.looks_like_session_id(spec):
         raise DhHlError("not a session handle or valid session ID: " + spec)
     return catalog.get_session(spec)
 
@@ -1655,7 +1674,7 @@ def cmd_init_workspace(args):
     seed0 = catalog.get_idea(session.seed_idea_ids[0])
     parent = seed0.parent_schedule()
     # current_idea_state is written directly (bypassing CurrentIdeaState.set_idea)
-    # so the --force flag threads through as write_allowed(allow=...).
+    # so the --force flag threads through as new_file(overwrite_allowed=...).
     idea_state_text = "dendritic_hl_idea({})\n".format(seed0.full_id)
     # Private idea list: every seed idea at pool tag "default".
     private_ideas = {sid: "default" for sid in session.seed_idea_ids}
@@ -1663,18 +1682,22 @@ def cmd_init_workspace(args):
     anchor = session.default_anchor_schedule_id
     anchor_text = (anchor + "\n") if anchor else ""
     # init_workspace is a pure initializer: it writes each workspace file
-    # directly with the --force `allow` flag (so an existing file raises
-    # FileExistsError here, caught below), bypassing the lazy state objects.
+    # directly with the --force `overwrite_allowed` flag (so an existing file
+    # raises FileExistsError here, caught below), bypassing the lazy state
+    # objects.
     try:
-        safety.write_allowed(ws.workspace_path, parent.source, allow=allow)
-        safety.write_allowed(ws.params_path, parent.params_text, allow=allow)
-        safety.write_allowed(ws.current_idea_state.path, idea_state_text,
-                             allow=allow)
-        safety.write_allowed(ws.current_anchor_path, anchor_text, allow=allow)
-        safety.write_allowed(ws.private_ideas_path,
-                             json.dumps(private_ideas, indent=1) + "\n",
-                             allow=allow)
-        safety.write_allowed(ws.private_benchmark_sets_path, "{}\n", allow=allow)
+        safety.new_file(ws.workspace_path, parent.source, overwrite_allowed=allow)
+        safety.new_file(ws.params_path, parent.params_text,
+                        overwrite_allowed=allow)
+        safety.new_file(ws.current_idea_state.path, idea_state_text,
+                        overwrite_allowed=allow)
+        safety.new_file(ws.current_anchor_path, anchor_text,
+                        overwrite_allowed=allow)
+        safety.new_file(ws.private_ideas_path,
+                        json.dumps(private_ideas, indent=1) + "\n",
+                        overwrite_allowed=allow)
+        safety.new_file(ws.private_benchmark_sets_path, "{}\n",
+                        overwrite_allowed=allow)
     except FileExistsError:
         # Some workspace state already exists and --force was not given.
         print(_INIT_WS_ALREADY_DEPTH0 if session.depth == 0
@@ -1929,7 +1952,7 @@ def _print_one_commentary(catalog, c, brief):
     cancelled_by = node.commentary_cancelled_by()
     print("=" * 72)
     print("timestamp: " + c.timestamp)
-    print("review: " + c.review)
+    print("review: " + c.review.value)
     print("cancelled: " + ("true" if cancelled_by.get(c.local_id) else "false"))
     for target_local in c.cancels:
         print("cancels: " + _format_cancel_id(catalog, node, target_local))
@@ -2035,7 +2058,7 @@ def cmd_debug_warning_toggle(args):
         try:
             cancel_target = catalog.resolve_warning_toggle(cancel).full_id
         except DhHlError:
-            cancel_target = cancel if ids.is_warning_toggle_id(cancel) else _NO_MATCH
+            cancel_target = cancel if ids.looks_like_warning_toggle_id(cancel) else _NO_MATCH
 
     out = []
     for w in _sorted_toggles(toggles):
@@ -2199,7 +2222,7 @@ def cmd_json_golden_info(args):
 
 def _problem_json(p):
     """json_problem_info format (idea.md): argv / state / short_name."""
-    return {"argv": p.argv, "state": p.state, "short_name": p.short_name}
+    return {"argv": p.argv, "state": p.state.value, "short_name": p.short_name}
 
 
 def cmd_new_problem(args):
@@ -2211,7 +2234,7 @@ def cmd_new_problem(args):
 
 def cmd_disable_problem(args):
     ctx = Context.for_catalog(args)
-    ctx.catalog.resolve_problem(args.problem).set_state("disabled")
+    ctx.catalog.resolve_problem(args.problem).set_state(ProblemState.DISABLED)
     ctx.finish()
 
 
@@ -2219,8 +2242,8 @@ def cmd_enable_problem(args):
     ctx = Context.for_catalog(args)
     p = ctx.catalog.resolve_problem(args.problem)
     # Enabling a `main` problem leaves it `main` (idea.md "Problem State Tools").
-    if p.state != "main":
-        p.set_state("enabled")
+    if p.state is not ProblemState.MAIN:
+        p.set_state(ProblemState.ENABLED)
     ctx.finish()
 
 
@@ -2229,9 +2252,9 @@ def cmd_set_main_problem(args):
     p = ctx.catalog.resolve_problem(args.problem)
     # Demote any other current main to `enabled`, then promote this one.
     for other in ctx.catalog.problems.values():
-        if other.full_id != p.full_id and other.state == "main":
-            other.set_state("enabled")
-    p.set_state("main")
+        if other.full_id != p.full_id and other.state is ProblemState.MAIN:
+            other.set_state(ProblemState.ENABLED)
+    p.set_state(ProblemState.MAIN)
     ctx.finish()
 
 
@@ -2250,7 +2273,7 @@ def _print_problem(catalog, p):
     """One problem's four-line listing (idea.md "List Problems Tool")."""
     print("=" * 72)
     print("id: " + catalog.format_problem_id(p))
-    print("state: " + p.state)
+    print("state: " + p.state.value)
     print("short name: " + p.short_name)
     print("cli: " + json.dumps(p.argv))
 

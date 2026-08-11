@@ -4,9 +4,12 @@ list_child_schedules, list_equal_schedules.
 Halide-free: the tree is built directly through the catalog API (as in
 test_recovery), then the read-only -C tools are driven via cmd_* / run_tool."""
 
+import os
+
 import pytest
 
 from dendritic_hl_lib import safety, tools
+from dendritic_hl_lib.enums import Result
 from dendritic_hl_lib.catalog import Catalog
 from dendritic_hl_lib.errors import DhHlError
 from conftest import ns, open_catalog
@@ -25,7 +28,7 @@ def _build(tmp_path):
     C2 = cat.create_schedule("child two", parent_idea=I)
     E = cat.create_idea(R, "empty", "Empty.\n")
     for c in (C1, C2):
-        c.set_result("success")
+        c.set_result(Result.SUCCESS)
     I.set_canonical(C1.full_id)
     R2 = cat.create_schedule("child two", parent_idea=None)  # same hash as C2
     cat.flush()
@@ -90,3 +93,43 @@ def test_list_equal_schedules_singleton(tmp_path, run_tool, capsys):
     run_tool(tools.cmd_list_equal_schedules, ns(catalog=t["cat"], schedule=t["C1"]))
     out = capsys.readouterr().out
     assert _resolved_headers(t["cat"], out) == [t["C1"]]  # unique hash
+
+
+# ---- model: malformed / missing result.txt --------------------------------
+# Mirrors test_problems' malformed-state coverage: a merge conflict (or any junk)
+# in result.txt must degrade gracefully to the worst/default UNKNOWN with a
+# stderr warning, never crash -- while an ABSENT result.txt is the normal unbuilt
+# state and stays silent.
+
+@pytest.mark.parametrize("content", [
+    "garbage\n",
+    "<<<<<<< HEAD\nsuccess\n=======\nunknown\n>>>>>>> other\n",  # merge conflict
+])
+def test_malformed_result_txt_defaults_unknown_with_warning(
+        tmp_path, reset_safety, capsys, content):
+    cat = open_catalog(str(tmp_path / "proj.dh_hl"))
+    cat.ensure_created()
+    n = cat.create_schedule("src", parent_idea=None)
+    n.set_result(Result.SUCCESS)
+    cat.flush()
+    safety.commit()
+    # Corrupt result.txt out-of-band (as a git merge conflict would).
+    with open(os.path.join(n.dir, "result.txt"), "w", encoding="utf-8") as f:
+        f.write(content)
+    cat2 = open_catalog(str(tmp_path / "proj.dh_hl"))
+    # (a) does not crash; resolves to the worst/default UNKNOWN.
+    assert cat2.get_schedule(n.full_id).result is Result.UNKNOWN
+    # (b) the warning was actually printed to stderr.
+    assert "malformed schedule result" in capsys.readouterr().err
+
+
+def test_missing_result_txt_is_silent_unknown(tmp_path, reset_safety, capsys):
+    cat = open_catalog(str(tmp_path / "proj.dh_hl"))
+    cat.ensure_created()
+    n = cat.create_schedule("src", parent_idea=None)  # never built: no result.txt
+    cat.flush()
+    safety.commit()
+    cat2 = open_catalog(str(tmp_path / "proj.dh_hl"))
+    assert cat2.get_schedule(n.full_id).result is Result.UNKNOWN
+    # NORMAL unbuilt state, so -- unlike a Problem's missing state.txt -- silent.
+    assert "malformed schedule result" not in capsys.readouterr().err

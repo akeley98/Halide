@@ -22,6 +22,7 @@ import os
 
 from dendritic_hl_lib import build, locks, safety, tools
 from dendritic_hl_lib.context import SessionWorkspace
+from dendritic_hl_lib.enums import ProblemState, Review
 from conftest import DUMMY_SOURCE, add_synthetic_benchmark_set, ns, open_catalog
 
 
@@ -53,7 +54,7 @@ def _build_quad(tmp_path, name, golden_on_open, close):
     alt = cat.create_idea(R, "alt", "alt\n")
     G2 = cat.create_schedule(DUMMY_SOURCE, parent_idea=alt)
     alt.set_canonical(G2.full_id)
-    P = cat.create_problem(["<RunGenMain>", "1"], "pp", state="main")
+    P = cat.create_problem(["<RunGenMain>", "1"], "pp", state=ProblemState.MAIN)
     if golden_on_open:
         cat.create_golden("golden on open = O\n", O.full_id)
     sess = cat.create_session(seed, None, 0)   # snapshots golden-on-opening
@@ -109,7 +110,7 @@ def test_close_session_blocks_changed_golden_until_overridden(tmp_path, run_tool
     # Output needs commentary to be a valid close output.
     cat = open_catalog(cat_dir)
     try:
-        cat.get_schedule(oid).add_commentary("done\n", review="neutral")
+        cat.get_schedule(oid).add_commentary("done\n", review=Review.NEUTRAL)
         cat.flush(); safety.commit()
     finally:
         _reset()

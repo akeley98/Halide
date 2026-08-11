@@ -8,6 +8,7 @@ cost tools; the bootstrap CI is seeded, so verdicts are reproducible)."""
 import math
 
 from dendritic_hl_lib import cost, safety
+from dendritic_hl_lib.enums import CostVerdict
 from dendritic_hl_lib.catalog import EXPECTED_PROFILER_VERSION
 from dendritic_hl_lib.context import SessionWorkspace, _benchmark_set_cache
 from conftest import add_synthetic_benchmark_set, open_catalog
@@ -129,11 +130,11 @@ def test_compare_improvement_and_regression(tmp_path):
     data = cost.CostData.from_private_sets(_benchmark_set_dict(cat, set_id))
 
     ab = data.compare(t["A"], t["B"])
-    assert ab["result"] == "improvement"                     # A cheaper than B
+    assert ab["result"] is CostVerdict.IMPROVEMENT                     # A cheaper than B
     assert ab["batch_count"] == 5
     assert ab["lhs_raw_cost"] == 100 and ab["rhs_raw_cost"] == 130
     ba = data.compare(t["B"], t["A"])
-    assert ba["result"] == "regression"                      # B dearer than A
+    assert ba["result"] is CostVerdict.REGRESSION                      # B dearer than A
     assert data.is_improvement(t["A"], t["B"]) is True
     assert data.is_improvement(t["B"], t["A"]) is False
 
@@ -147,7 +148,7 @@ def test_compare_overlapping_is_unknown(tmp_path):
     })
     cat.flush(); safety.commit()
     data = cost.CostData.from_private_sets(_benchmark_set_dict(cat, set_id))
-    assert data.compare(t["A"], t["B"])["result"] == "unknown"
+    assert data.compare(t["A"], t["B"])["result"] is CostVerdict.UNKNOWN
 
 
 def test_compare_insufficient_data_is_unknown(tmp_path):
@@ -158,7 +159,7 @@ def test_compare_insufficient_data_is_unknown(tmp_path):
     cat.flush(); safety.commit()
     data = cost.CostData.from_private_sets(_benchmark_set_dict(cat, set_id))
     r = data.compare(t["A"], t["B"])
-    assert r["result"] == "unknown" and r["batch_count"] == 1
+    assert r["result"] is CostVerdict.UNKNOWN and r["batch_count"] == 1
 
 
 def test_compare_no_shared_batches(tmp_path):
@@ -172,7 +173,7 @@ def test_compare_no_shared_batches(tmp_path):
     private.update(_benchmark_set_dict(cat, s2))
     data = cost.CostData.from_private_sets(private)
     r = data.compare(t["A"], t["C"])
-    assert r["result"] == "unknown" and r["batch_count"] == 0
+    assert r["result"] is CostVerdict.UNKNOWN and r["batch_count"] == 0
     # But each still ranks on its own batches.
     assert data.ranking_cost(t["A"], None)["cost"] == 100
     assert data.ranking_cost(t["C"], None)["cost"] == 130
@@ -196,11 +197,11 @@ def test_pairing_beats_cross_batch_variance(tmp_path):
     data = cost.CostData.from_private_sets(_benchmark_set_dict(cat, set_id))
 
     ab = data.compare(t["A"], t["B"])
-    assert ab["result"] == "improvement"        # paired diffs all negative
+    assert ab["result"] is CostVerdict.IMPROVEMENT   # paired diffs all negative
     assert ab["batch_count"] == 5
     # Marginal medians nearly tie despite the confident paired verdict.
     assert ab["lhs_raw_cost"] == 220 and ab["rhs_raw_cost"] == 232
-    assert data.compare(t["B"], t["A"])["result"] == "regression"
+    assert data.compare(t["B"], t["A"])["result"] is CostVerdict.REGRESSION
 
 
 def test_batches_accumulate_across_sets_without_cross_set_pairing(tmp_path):
@@ -222,7 +223,7 @@ def test_batches_accumulate_across_sets_without_cross_set_pairing(tmp_path):
     assert data.ranking_cost(t["A"], None)["batch_count"] == 6
     ab = data.compare(t["A"], t["B"])
     assert ab["batch_count"] == 6               # 3 from each set, not merged
-    assert ab["result"] == "improvement"        # A ~5 faster in every batch
+    assert ab["result"] is CostVerdict.IMPROVEMENT   # A ~5 faster in every batch
 
 
 def test_representative_recomputed_over_shared_batches(tmp_path):
@@ -305,13 +306,13 @@ def test_paired_diff_ci_deterministic():
     assert first == second                                   # fixed seed
     med, lo, hi = first
     assert med == -30 and lo < 0 and hi < 0
-    assert cost.compare_verdict(lo, hi) == "improvement"
+    assert cost.compare_verdict(lo, hi) is CostVerdict.IMPROVEMENT
 
 
 def test_paired_diff_ci_too_few_samples():
     med, lo, hi = cost.paired_diff_ci([5])
     assert math.isnan(med) and math.isnan(lo) and math.isnan(hi)
-    assert cost.compare_verdict(lo, hi) == "unknown"
+    assert cost.compare_verdict(lo, hi) is CostVerdict.UNKNOWN
 
 
 # ---- helpers --------------------------------------------------------------

@@ -8,6 +8,7 @@ import pytest
 from dendritic_hl_lib import ids, safety, tools
 from dendritic_hl_lib.catalog import Catalog
 from dendritic_hl_lib.context import SessionWorkspace
+from dendritic_hl_lib.enums import IdeaStateKind, Result
 from dendritic_hl_lib.errors import DhHlError
 from conftest import Sess, open_catalog
 
@@ -31,11 +32,11 @@ def _build(tmp_path):
     I2 = cat.create_idea(R, "tile", "Tile.\n")
     C3 = cat.create_schedule("child three", parent_idea=I2)
     for c in (C1, C2, C3):
-        c.set_result("success")
+        c.set_result(Result.SUCCESS)
     I.set_canonical(C1.full_id)
     sess = cat.create_session(I, None, 0)
     ws = SessionWorkspace(cat.catalog_dir, sess.full_id, catalog=cat)
-    ws.initialize("root", ("idea", I.full_id))
+    ws.initialize("root", (IdeaStateKind.IDEA, I.full_id))
     cat.flush()
     safety.commit()
     t = {"R": R.full_id, "I": I.full_id, "I2": I2.full_id,

@@ -10,6 +10,7 @@ import pytest
 
 from dendritic_hl_lib import ids
 from dendritic_hl_lib.catalog import CurrentIdeaState
+from dendritic_hl_lib.enums import IdeaStateKind
 
 
 def make_cis(tmp_path, state_text=None):
@@ -30,20 +31,20 @@ def a_idea_id():
 
 
 def test_missing(tmp_path):
-    assert make_cis(tmp_path).kind == "missing"
+    assert make_cis(tmp_path).kind == IdeaStateKind.MISSING
 
 
 def test_no_idea(tmp_path):
     ts = ids.now_timestamp()
     cis = make_cis(tmp_path, "dendritic_hl_root({})\n".format(ts))
-    assert cis.kind == "no_idea"
+    assert cis.kind == IdeaStateKind.NO_IDEA
     assert cis.timestamp == ts
 
 
 def test_some_idea(tmp_path):
     iid = a_idea_id()
     cis = make_cis(tmp_path, "dendritic_hl_idea({})\n".format(iid))
-    assert cis.kind == "idea"
+    assert cis.kind == IdeaStateKind.IDEA
     assert cis.idea_id == iid
 
 
@@ -51,7 +52,7 @@ def test_cruft_lines_ignored(tmp_path):
     ts = ids.now_timestamp()
     text = "garbage\n\ndendritic_hl_root({})\n# a comment\n".format(ts)
     cis = make_cis(tmp_path, text)
-    assert cis.kind == "no_idea"
+    assert cis.kind == IdeaStateKind.NO_IDEA
     assert cis.timestamp == ts
 
 
@@ -65,7 +66,7 @@ def test_merge_conflict_two_states_is_conflict(tmp_path):
         "dendritic_hl_idea({})\n"
         ">>>>>>> branch\n".format(ts1, iid))
     cis = make_cis(tmp_path, text)
-    assert cis.kind == "conflict"
+    assert cis.kind == IdeaStateKind.CONFLICT
     assert len(cis.parsed_lines) == 2
 
 
@@ -76,5 +77,5 @@ def test_conflict_does_not_raise_on_parse_but_has_message(tmp_path):
     ts2 = ids.now_timestamp()
     text = "dendritic_hl_root({})\ndendritic_hl_root({})\n".format(ts1, ts2)
     cis = make_cis(tmp_path, text)
-    assert cis.kind == "conflict"  # no raise
+    assert cis.kind == IdeaStateKind.CONFLICT  # no raise
     assert "does not encode a single state" in cis.problem_message()

@@ -10,6 +10,7 @@ import pytest
 
 from dendritic_hl_lib import build, locks, safety, tools
 from dendritic_hl_lib.context import SessionWorkspace
+from dendritic_hl_lib.enums import ProblemState
 from dendritic_hl_lib.errors import DhHlError
 from conftest import (DUMMY_SOURCE, add_synthetic_benchmark_set, ns,
                       open_catalog)
@@ -124,7 +125,7 @@ def _catalog_two_sessions(tmp_path):
     idea = cat.create_idea(R, "seed", "seed\n")
     dup = cat.create_schedule(DUMMY_SOURCE, parent_idea=idea)
     idea.set_canonical(dup.full_id)
-    P = cat.create_problem(["<RunGenMain>", "1"], "pp", state="main")
+    P = cat.create_problem(["<RunGenMain>", "1"], "pp", state=ProblemState.MAIN)
     Q = cat.create_problem(["<RunGenMain>", "2"], "qq")
     cat.create_golden("golden on R\n", R.full_id)
     parent = cat.create_session(idea, None, 0)
@@ -149,7 +150,7 @@ def test_last_three_checks_are_top_level_only(tmp_path, run_tool, capsys):
     # different node (dup), whose hlpipe we never build for the target.
     cat = open_catalog(cat_dir)
     try:
-        cat.get_problem(t["P"]).set_state("disabled")
+        cat.get_problem(t["P"]).set_state(ProblemState.DISABLED)
         cat.create_golden("moved golden\n", t["dup"])
         # Cover Q (still enabled) for BOTH sessions so failed-problem is isolated
         # only where we want it; here leave it UNcovered so failed_problems fires.

@@ -7,6 +7,7 @@ json_export together, per the IMPL TASKs in idea.md.
 import json
 
 from dendritic_hl_lib import safety, tools
+from dendritic_hl_lib.enums import Result
 from conftest import ns, open_catalog
 
 
@@ -29,7 +30,7 @@ def _build(tmp_path):
     I2 = cat.create_idea(R, "tile", "Tile.\n")
     C3 = cat.create_schedule("child three", parent_idea=I2)
     for c in (C1, C2, C3):
-        c.set_result("success")
+        c.set_result(Result.SUCCESS)
     I.set_canonical(C1.full_id)
     cat.flush()
     safety.commit()
