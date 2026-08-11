@@ -470,19 +470,94 @@ def test_copy_and_id_getters(session, run_tool, capsys, tmp_path):
     assert handle.startswith("tmp.")
 
 
+def _session_output_id(session):
+    """Ground truth: the output schedule full ID the catalog actually recorded
+    for *session* (independent of the magic-value resolver under test)."""
+    cat = open_catalog(session.catalog_dir)
+    try:
+        return cat.get_session(session.session_id).output_schedule_id
+    finally:
+        from dendritic_hl_lib import locks
+        locks._reset_for_tests()
+
+
 def test_terminus_and_output_magic_schedule_ids_after_close(session, run_tool,
                                                             capsys, tmp_path):
     _comment(session, run_tool, tmp_path)
     run_tool(tools.cmd_close_session, session.ns(allow_failed_problems=True))
 
-    # The `session_output` / `terminus` magic [schedule ID] values resolve
-    # through schedule_full_id now that the dedicated getters are gone.
+    # Ground truth, read straight from the catalog (not via the resolver).
+    expected = _session_output_id(session)
+    assert expected is not None and len(expected) == 90
+
+    # `session_output` / `terminus` (resolved through schedule_full_id, whose
+    # body is ctx.resolve_schedule_arg) must land on that exact node -- not merely
+    # agree with each other, which they could while both being wrong.
     out_full = _out(run_tool, capsys, tools.cmd_schedule_full_id,
                     session.ns(schedule="session_output")).strip()
     term_full = _out(run_tool, capsys, tools.cmd_schedule_full_id,
                      ns(catalog=session.catalog_dir, schedule="terminus")).strip()
-    # The unique terminus's output is this session's output.
-    assert out_full == term_full
+    assert out_full == expected
+    # The unique terminus's output is this (only) session's output.
+    assert term_full == expected
+
+    # The short-ID getter routes through the same resolver and points at the
+    # same node (its short form resolves back to the full ID).
+    out_short = _out(run_tool, capsys, tools.cmd_schedule_short_id,
+                     session.ns(schedule="session_output")).strip()
+    assert _resolve_schedule(open_catalog(session.catalog_dir),
+                             out_short).full_id == expected
+    from dendritic_hl_lib import locks
+    locks._reset_for_tests()
+
+
+def test_session_output_magic_before_close_errors(session, run_tool):
+    """`session_output` on a session with no output yet is a clean error, not a
+    crash (context._session_output_schedule)."""
+    with pytest.raises(DhHlError, match="no output schedule yet"):
+        run_tool(tools.cmd_schedule_full_id,
+                 session.ns(schedule="session_output"))
+
+
+def test_terminus_magic_no_output_schedule_errors(session, run_tool):
+    """The fresh fixture session IS the unique terminus (open, depth-0, no
+    successor), but it has no output schedule yet, so `terminus` errors clearly
+    rather than resolving to nothing."""
+    with pytest.raises(DhHlError, match="terminus session has no output schedule"):
+        run_tool(tools.cmd_schedule_full_id,
+                 ns(catalog=session.catalog_dir, schedule="terminus"))
+
+
+def test_terminus_magic_zero_termini_errors(session, run_tool):
+    # Delisting the only terminus leaves none -> "found 0".
+    run_tool(tools.cmd_delist_session, session.ns())
+    with pytest.raises(DhHlError, match="expected exactly one terminus, found 0"):
+        run_tool(tools.cmd_schedule_full_id,
+                 ns(catalog=session.catalog_dir, schedule="terminus"))
+
+
+def _add_independent_terminus(session):
+    """Add a second, unrelated top-level (depth-0) session to the catalog, so it
+    becomes a second terminus alongside the fixture's original."""
+    from dendritic_hl_lib import locks
+    from conftest import DUMMY_SOURCE
+    cat = open_catalog(session.catalog_dir)
+    try:
+        root2 = cat.create_schedule(DUMMY_SOURCE, parent_idea=None)
+        idea2 = cat.create_idea(root2, "seed2", "second seed proposal\n")
+        cat.create_session(idea2, None, 0)
+        cat.flush()
+        safety.commit()
+    finally:
+        locks._reset_for_tests()
+
+
+def test_terminus_magic_two_termini_errors(session, run_tool):
+    # A second live top-level session makes two termini -> "found 2".
+    _add_independent_terminus(session)
+    with pytest.raises(DhHlError, match="expected exactly one terminus, found 2"):
+        run_tool(tools.cmd_schedule_full_id,
+                 ns(catalog=session.catalog_dir, schedule="terminus"))
 
 
 def test_view_commentary(session, run_tool, capsys, tmp_path):
