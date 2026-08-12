@@ -1707,6 +1707,12 @@ If there's more than 1 generator parameters object for the schedule node
 and `what` is not `generator`, then `--parameters {object index}`
 must be given.
 <!-- end help -->
+<!-- impl -->
+
+FUTURE: `halide_runtime.o` is not exposed.
+If we expose this, update `test_shared_lib_halide.py` to not
+bypass the public interface when copying `halide_runtime.o`.
+<!-- end impl -->
 
 
 ### Add Warning Toggle Tool

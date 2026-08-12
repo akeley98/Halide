@@ -123,7 +123,7 @@ def test_shared_library_dlopen_runner(run_cli, tmp_path):
     #    (copy_build_output) -- a runner is only supposed to need these outputs,
     #    not knowledge of the bin/ layout.  The shared library and generated
     #    header come out this way; the standalone runtime object has no getter, so
-    #    it is still taken from bin/ (IMPL TASK: add a getter if one is wanted).
+    #    it is still taken from bin/.
     def _fetch(what, name):
         dst = str(tmp_path / name)
         r = run_cli("copy_build_output", "-s", handle, dst, what)

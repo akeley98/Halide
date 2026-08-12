@@ -1,7 +1,7 @@
 """End-to-end CLI coverage for the commentary `review`/`cancels` model, the
 derived schedule/idea `review`, and idea side links (idea.md "Commentary
 State", "Idea Node State").  Exercises json_schedule_info, json_idea_info, and
-json_export together, per the IMPL TASKs in idea.md.
+json_export together.
 """
 
 import json

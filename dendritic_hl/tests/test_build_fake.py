@@ -151,7 +151,7 @@ def test_init_build_workspace_missing_params_errors(session, run_tool):
 
 def test_init_build_workspace_refuses_when_idea_has_canonical(
         session, run_tool):
-    """IMPL TASK (idea.md "Init-Build Tool"): with an ambiguous workspace and a
+    """idea.md "Init-Build Tool": with an ambiguous workspace and a
     current idea that already has a canonical, init_build --target workspace
     refuses (rather than piling another child onto a decided idea) and gives the
     SAME advice as `canon` -- branch a new idea off the canonical."""
