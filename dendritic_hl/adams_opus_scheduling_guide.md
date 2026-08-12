@@ -418,6 +418,7 @@ the profile-driven half of the pre-flight checklist.
 
 The profiler emits to `stdout` a per-Func table plus explicit warnings
 for known antipatterns, along with JSON statistics.
+
 The `dh_hl` harness captures these information, accessed with tools
 
 * `dh_hl view_benchmark_stdout`
@@ -448,6 +449,7 @@ Performance warnings:
 ```
 
 Make improving the worst column of the hottest func a priority.
+
 As an alternative, you may use `dh_hl json_profiler_stats`
 to aggregate information across multiple benchmark runs.
 Use `dh_hl new_idea` to save ideas for fixing these bottlenecks.
@@ -522,7 +524,6 @@ you want to confirm a specific compute_at level took effect.
 
 Read `.stmt` mainly to check **vectorization shape** (scatter/gather,
 vector width). The profile catches most other things.
-The `dh_hl build` tool emits `.stmt` into the `dh_hl workspace_bin` directory.
 
 ### What the lowered IR looks like
 

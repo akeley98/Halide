@@ -82,6 +82,11 @@ as well as
 * `private` directory
 * `.gitignore`, ignores `private`
 
+and undocumented experiment state, new files added by `dh_hl experiment begin`:
+
+* `experiment_begin_timestamp.txt`, timestamp + newline set by `dh_hl experiment begin`
+* `experiment_begin_label.txt`, label + newline set by `dh_hl experiment begin`
+
 
 ## Schedule Nodes on Disk
 

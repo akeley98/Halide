@@ -1713,7 +1713,6 @@ result.
 ### Copy Build Output Tool
 
     dh_hl copy_build_output -s ... {output file} {what} [schedule ID]
-<!-- help -->
 
 Copy a certain build output for the given schedule node from the session private workspace.
 
@@ -1736,7 +1735,6 @@ Copy a certain build output for the given schedule node from the session private
 If there's more than 1 generator parameters object for the schedule node
 and `what` is not `generator`, then `--parameters {object index}`
 must be given.
-<!-- end help -->
 <!-- impl -->
 
 FUTURE: `halide_runtime.o` is not exposed.
@@ -3210,6 +3208,65 @@ being JSON objects in the same format as `json_schedule_info`,
 
 FUTURE: holds the exclusive catalog lock despite being conceptually read-only.
 Optimize this if needed, but this shouldn't be in the agent hot loop.
+<!-- end help -->
+<!-- help -->
+
+
+<!-- Note, this entire tool is excluded from the prompt for harness users. -->
+### Experiment Tools
+
+    dh_hl experiment -C ... begin {label}
+    dh_hl experiment -C ... get_begin_label {label}
+    dh_hl experiment -C ... get_begin_timestamp {label}
+    dh_hl experiment -C ... add_schedule_node {generator.cpp} {generator_parameters.json}
+    dh_hl experiment -C ... json_test_schedule
+
+IMPL TASK: add tool.
+
+IMPL TASK: please add tests for these tools in completely new `test_experiment_*.py` files
+so that this throwaway tool can be removed in the future relatively easily.
+
+Throwaway tools for the LLM Halide scheduling experiment.
+
+**begin:**
+Records the given label and current timestamp as catalog state
+not associated with any node.
+
+The label must be one of
+
+* `harness_T_guide_T` (assert guide is enabled for this case, no test required)
+
+* `harness_T_guide_F` (assert guide is disabled for this case, no test required)
+
+* `harness_F_guide_T` (no asserts)
+
+* `harness_F_guide_F` (no asserts)
+
+Cannot be called successfully more than once (easily enforced by no file overwrite rule).
+
+**get begin label:**
+Prints label + newline set by `begin`
+
+**get begin timestamp:**
+Prints timestamp + newline set by `begin`
+
+**add schedule node:**
+Add a new root schedule node holding the given files.
+This is distinct from `new_root` in that there's no workspace and no hash collision check.
+
+Takes optional `--ignore {text}` arguments.
+For each such argument, add a negative commentary to the new node
+whose text is `EXPERIMENT IGNORE: {text}`.
+
+For a successful tool execution, the only text on `stdout` is the
+full ID of the new schedule node and a newline.
+
+**JSON test schedules:**
+Print a JSON list containing (in any order) the string full ID of each schedule node that:
+
+* is a major schedule, and,
+
+* has no non-cancelled commentary whose text starts with `EXPERIMENT IGNORE:`
 <!-- end help -->
 <!-- main -->
 
