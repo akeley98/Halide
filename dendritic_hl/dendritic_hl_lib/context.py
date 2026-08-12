@@ -280,6 +280,49 @@ class CurrentAnchor:
                 overwrite_allowed=True)
 
 
+class HalidePath:
+    """halide_path.txt: the path to the Halide directory (whose build outputs
+    live in its build/ sub-directory), or None (empty or absent file -- not set
+    yet).  Lazy-load once + flush, per the object discipline (like
+    CurrentAnchor).  The value is stored verbatim -- no existence check, so a
+    bogus path is accepted and simply lets the eventual `build` fail naturally
+    (idea.md "Halide Path Tool")."""
+
+    def __init__(self, path, catalog=None):
+        self._path = path
+        self._catalog = catalog
+        self._value = _UNLOADED     # str path / None (unset) once loaded
+        self._dirty = False
+
+    @property
+    def path(self):
+        return self._path
+
+    @property
+    def value(self):
+        if self._value is _UNLOADED:
+            try:
+                with open(self._path, "r", encoding="utf-8") as f:
+                    self._value = f.read().strip() or None
+            except FileNotFoundError:
+                self._value = None
+        return self._value
+
+    def set(self, halide_path):
+        if self._catalog is None:
+            raise DhHlError(
+                "cannot set the Halide path without a locked catalog")
+        self._value = halide_path or None
+        self._dirty = True
+        self._catalog._mark_dirty(self)
+
+    def flush(self):
+        if self._dirty:
+            safety.new_file(
+                self._path, (self._value + "\n") if self._value else "",
+                overwrite_allowed=True)
+
+
 class SessionWorkspace:
     """The gitignored private workspace of one session: generator.cpp,
     current_idea_state.txt, bin/.  All paths are lock-free; mutating callers are
@@ -306,6 +349,7 @@ class SessionWorkspace:
         self._benchmark_set_list = None   # PrivateBenchmarkSetList
         self._benchmark_short_ids = None  # PrivateBenchmarkShortIds
         self._anchor = None               # CurrentAnchor
+        self._halide_path = None          # HalidePath
 
     @property
     def current_idea_state(self):
@@ -342,6 +386,12 @@ class SessionWorkspace:
         if self._anchor is None:
             self._anchor = CurrentAnchor(self.current_anchor_path, self.catalog)
         return self._anchor
+
+    @property
+    def halide_path_state(self):
+        if self._halide_path is None:
+            self._halide_path = HalidePath(self.halide_path_file, self.catalog)
+        return self._halide_path
 
     def ensure_private_dir(self):
         """Create private/ and private/{id} (gitignored -> absent on a fresh
@@ -425,6 +475,25 @@ class SessionWorkspace:
         deferred-flush path is only the ordinary set_current_anchor tool."""
         self.ensure_private_dir()
         self.anchor.set(schedule_id)
+
+    # -- Halide path ----------------------------------------------------
+    @property
+    def halide_path_file(self):
+        return os.path.join(self.private_dir, "halide_path.txt")
+
+    @property
+    def halide_path(self):
+        """The session's Halide directory path, or None (absent or empty file).
+        Lock-free read, so `build` can read it during its pre-catalog-lock
+        phase."""
+        return self.halide_path_state.value
+
+    def set_halide_path(self, path):
+        """Set (or clear, when *path* is None) the session's Halide directory
+        path.  Stored verbatim; not validated here (idea.md "Halide Path
+        Tool")."""
+        self.ensure_private_dir()
+        self.halide_path_state.set(path)
 
     @property
     def workspace_hash(self):

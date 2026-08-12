@@ -17,13 +17,12 @@ import shutil
 
 import pytest
 
-from dendritic_hl_lib import build
-from conftest import _PKG_ROOT
+from conftest import _PKG_ROOT, HALIDE_DIR, HALIDE_BUILD_DIR
 
 pytestmark = [
     pytest.mark.halide,
-    pytest.mark.skipif(not os.path.isdir(build.HALIDE_BUILD),
-                       reason="no local Halide build at " + build.HALIDE_BUILD),
+    pytest.mark.skipif(not os.path.isdir(HALIDE_BUILD_DIR),
+                       reason="no local Halide build at " + HALIDE_BUILD_DIR),
     pytest.mark.skipif(shutil.which("ninja") is None, reason="ninja not found"),
 ]
 
@@ -59,6 +58,8 @@ def _bootstrap_two_problems(run_cli, tmp_path):
     assert r.returncode == 0, r.stderr
     handle = _line(r.stdout, "Session handle: ")
     assert run_cli("init_workspace", "-s", handle).returncode == 0
+    assert run_cli("set_halide_path", "-s", handle,
+                   HALIDE_DIR).returncode == 0
     for name, argv in (("small", _SMALL), ("large", _LARGE)):
         r = run_cli("new_problem", "-s", handle, name, *argv)
         assert r.returncode == 0, r.stderr

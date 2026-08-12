@@ -356,10 +356,10 @@ Inside the `private/{session id}` sub-directory, there is
 
 * `current_idea_state.txt`, current idea state
 
-IMPL TASK: `halide_path.txt`
-
 * `halide_path.txt`, path to Halide directory + newline
-  (doesn't exist, if not set yet).
+  (empty or absent file if not set yet).  Modelled by the `HalidePath` object
+  (see "Private-workspace state objects"); read lock-free by `build`, set by the
+  `set_halide_path` tool.
 
 * `bin/` directory
 
@@ -414,7 +414,8 @@ IMPL TASK: `halide_path.txt`
 the same lazy-load-once + dirty + flush discipline as the catalog nodes (see
 "Tool Internal Design"); there is deliberately **no** bare "read the file each
 call" code.  `PrivateIdeaList` and `PrivateBenchmarkSetList` (a shared
-`_PrivateMapState` base) and `CurrentAnchor` each lazy-load their file **once**
+`_PrivateMapState` base) and `CurrentAnchor` / `HalidePath` (single-value text
+files) each lazy-load their file **once**
 into memory (`_UNLOADED` sentinel), mutate in memory, and register on the catalog
 dirty set (`catalog._mark_dirty`) so `catalog.flush()` writes them **once** —
 exactly like `CurrentIdeaState`.  `SessionWorkspace` owns one of each (lazily
@@ -1396,10 +1397,6 @@ tri-state (a) empty (unknown state), (b) doesn't exist, (c) exists.
 
 # Tests
 
-IMPL TASK: Update tests to set the Halide directory path whenever they
-need a new catalog. Usually tests have a "new catalog" helper somewhere you can update.
-Set it to the parent directory of the `dendritic_hl` directory.
-
 There is a `tests/` directory holding a `pytest` suite for the harness.
 
 **Test-only dependencies.** The `dh_hl` package itself is Python-3-standard-library
@@ -1428,14 +1425,28 @@ the two packages works.)
 Most tests are Halide-free (they exercise the catalog model, tools, short IDs,
 safety/rollback, and the `init_build`/`build` orchestration with the subprocess
 steps stubbed). The genuinely end-to-end tests are marked `halide` (registered in
-`pytest.ini`) and auto-skip unless the local `~/Halide` build and `ninja` are
-present: `test_halide.py` and `test_params_e2e.py` (in-process via `run_tool`),
+`pytest.ini`) and auto-skip unless the local Halide build and `ninja` are
+present (the build location is derived from the checkout — see "Halide path in
+tests" below): `test_halide.py` and `test_params_e2e.py` (in-process via `run_tool`),
 and `test_build_cli_halide.py` (real `./dh_hl` subprocess via `run_cli`, using
 the `tests/hist_params.cpp` generator to check profiler-stat attribution,
 generator-output ordering, failed-generator handling, and the cost tools over
 real profiler numbers — `json_ranking_cost` picking the faster parameters
 object as representative, `json_profiler_stats` aggregating real per-func
 samples, and `json_compare_cost` calling a serial-vs-parallel regression).
+
+**Halide path in tests.** `build` reads the Halide directory from session
+private-workspace state (`set_halide_path`), never a hard-wired location — so the
+tests must supply one, and they derive it from the checkout rather than any
+`~/Halide` literal. `conftest.HALIDE_DIR` is the parent of the harness package
+dir (the Halide checkout this harness lives inside) and `HALIDE_BUILD_DIR` is its
+`build/` tree, which the `halide`-marked skip guards test for. The
+`make_catalog_session` helper sets `HALIDE_DIR` on every session it creates
+(mirroring a user running `set_halide_path` right after `new_catalog`, which
+itself leaves the path unset); the `run_cli` bootstraps do the same through the
+real tool. `tests/test_build_fake.py::test_ninja_has_no_hardwired_halide_path`
+independently guards that no `/halide/` path leaks into a generated ninja file
+when the session's Halide path contains none.
 
 **Test-only hook in shipped code.** `safety.new_file` honors a
 `DENDRITIC_HL_TEST_FAIL_AFTER=<n>` environment variable that raises after the n-th new

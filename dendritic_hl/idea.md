@@ -1045,8 +1045,6 @@ The tools perform the steps:
   (a) the pool tag of the new idea is `session.{proposal name}`
   (b) the proposal text has the line `Created for session: {session_id}` appended.
 
-IMPL TASK: session private workspace Halide path.
-
 * Create a new session seeded with the new idea nodes created above,
   and with the prompt from the prompt file.
   The session private workspace is initialized only with the
@@ -1397,15 +1395,19 @@ The warning includes
     dh_hl set_halide_path -s ... {path}
     dh_hl get_halide_path -s ...
 
-IMPL TASK: add this
-
-IMPL TASK: Test `set_halide_path` by setting a bogus path that doesn't include
-the sub-string `/halide/` (case insensitive) and assert the build.ninja
-created by the `build` tool contains no `/halide/` sub-string.
-This will guard against future mistakes hard-wiring a path somewhere.
-
 Set or get the path to the Halide directory.
 It must contain the build outputs in its `build` sub-directory.
+<!-- impl -->
+
+The path is stored verbatim in the session private workspace
+(`halide_path.txt`), with NO existence or content validation: a bogus path is
+accepted and simply lets a later `build` fail naturally.  `get_halide_path`
+prints `none` when unset.  Modelled by the `HalidePath` object (impl.md
+"Private-workspace state objects").  The ninja file `build` writes derives every
+toolchain path from this value (via `build._Toolchain`), so no Halide location is
+hard-wired -- `tests/test_build_fake.py::test_ninja_has_no_hardwired_halide_path`
+guards that with a `/halide/`-free path.
+<!-- end impl -->
 
 
 ### Init-Build Tool
@@ -1490,14 +1492,11 @@ one made canonical), so editing the workspace to match that sibling still trips
 
     dh_hl build -s ...
 
-IMPL TASK: Fail here if no Halide path is set in private workspace state.
-Note, there is no contradiction with not holding the catalog lock,
-because the private workspace is outside the catalog lock jurisdiction.
-
-IMPL TASK: Advise the `dh_hl set_halide_path` tool in case no Halide path is set.
-Write a test that this advice came through.
-Note, this doesn't apply for an incorrect Halide path:
-just let the build fail naturally in that case.
+`build` fails early, advising the `dh_hl set_halide_path` tool, if no Halide path
+is set in the session private workspace state.  (Reading it needs no catalog
+lock: the private workspace is outside the catalog lock's jurisdiction.)  This
+does NOT apply to an *incorrect* Halide path -- that just lets the build fail
+naturally.
 
 Builds the schedule nodes selected by the latest `dh_hl init_build`
 done with the current session (state stored in the session private workspace)

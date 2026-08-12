@@ -20,13 +20,12 @@ import shutil
 
 import pytest
 
-from dendritic_hl_lib import build
-from conftest import _PKG_ROOT
+from conftest import _PKG_ROOT, HALIDE_DIR, HALIDE_BUILD_DIR
 
 pytestmark = [
     pytest.mark.halide,
-    pytest.mark.skipif(not os.path.isdir(build.HALIDE_BUILD),
-                       reason="no local Halide build at " + build.HALIDE_BUILD),
+    pytest.mark.skipif(not os.path.isdir(HALIDE_BUILD_DIR),
+                       reason="no local Halide build at " + HALIDE_BUILD_DIR),
     pytest.mark.skipif(shutil.which("ninja") is None, reason="ninja not found"),
 ]
 
@@ -49,6 +48,10 @@ def _bootstrap(run_cli, tmp_path):
     assert r.returncode == 0, r.stderr
     handle = _line(r.stdout, "Session handle: ")
     r = run_cli("init_workspace", "-s", handle)
+    assert r.returncode == 0, r.stderr
+    # new_catalog leaves the Halide path unset; point it at the local Halide
+    # directory (the parent of this harness dir) so `build` can compile.
+    r = run_cli("set_halide_path", "-s", handle, HALIDE_DIR)
     assert r.returncode == 0, r.stderr
     return cat_dir, handle
 

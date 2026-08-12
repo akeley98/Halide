@@ -20,12 +20,16 @@ import sys
 import pytest
 
 from dendritic_hl_lib import build
-from conftest import _PKG_ROOT
+from conftest import _PKG_ROOT, HALIDE_DIR, HALIDE_BUILD_DIR
+
+# The toolchain paths for the manual dlopen-runner compiles below, derived from
+# the Halide checkout this harness lives inside (same source `build` uses).
+_TC = build._Toolchain(HALIDE_DIR)
 
 pytestmark = [
     pytest.mark.halide,
-    pytest.mark.skipif(not os.path.isdir(build.HALIDE_BUILD),
-                       reason="no local Halide build at " + build.HALIDE_BUILD),
+    pytest.mark.skipif(not os.path.isdir(HALIDE_BUILD_DIR),
+                       reason="no local Halide build at " + HALIDE_BUILD_DIR),
     pytest.mark.skipif(shutil.which("ninja") is None, reason="ninja not found"),
 ]
 
@@ -114,6 +118,8 @@ def test_shared_library_dlopen_runner(run_cli, tmp_path):
     assert r.returncode == 0, r.stderr
     handle = _line(r.stdout, "Session handle: ")
     assert run_cli("init_workspace", "-s", handle).returncode == 0
+    assert run_cli("set_halide_path", "-s", handle,
+                   HALIDE_DIR).returncode == 0
     r = run_cli("init_build", "-s", handle, "--other", "none", "--anchor", "none")
     assert r.returncode == 0, r.stderr
     r = run_cli("build", "-s", handle, "--only", "all")  # no profiling needed
@@ -146,8 +152,8 @@ def test_shared_library_dlopen_runner(run_cli, tmp_path):
                    else "-rdynamic")
     compile_cmd = [
         "c++", "-std=c++17", "-O2",
-        "-I" + os.path.join(build.HALIDE_BUILD, "include"),
-        "-I" + os.path.join(build.HALIDE_ROOT, "src", "runtime"),
+        "-I" + _TC.inc_build,
+        "-I" + _TC.src_runtime,
         "-I" + str(tmp_path),                # dh_hl_pipeline.h (fetched above)
         str(runner_src), runtime_obj,
         "-o", runner_bin, export_flag, "-lpthread", "-ldl"]
@@ -174,6 +180,8 @@ def test_lib_problem_profiled_end_to_end(run_cli, tmp_path):
     assert r.returncode == 0, r.stderr
     handle = _line(r.stdout, "Session handle: ")
     assert run_cli("init_workspace", "-s", handle).returncode == 0
+    assert run_cli("set_halide_path", "-s", handle,
+                   HALIDE_DIR).returncode == 0
 
     # Build once to produce the .so + the shared runtime object + header.
     assert run_cli("init_build", "-s", handle, "--other", "none",
@@ -192,8 +200,8 @@ def test_lib_problem_profiled_end_to_end(run_cli, tmp_path):
                    else "-rdynamic")
     cp = subprocess.run(
         ["c++", "-std=c++17", "-O2",
-         "-I" + os.path.join(build.HALIDE_BUILD, "include"),
-         "-I" + os.path.join(build.HALIDE_ROOT, "src", "runtime"),
+         "-I" + _TC.inc_build,
+         "-I" + _TC.src_runtime,
          "-I" + str(tmp_path),
          str(tmp_path / "runner.cpp"), runtime_obj,
          "-o", runner_bin, export_flag, "-lpthread", "-ldl"],
@@ -244,6 +252,8 @@ def test_broken_runner_no_json_is_catalogued_bad_outcome(run_cli, tmp_path):
     assert r.returncode == 0, r.stderr
     handle = _line(r.stdout, "Session handle: ")
     assert run_cli("init_workspace", "-s", handle).returncode == 0
+    assert run_cli("set_halide_path", "-s", handle,
+                   HALIDE_DIR).returncode == 0
 
     (tmp_path / "broken.cpp").write_text(_BROKEN_RUNNER_SRC)
     broken = str(tmp_path / "broken")

@@ -13,13 +13,13 @@ import shutil
 
 import pytest
 
-from dendritic_hl_lib import build
-from conftest import make_catalog_session, Sess, branch_fresh_idea
+from conftest import (make_catalog_session, Sess, branch_fresh_idea,
+                      HALIDE_BUILD_DIR)
 
 pytestmark = [
     pytest.mark.halide,
-    pytest.mark.skipif(not os.path.isdir(build.HALIDE_BUILD),
-                       reason="no local Halide build at " + build.HALIDE_BUILD),
+    pytest.mark.skipif(not os.path.isdir(HALIDE_BUILD_DIR),
+                       reason="no local Halide build at " + HALIDE_BUILD_DIR),
     pytest.mark.skipif(shutil.which("ninja") is None, reason="ninja not found"),
 ]
 

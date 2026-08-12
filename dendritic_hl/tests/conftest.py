@@ -33,6 +33,14 @@ if _PKG_ROOT not in sys.path:
 
 DH_HL = os.path.join(_PKG_ROOT, "dh_hl")
 
+# The Halide directory the tests build against: derived from this checkout's
+# layout (the harness package dir lives INSIDE the Halide directory), never
+# hard-wired to a home-relative path.  `HALIDE_DIR` is what tests set as a
+# session's Halide path; `HALIDE_BUILD_DIR` is its build-output tree, used by the
+# `halide`-marked tests' skip guards.
+HALIDE_DIR = os.path.dirname(_PKG_ROOT)
+HALIDE_BUILD_DIR = os.path.join(HALIDE_DIR, "build")
+
 # A trivial, compilable-looking generator body.  Content only matters to the
 # real-Halide tests; everything else just hashes/stores it.
 DUMMY_SOURCE = """\
@@ -130,6 +138,10 @@ def make_catalog_session(cat_dir, source=DUMMY_SOURCE, idea_name="seed"):
         # Mimic init_workspace: the seed idea is in the private idea list with
         # pool tag "default", so new_idea on its canonical inherits a tag.
         ws.set_pool_tag(idea.full_id, "default")
+        # The real new_catalog leaves the Halide path unset (the user runs
+        # set_halide_path afterwards); tests that build need it, so set it to the
+        # Halide checkout this harness lives inside (derived, not hard-wired).
+        ws.set_halide_path(HALIDE_DIR)
         cat.flush()
         safety.commit()
         return cat.catalog_dir, sess.full_id

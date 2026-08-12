@@ -30,7 +30,7 @@ def fake_build(monkeypatch):
              "stdout": "", "warnings": None}
 
     monkeypatch.setattr(build, "_write_ninja",
-                        lambda bin_dir, full_id, src: "ninja.txt")
+                        lambda bin_dir, full_id, src, toolchain: "ninja.txt")
 
     def fake_ninja(bin_dir, ninja_path, targets):
         if build._RUNGENMAIN_OBJ in targets:
@@ -682,3 +682,43 @@ def test_profile_no_warnings_file_is_empty_list(session, run_tool, fake_build,
     assert _build(session, run_tool, profile=1) == 0
     obj = _result(session, run_tool, capsys)
     assert obj["benchmark"][0]["warnings"] == []
+
+
+# ---------------------------------------------------------------------------
+# Halide path (set/get + build prerequisite + anti-hardwiring guard)
+# ---------------------------------------------------------------------------
+
+def test_set_get_halide_path_roundtrip(session, run_tool, capsys):
+    """set_halide_path stores a value; get_halide_path reads it back verbatim.
+    The path is NOT validated, so a nonexistent directory is accepted."""
+    run_tool(tools.cmd_set_halide_path, session.ns(path="/opt/some/halide_dir"))
+    capsys.readouterr()
+    run_tool(tools.cmd_get_halide_path, session.ns())
+    assert capsys.readouterr().out.strip() == "/opt/some/halide_dir"
+
+
+def test_build_requires_halide_path_with_advice(session, run_tool):
+    """build fails cleanly (advising set_halide_path) when no Halide path is set,
+    even after a successful init_build."""
+    _init(session, run_tool)
+    os.remove(os.path.join(session.private_dir, "halide_path.txt"))
+    with pytest.raises(DhHlError, match="set_halide_path"):
+        run_tool(build.cmd_build, session.ns(profile=0, only="all"))
+
+
+def test_ninja_has_no_hardwired_halide_path(tmp_path):
+    """The anti-hardwiring guard: the ninja file `build` writes derives EVERY
+    Halide path from the session's Halide path (via `_Toolchain`).  With a Halide
+    path that lacks the `/halide/` sub-string, the emitted ninja must contain no
+    `/halide/` either -- catching any future hard-wired path leaking through."""
+    halide_dir = str(tmp_path / "toolkit")   # deliberately no '/halide/'
+    src = tmp_path / "generator.cpp"
+    src.write_text("// generator\n", encoding="utf-8")
+    bin_dir = str(tmp_path / "bin")
+    os.makedirs(bin_dir)
+    ninja_path = build._write_ninja(bin_dir, "sch_deadbeef", str(src),
+                                    build._Toolchain(halide_dir))
+    text = open(ninja_path, encoding="utf-8").read()
+    assert "/halide/" not in text.lower()
+    # ...and it really did use the given Halide dir (guarding a no-op test).
+    assert os.path.join(halide_dir, "build", "include") in text

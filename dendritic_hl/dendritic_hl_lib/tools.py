@@ -1082,8 +1082,15 @@ def _create_session(catalog, parent_schedules, proposal_name, prompt_text,
         dup = catalog.create_schedule(ps.source, parent_idea=idea,
                                       params_text=ps.params_text)
         idea.set_canonical(dup.full_id)
-    # The private workspace is deliberately NOT initialized here (idea.md);
-    # the new agent runs `dh_hl init_workspace`.
+    # The private workspace is deliberately NOT initialized here (idea.md); the
+    # new agent runs `dh_hl init_workspace`.  The one exception is the Halide
+    # path: the new session inherits its parent's (if any), so a sub-session can
+    # build without re-running set_halide_path (new_catalog has no parent, so
+    # its session starts with no Halide path).
+    if parent_ws is not None and parent_ws.halide_path is not None:
+        new_ws = SessionWorkspace(catalog.catalog_dir, session_id,
+                                  catalog=catalog)
+        new_ws.set_halide_path(parent_ws.halide_path)
     session = catalog.create_session(
         seed_ideas, parent_session, depth, prompt=prompt_text,
         default_anchor_schedule_id=default_anchor_schedule_id,
@@ -1745,6 +1752,21 @@ def cmd_set_current_anchor(args):
     ws.set_current_anchor(node.full_id)
     ctx.finish()
     print("Set current anchor to " + ctx.catalog.format_schedule_id(node))
+
+
+def cmd_get_halide_path(args):
+    ctx = Context.for_session(args, session_lock=True)
+    path = ctx.workspace.halide_path
+    print("none" if path is None else path)
+
+
+def cmd_set_halide_path(args):
+    ctx = Context.for_session(args, session_lock=True)
+    # Stored verbatim, without an existence check: a bogus path is accepted and
+    # simply lets a later `build` fail naturally (idea.md "Halide Path Tool").
+    ctx.workspace.set_halide_path(args.path)
+    ctx.finish()
+    print("Set Halide path to " + args.path)
 
 
 # ---- listing --------------------------------------------------------------

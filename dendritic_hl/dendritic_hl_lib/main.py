@@ -141,6 +141,8 @@ COMMAND_HELP = {
     "init_workspace": "Initialize the session's private workspace to defaults.",
     "get_current_anchor": "Print the session's current anchor schedule.",
     "set_current_anchor": "Set (or clear) the session's current anchor schedule.",
+    "get_halide_path": "Print the session's Halide directory path.",
+    "set_halide_path": "Set the session's Halide directory path (needed to build).",
     "get_pool_tag": "Print a private idea's pool tag.",
     "set_pool_tag": "Set a private idea's pool tag (adding it to the list if needed).",
     "hide_private_idea": "Prepend '.' to a private idea's pool tag.",
@@ -345,6 +347,11 @@ def _build_parser():
     sp = add("set_current_anchor")
     sp.add_argument("schedule", nargs="?",
                     help="schedule ID, or 'none' to clear (default: status)")
+
+    add("get_halide_path")
+
+    sp = add("set_halide_path")
+    sp.add_argument("path", help="path to the Halide directory (has a build/ dir)")
 
     sp = add("get_pool_tag")
     sp.add_argument("idea", help="idea ID")
@@ -643,6 +650,8 @@ _DISPATCH = {
     "init_workspace": tools.cmd_init_workspace,
     "get_current_anchor": tools.cmd_get_current_anchor,
     "set_current_anchor": tools.cmd_set_current_anchor,
+    "get_halide_path": tools.cmd_get_halide_path,
+    "set_halide_path": tools.cmd_set_halide_path,
     "get_pool_tag": tools.cmd_get_pool_tag,
     "set_pool_tag": tools.cmd_set_pool_tag,
     "hide_private_idea": tools.cmd_hide_private_idea,

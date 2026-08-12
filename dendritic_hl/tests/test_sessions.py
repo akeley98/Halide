@@ -107,6 +107,22 @@ def test_new_sub_session(session, run_tool, capsys, tmp_path):
     assert sub_id in pinfo["children"]
 
 
+def test_new_sub_session_inherits_halide_path(session, run_tool, capsys,
+                                              tmp_path):
+    """The new session's private workspace is seeded with the parent session's
+    Halide path (idea.md "Session Creation Tools")."""
+    from dendritic_hl_lib.context import SessionWorkspace
+    # Give the parent a distinctive Halide path first.
+    run_tool(tools.cmd_set_halide_path, session.ns(path="/opt/parent/halide_dir"))
+    capsys.readouterr()
+    prop = _write(tmp_path, "p.txt", "sub-agent task\n")
+    out = _out(run_tool, capsys, tools.cmd_new_sub_session,
+               session.ns(proposal_name="subtask", proposal=prop))
+    sub_id = _line_after(out, "Created sub-session ")
+    ws = SessionWorkspace(session.catalog_dir, sub_id)
+    assert ws.halide_path == "/opt/parent/halide_dir"
+
+
 def _major_schedule_ids(session):
     cat = open_catalog(session.catalog_dir)
     try:

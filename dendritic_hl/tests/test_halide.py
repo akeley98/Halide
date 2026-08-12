@@ -16,15 +16,15 @@ import pytest
 
 from dendritic_hl_lib import build, safety, tools
 from conftest import (make_catalog_session, open_catalog, ns, Sess, _PKG_ROOT,
-                      branch_fresh_idea)
+                      branch_fresh_idea, HALIDE_BUILD_DIR)
 
 _BRIGHTEN = os.path.join(_PKG_ROOT, "rungen_example", "brighten_generator.cpp")
 _HIST = os.path.join(_PKG_ROOT, "tests", "hist_opus_before_peeking.cpp")
 
 pytestmark = [
     pytest.mark.halide,
-    pytest.mark.skipif(not os.path.isdir(build.HALIDE_BUILD),
-                       reason="no local Halide build at " + build.HALIDE_BUILD),
+    pytest.mark.skipif(not os.path.isdir(HALIDE_BUILD_DIR),
+                       reason="no local Halide build at " + HALIDE_BUILD_DIR),
     pytest.mark.skipif(shutil.which("ninja") is None, reason="ninja not found"),
     pytest.mark.skipif(not os.path.isfile(_BRIGHTEN),
                        reason="brighten example generator missing"),

@@ -169,6 +169,10 @@ def _bootstrap_cli(run_cli, tmp_path):
               if "handle:" in l][0]
     r = run_cli("init_workspace", "-s", handle)
     assert r.returncode == 0, r.stderr
+    # `build` requires a Halide path even to reach its selection check; these
+    # tests never actually compile, so any path works.
+    r = run_cli("set_halide_path", "-s", handle, "/nonexistent/halide_dir")
+    assert r.returncode == 0, r.stderr
     return cat_dir, handle
 
 
