@@ -531,8 +531,10 @@ def _build_parser():
     sp.add_argument("--pool-prefix", dest="pool_prefix", default="",
                     help="prefix for newly-added ideas' pool tags")
 
-    add("list_open_sessions")
-    add("list_termini")
+    for name in ("list_open_sessions", "list_termini"):
+        sp = add(name)
+        sp.add_argument("--json", action="store_true",
+                        help="output a JSON list of session full IDs (no handles)")
 
     sp = add("copy_schedule")
     sp.add_argument("output", help="output file ('-' for stdout)")

@@ -1886,15 +1886,26 @@ def _print_session_line(catalog, session):
           + locks.allocate_handle(catalog.catalog_dir, session.full_id))
 
 
+def _emit_session_list(catalog, sessions, empty_msg, args):
+    """Shared output for the List Sessions Tools.  `--json` overrides the
+    human-readable full-ID + handle lines with a JSON list of string full IDs
+    (no handles), including `[]` for the empty case."""
+    ordered = sorted(sessions, key=lambda s: s.timestamp)
+    if getattr(args, "json", False):
+        print(json.dumps([s.full_id for s in ordered]))
+        return
+    if not ordered:
+        print(empty_msg)
+    for s in ordered:
+        _print_session_line(catalog, s)
+
+
 def cmd_list_open_sessions(args):
     ctx = Context.for_catalog(args)
     catalog = ctx.catalog
     opens = [s for s in catalog.sessions.values()
              if not catalog.session_is_closed(s)]
-    if not opens:
-        print("(no open sessions)")
-    for s in sorted(opens, key=lambda s: s.timestamp):
-        _print_session_line(catalog, s)
+    _emit_session_list(catalog, opens, "(no open sessions)", args)
 
 
 def cmd_list_termini(args):
@@ -1902,10 +1913,7 @@ def cmd_list_termini(args):
     catalog = ctx.catalog
     termini = [s for s in catalog.sessions.values()
                if catalog.session_is_terminus(s)]
-    if not termini:
-        print("(no termini)")
-    for s in sorted(termini, key=lambda s: s.timestamp):
-        _print_session_line(catalog, s)
+    _emit_session_list(catalog, termini, "(no termini)", args)
 
 
 # ---- copy schedule --------------------------------------------------------

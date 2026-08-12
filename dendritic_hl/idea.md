@@ -1048,7 +1048,7 @@ The tools perform the steps:
 * Create a new session seeded with the new idea nodes created above,
   and with the prompt from the prompt file.
   The session private workspace is initialized only with the
-  Halide path (if any) of its parent session (none for `new_catalog`).
+  Halide path (if any) of its parent session (none if no parent session).
   The new session's parent session and default anchor node is defined per-tool.
   The session also snapshots the "golden schedule node on opening" and
   "enabled problems on opening" as they exist at this moment.
@@ -2538,6 +2538,9 @@ consider `restore_schedule` or `restore_idea`.
 
 List all open session nodes or all termini ("terminuses") of the current catalog.
 Give both full session IDs and session handles.
+
+The `--json` flag overrides the output to be a JSON list of string
+session IDs (no handles).
 
 
 ### Should-accept Schedule Tool

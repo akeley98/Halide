@@ -107,6 +107,24 @@ def test_new_sub_session(session, run_tool, capsys, tmp_path):
     assert sub_id in pinfo["children"]
 
 
+def test_new_sub_session_handle_line(session, run_tool, capsys, tmp_path):
+    """new_sub_session must print a `Session handle: {handle}` line, and that
+    handle must resolve back to the created sub-session.
+
+    experiment_scripts/profiler_session.py parses this exact line prefix to pick
+    up the profiling session's handle; keep them in sync."""
+    prop = _write(tmp_path, "p.txt", "sub-agent task\n")
+    out = _out(run_tool, capsys, tools.cmd_new_sub_session,
+               session.ns(proposal_name="subtask", proposal=prop))
+    sub_id = _line_after(out, "Created sub-session ")
+    handle = _line_after(out, "Session handle: ")
+    assert handle  # non-empty
+    # The handle resolves to the same session the "Created sub-session" line names.
+    info = json.loads(_out(run_tool, capsys, tools.cmd_json_session_info,
+                           ns(catalog=session.catalog_dir, session=handle)))
+    assert info["id"] == sub_id
+
+
 def test_new_sub_session_inherits_halide_path(session, run_tool, capsys,
                                               tmp_path):
     """The new session's private workspace is seeded with the parent session's
@@ -212,6 +230,50 @@ def test_close_then_successor(session, run_tool, capsys, tmp_path):
                    ns(catalog=session.catalog_dir))
     assert session.session_id not in termini
     assert succ_id in termini
+
+
+def test_list_sessions_json(session, run_tool, capsys, tmp_path):
+    """--json overrides the output to a JSON list of session full IDs (no
+    handles).  experiment_scripts/profiler_session.py parses list_termini
+    --json."""
+    out = _out(run_tool, capsys, tools.cmd_list_termini,
+               ns(catalog=session.catalog_dir, json=True))
+    assert json.loads(out) == [session.session_id]
+
+    # No handle line leaks into the JSON output.
+    assert "handle" not in out
+
+    prop = _write(tmp_path, "p.txt", "sub\n")
+    sub_out = _out(run_tool, capsys, tools.cmd_new_sub_session,
+                   session.ns(proposal_name="subtask", proposal=prop))
+    sub_id = _line_after(sub_out, "Created sub-session ")
+
+    # Both sessions are open; the depth-1 sub-session is not top-level, so the
+    # depth-0 parent remains the sole terminus.
+    opens = json.loads(_out(run_tool, capsys, tools.cmd_list_open_sessions,
+                            ns(catalog=session.catalog_dir, json=True)))
+    assert set(opens) == {session.session_id, sub_id}
+    termini = json.loads(_out(run_tool, capsys, tools.cmd_list_termini,
+                              ns(catalog=session.catalog_dir, json=True)))
+    assert termini == [session.session_id]
+
+
+def test_list_termini_json_empty(tmp_path, run_tool, capsys):
+    """An empty result is `[]`, not the human '(no termini)' placeholder."""
+    cat_dir = str(tmp_path / "empty.dh_hl")
+    prop = _write(tmp_path, "p.txt", "x\n")
+    inp = _write(tmp_path, "in.cpp", "y\n")
+    run_tool(tools.cmd_new_catalog,
+             ns(catalog=cat_dir, proposal_name="seed", proposal=prop,
+                input_cpp=inp))
+    # Delist the sole session so there are no termini.
+    handle_out = _out(run_tool, capsys, tools.cmd_list_termini,
+                      ns(catalog=cat_dir, json=True))
+    sid = json.loads(handle_out)[0]
+    run_tool(tools.cmd_delist_session, ns(catalog=cat_dir, session=sid))
+    out = _out(run_tool, capsys, tools.cmd_list_termini,
+               ns(catalog=cat_dir, json=True))
+    assert json.loads(out) == []
 
 
 def _reset():
