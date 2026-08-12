@@ -2219,10 +2219,18 @@ def _print_citation_lines(catalog, citation_full_id):
 def cmd_prompt(args):
     """Emit the assembled agent prompt.  The audience is given explicitly and is
     NEVER inferred from the session, so the prompt can serve as an independent
-    double-check of the agent's role (main vs sub).  Needs no catalog/session."""
-    if bool(args.main) == bool(args.sub):
-        raise DhHlError("prompt requires exactly one of --main / --sub")
-    sys.stdout.write(prompts.load_prompt("main" if args.main else "sub"))
+    double-check of the agent's role (main vs sub).  The undocumented
+    `--guide-only` instead emits just the standalone guide docs (no harness).
+    Needs no catalog/session."""
+    guide_only = getattr(args, "guide_only", False)
+    chosen = sum([bool(args.main), bool(args.sub), bool(guide_only)])
+    if chosen != 1:
+        raise DhHlError(
+            "prompt requires exactly one of --main / --sub / --guide-only")
+    if guide_only:
+        sys.stdout.write(prompts.load_guide_only())
+    else:
+        sys.stdout.write(prompts.load_prompt("main" if args.main else "sub"))
 
 
 def cmd_detail(args):

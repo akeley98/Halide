@@ -624,6 +624,10 @@ def _build_parser():
                      help="emit the main-agent prompt")
     grp.add_argument("--sub", action="store_true",
                      help="emit the sub-agent prompt")
+    # Undocumented (guide-ablation experiment): emit only the standalone guide
+    # docs, with the harness_T blocks removed.  Suppressed from --help.
+    grp.add_argument("--guide-only", dest="guide_only", action="store_true",
+                     help=argparse.SUPPRESS)
 
     if guide_flag.enabled:
         sp = add("detail")

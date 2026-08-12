@@ -1,15 +1,18 @@
 <!--
   FORMAT CONTRACT (dendritic_hl_lib/prompts.py): the "dh_hl prompt" command
   assembles either the main or the sub agent prompt from this file.  The SAME
-  fence engine (prompts.render_fenced) processes idea.md, so all five fence
-  words work in both files.  Rules:
+  fence engine (prompts.render_fenced) processes idea.md and the guide docs, so
+  all seven fence words work in every file.  Rules:
   * Text outside any fence is COMMON: it goes into both prompts.
-  * A fence is an HTML comment whose only word is one of five, on two axes:
+  * A fence is an HTML comment whose only word is one of seven, on three axes:
       - audience: "main" / "sub" -- keeps the region only for that agent prompt.
       - detail:   "help" / "impl" / "guide" -- "help" text is kept by "dh_hl
         help" but dropped from the prompt; "impl" text is dropped from both;
         "guide" text is dropped from every view when the guide is disabled
         (dendritic_hl_lib.guide_flag) and otherwise kept.
+      - harness:  "harness_T" / "harness_F" -- "harness_T" text is kept in the
+        assembled prompt and dropped from "dh_hl prompt --guide-only";
+        "harness_F" is the reverse.  Used only in the guide docs today.
     Each opens a region closed by a matching "end <word>" HTML comment (e.g.
     "end main").  See the fences used in the body below.
   * Fences must not nest -- at most one is open at a time, of any word -- and

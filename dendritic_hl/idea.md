@@ -758,10 +758,12 @@ Replace all `...` with real arguments (except `--profile ...`).
     output but dropped from the assembled prompt.  `guide`/`end guide` regions
     are kept in both views while the guide is enabled and dropped from both when
     it is disabled (dendritic_hl_lib.guide_flag).
-  * The same five fence words + no-nesting rule as prompt_common.md apply here
+  * The same seven fence words + no-nesting rule as prompt_common.md apply here
     (one shared engine, `prompts.render_fenced`).  `dh_hl help` is audience-
     neutral, so it keeps BOTH `main` and `sub` regions; the assembled prompt
-    picks one audience.  See the FORMAT CONTRACT atop prompt_common.md.
+    picks one audience.  The `harness_T`/`harness_F` axis is used only in the
+    guide docs (idea.md has no harness fences).  See the FORMAT CONTRACT atop
+    prompt_common.md.
 -->
 # Tools
 
@@ -954,17 +956,6 @@ content in between the `guide/end guide` fences is hidden.
 
 ### Harness Prompt Tools — Implementation Details
 
-IMPL TASK: `dh_hl prompt --guide-only` prints `loopdoc.md`
-and `adams_opus_scheduling_guide.md` only.
-Furthermore, there are new fences `harness_T` and `harness_F`
-for `adams_opus_scheduling_guide.md`.
-`--guide-only` omits the content in `harness_T` blocks.
-All other prompt tools omit the content in `harness_F` blocks.
-Work this into the documentation below.
-If it makes the implementation easier,
-you can assume the `guide_flag.enabled` is True
-with an assertion.
-
 All three live in `prompts.py` (the assembly logic) with thin `cmd_*` wrappers
 in `tools.py`; none needs a catalog or session (they read the harness *source*
 repo, one level above the package dir, via `prompts._REPO_DIR`).
@@ -978,16 +969,39 @@ separated by a single blank line:
 * `idea.md`, with main/sub-agent specialization applied, details removed, and
   HTML comments removed (the SAME `parse_prompt` engine as prompt_common.md)
 
-* `loopdoc.md`, with HTML comments removed
+* `loopdoc.md`, run through the fence engine (`_render_guide_doc`)
 
-* `adams_opus_scheduling_guide.md`, with HTML comments removed
+* `adams_opus_scheduling_guide.md`, run through the fence engine
+  (`_render_guide_doc`)
 
 The doc list is `prompts._PROMPT_DOCS`; `load_prompt(audience, path)` reads
 `prompt_common.md` from `path` and the other docs from that same directory, so a
-detached copy missing any of them errors cleanly (`_read_source` →
-`DhHlError`).  "HTML comments removed" is `prompts.strip_html_comments`: a
-non-greedy `<!--.*?-->` (DOTALL) substitution that drops inline *and*
-multi-line comments, followed by `_collapse_blanks`.
+detached copy missing any of them errors cleanly (`_read_source` → `DhHlError`).
+Every doc is rendered with the full fence engine (`render_fenced`) rather than a
+bare comment strip: the guide docs are audience-neutral but carry the harness
+fences described next, and running them through one engine keeps those fences
+validated.
+
+**`--guide-only` and the harness axis.**  The undocumented
+`dh_hl prompt --guide-only` (mutually exclusive with `--main`/`--sub`) emits only
+`loopdoc.md` + `adams_opus_scheduling_guide.md` (`prompts.load_guide_only`,
+`prompts._GUIDE_ONLY_DOCS`) — the scheduling guide as a standalone document, with
+no harness prompt around it.  To let the guide read correctly in both settings,
+`adams_opus_scheduling_guide.md` uses a third fence axis, `harness_T`/`harness_F`:
+
+* `harness_T` blocks are kept in the full prompt and dropped by `--guide-only`.
+  Every mention of a `dh_hl` tool in the guide lives in one, since those tools do
+  not exist without the harness.
+
+* `harness_F` blocks are the reverse — dropped from the full prompt, kept by
+  `--guide-only` (e.g. standalone advice that the harness otherwise provides).
+
+The selection is the `harness` argument of `render_fenced` (True → keep
+`harness_T`; False → keep `harness_F`; None → keep both, the default for views
+with no harness fences such as `dh_hl help`).  `load_prompt` passes `harness=True`
+for every doc (the assembled prompt IS the harness prompt); `load_guide_only`
+passes `harness=False`.  `load_guide_only` asserts `guide_flag.enabled` — the
+`--guide-only` view is only meaningful with the guide present.
 
 `detail`/`examples` (`prompts.load_doc(kind, name)`) print a named file from the
 harness source `detail/` or `examples/` directory, applying the same HTML-comment
@@ -1005,15 +1019,17 @@ So directory traversal is impossible: reads are confined to a direct child of
 the fixed `detail/`/`examples/` directory.  A missing file is likewise a clean
 `DhHlError`, not a traceback.
 
-**One fence engine for both docs (`prompts.render_fenced`).** `prompt_common.md`
-and `idea.md` share ONE processor.  Content is COMMON unless wrapped in a *fence*
-— an HTML comment whose only word is one of five, on two axes: audience
-(`main`/`sub`) and detail (`help`/`impl`/`guide`), each closed by a matching
-`end <word>`.  A view is `(audience, remove_detail)`: it drops the non-matching
-audience's regions (or none, when `audience=None`) and the regions whose detail
-word is in `remove_detail`, plus every fence line and HTML comment, then collapses
-the blank runs so the output reads cleanly.  `guide` is special: callers never
-put it in `remove_detail`; `render_fenced` folds it in automatically whenever
+**One fence engine for every doc (`prompts.render_fenced`).** `prompt_common.md`,
+`idea.md`, and the guide docs share ONE processor.  Content is COMMON unless
+wrapped in a *fence* — an HTML comment whose only word is one of seven, on three
+axes: audience (`main`/`sub`), detail (`help`/`impl`/`guide`), and harness
+(`harness_T`/`harness_F`), each closed by a matching `end <word>`.  A view is
+`(audience, remove_detail, harness)`: it drops the non-matching audience's regions
+(or none, when `audience=None`), the regions whose detail word is in
+`remove_detail`, and the non-matching harness regions (or none, when
+`harness=None`), plus every fence line and HTML comment, then collapses the blank
+runs so the output reads cleanly.  `guide` is special: callers never put it in
+`remove_detail`; `render_fenced` folds it in automatically whenever
 `guide_flag.enabled` is False, so a `<!-- guide -->` region is dropped from
 every view under the guide ablation and kept otherwise.  Fences do **not** nest — at most one
 is open at a time, of any word — so a maintainer note wanted inside an open region
@@ -1029,12 +1045,13 @@ audiences), remove only `impl` (see "Help Tool — Implementation Details").
 
 The audience is **explicit only** — never inferred from the session — so the
 prompt can double-check the agent's role (e.g. catch a sub-agent that was handed
-a main session).  argparse makes `--main`/`--sub` a required mutually-exclusive
-pair.
+a main session).  argparse makes `--main`/`--sub`/`--guide-only` a required
+mutually-exclusive group (`--guide-only` is hidden from `--help` via
+`argparse.SUPPRESS`).
 
 `render_fenced` is the format guard: it raises `DhHlError` on any nesting, an
 unmatched/dangling fence, or a fence-shaped comment naming a word other than the
-five (single-word comments are reserved for fences, so a typo fails loudly rather
+seven (single-word comments are reserved for fences, so a typo fails loudly rather
 than silently leaking a region).  The rules are spelled out in a FORMAT CONTRACT
 comment atop `prompt_common.md` (and above "# Tools" in idea.md).  Like idea.md,
 prompt_common.md sits above the package dir; if missing, `prompt` errors cleanly

@@ -140,6 +140,59 @@ def test_error_message_names_source_file():
                               remove_detail=("impl",), source="idea.md")
 
 
+# ---- harness axis (harness_T / harness_F) ---------------------------------
+
+_HARNESS_SRC = """\
+shared head
+<!-- harness_T -->
+with-harness only
+<!-- end harness_T -->
+<!-- harness_F -->
+standalone only
+<!-- end harness_F -->
+shared tail
+"""
+
+
+def _render_harness(src, harness):
+    return prompts.render_fenced(src, audience=None,
+                                 remove_detail=prompts._DETAIL_WORDS,
+                                 harness=harness)
+
+
+def test_harness_true_keeps_T_drops_F():
+    """`harness=True` (the full prompt) keeps harness_T, drops harness_F."""
+    out = _render_harness(_HARNESS_SRC, True)
+    assert "shared head" in out and "shared tail" in out
+    assert "with-harness only" in out
+    assert "standalone only" not in out
+    assert "<!--" not in out
+
+
+def test_harness_false_keeps_F_drops_T():
+    """`harness=False` (the --guide-only view) keeps harness_F, drops harness_T."""
+    out = _render_harness(_HARNESS_SRC, False)
+    assert "standalone only" in out
+    assert "with-harness only" not in out
+
+
+def test_harness_none_keeps_both():
+    """`harness=None` (e.g. dh_hl help) keeps both harness regions."""
+    out = _render_harness(_HARNESS_SRC, None)
+    assert "with-harness only" in out and "standalone only" in out
+
+
+def test_harness_fence_cannot_nest_and_bad_tag_raises():
+    with pytest.raises(DhHlError):  # harness fence nested in an audience fence
+        prompts.render_fenced(
+            "<!-- main -->\n<!-- harness_T -->\nx\n<!-- end harness_T -->\n"
+            "<!-- end main -->\n", audience="main",
+            remove_detail=prompts._DETAIL_WORDS)
+    with pytest.raises(DhHlError):  # typo'd harness tag
+        prompts.render_fenced("<!-- harness_X -->\nx\n<!-- end harness_X -->\n",
+                              audience=None, remove_detail=prompts._DETAIL_WORDS)
+
+
 # ---- strip_html_comments --------------------------------------------------
 
 def test_strip_html_comments_inline_and_multiline():
@@ -283,8 +336,8 @@ def test_load_doc_fallback_error_names_both_tries(tmp_path):
 
 # ---- the commands ---------------------------------------------------------
 
-def _ns(main=False, sub=False):
-    return types.SimpleNamespace(main=main, sub=sub)
+def _ns(main=False, sub=False, guide_only=False):
+    return types.SimpleNamespace(main=main, sub=sub, guide_only=guide_only)
 
 
 def test_cmd_prompt_smoke(capsys):
@@ -312,11 +365,71 @@ def test_real_idea_main_section_is_audience_specialized():
     assert marker not in prompts.load_prompt("sub")
 
 
+# ---- --guide-only and the real harness fences -----------------------------
+#
+# adams_opus_scheduling_guide.md is the one doc that carries harness_T/harness_F
+# fences.  These markers pin real content on each side of that axis.
+_HARNESS_T_MARKER = "locks out other harness usage"   # a harness_T (dh_hl) block
+_HARNESS_F_MARKER = "Take extra caution to ensure"    # a harness_F block
+
+
+def test_full_prompt_keeps_harness_T_drops_harness_F():
+    """The assembled prompt is the WITH-harness view: it keeps the guide's
+    harness_T blocks (dh_hl tool mentions) and drops its harness_F blocks."""
+    for audience in ("main", "sub"):
+        out = prompts.load_prompt(audience)
+        assert _HARNESS_T_MARKER in out
+        assert _HARNESS_F_MARKER not in out
+
+
+def test_load_guide_only_is_standalone_guide():
+    """`load_guide_only` emits loopdoc + the scheduling guide only -- no
+    prompt_common.md / idea.md -- with the harness axis inverted (harness_F kept,
+    harness_T dropped)."""
+    out = prompts.load_guide_only()
+    assert "how Halide turns" in out                        # loopdoc body
+    assert "A Concise Guide to CPU Scheduling" in out       # adams title
+    assert "Dendritic Halide Harness: Agents Prompt" not in out  # no prompt_common
+    assert "Main Agent Default Session Behavior" not in out      # no idea.md
+    assert _HARNESS_F_MARKER in out       # harness_F kept
+    assert _HARNESS_T_MARKER not in out   # harness_T dropped
+
+
+def test_load_guide_only_mentions_no_harness_at_all():
+    """The standalone guide must not name the harness anywhere: every `dh_hl` /
+    `dendritic_hl` reference lives in a harness_T block, so once those are dropped
+    neither substring (case-insensitively) survives in the --guide-only output."""
+    out = prompts.load_guide_only().lower()
+    assert "dh_hl" not in out
+    assert "dendritic_hl" not in out
+
+
+def test_load_guide_only_asserts_guide_enabled():
+    """`--guide-only` is only meaningful with the guide present, so
+    `load_guide_only` asserts `guide_flag.enabled`."""
+    original = guide_flag.enabled
+    try:
+        guide_flag.enabled = False
+        with pytest.raises(AssertionError):
+            prompts.load_guide_only()
+    finally:
+        guide_flag.enabled = original
+
+
+def test_cmd_prompt_guide_only_dispatches(capsys):
+    tools.cmd_prompt(_ns(guide_only=True))
+    out = capsys.readouterr().out
+    assert "A Concise Guide to CPU Scheduling" in out
+    assert "Dendritic Halide Harness: Agents Prompt" not in out
+
+
 def test_cmd_prompt_requires_exactly_one_audience():
     with pytest.raises(DhHlError, match="exactly one"):
         tools.cmd_prompt(_ns())  # neither
     with pytest.raises(DhHlError, match="exactly one"):
         tools.cmd_prompt(_ns(main=True, sub=True))  # both
+    with pytest.raises(DhHlError, match="exactly one"):
+        tools.cmd_prompt(_ns(main=True, guide_only=True))  # audience + guide-only
 
 
 def test_cmd_detail_and_examples(capsys):
@@ -416,3 +529,32 @@ def test_cli_prompt_schedule_suggestion_bullet_iff_guide_enabled(run_cli):
     assert marker in run_cli("prompt", "--main").stdout
     r = run_cli("prompt", "--main", env={_GUARD_WORD: "0"})
     assert marker not in r.stdout
+
+
+# ---- --guide-only through the real CLI ------------------------------------
+
+def test_cli_guide_only_emits_standalone_guide(run_cli):
+    """`dh_hl prompt --guide-only` prints just the guide docs, with the guide's
+    harness_T blocks removed and harness_F blocks kept, and none of the harness
+    prompt (prompt_common.md / idea.md)."""
+    r = run_cli("prompt", "--guide-only")
+    assert r.returncode == 0, r.stderr
+    assert "A Concise Guide to CPU Scheduling" in r.stdout   # adams guide
+    assert "Dendritic Halide Harness: Agents Prompt" not in r.stdout  # no harness
+    assert _HARNESS_T_MARKER not in r.stdout   # harness_T dropped
+    assert _HARNESS_F_MARKER in r.stdout       # harness_F kept
+
+
+def test_cli_guide_only_is_mutually_exclusive_with_audience(run_cli):
+    """argparse rejects combining --guide-only with --main/--sub (exit 2)."""
+    r = run_cli("prompt", "--main", "--guide-only")
+    assert r.returncode == 2
+    assert "not allowed with" in r.stderr
+
+
+def test_cli_guide_only_fails_and_silent_when_guide_disabled(run_cli):
+    """With the guide disabled `--guide-only` is meaningless: it exits non-zero
+    (the load_guide_only assertion) and writes nothing to stdout."""
+    r = run_cli("prompt", "--guide-only", env={_GUARD_WORD: "0"})
+    assert r.returncode != 0
+    assert r.stdout == ""
