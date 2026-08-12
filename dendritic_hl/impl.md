@@ -356,6 +356,11 @@ Inside the `private/{session id}` sub-directory, there is
 
 * `current_idea_state.txt`, current idea state
 
+IMPL TASK: `halide_path.txt`
+
+* `halide_path.txt`, path to Halide directory + newline
+  (doesn't exist, if not set yet).
+
 * `bin/` directory
 
 * `current_anchor_schedule.txt`, full ID of schedule node and newline.
@@ -1390,6 +1395,10 @@ tri-state (a) empty (unknown state), (b) doesn't exist, (c) exists.
 
 
 # Tests
+
+IMPL TASK: Update tests to set the Halide directory path whenever they
+need a new catalog. Usually tests have a "new catalog" helper somewhere you can update.
+Set it to the parent directory of the `dendritic_hl` directory.
 
 There is a `tests/` directory holding a `pytest` suite for the harness.
 

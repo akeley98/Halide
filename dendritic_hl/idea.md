@@ -229,6 +229,7 @@ All pairs go to the Halide generator as `key=value`.
 
 * **Session Private Workspace** state: gitignore'd per-session-node state.
   This contains a session lock,
+  the Halide path (directory containing Halide source),
   current idea state,
   current anchor schedule,
   a session private idea list,
@@ -1044,9 +1045,12 @@ The tools perform the steps:
   (a) the pool tag of the new idea is `session.{proposal name}`
   (b) the proposal text has the line `Created for session: {session_id}` appended.
 
+IMPL TASK: session private workspace Halide path.
+
 * Create a new session seeded with the new idea nodes created above,
   and with the prompt from the prompt file.
-  The session private workspace is not initialized.
+  The session private workspace is initialized only with the
+  Halide path (if any) of its parent session (none for `new_catalog`).
   The new session's parent session and default anchor node is defined per-tool.
   The session also snapshots the "golden schedule node on opening" and
   "enabled problems on opening" as they exist at this moment.
@@ -1070,7 +1074,9 @@ for a parent schedule that's exclusively its own.
 
     dh_hl new_catalog -C ... {proposal name} {prompt file} {input C++ file} [input generator parameters]
 
-Creates a new catalog directory with the bare minimum state to get started:
+Creates a new catalog directory with the bare minimum state to get started.
+You will have to set the Halide path afterwards.
+<!-- help -->
 
 * Two schedule nodes, both holding a copy of the input C++ file and
   input generator parameters file.
@@ -1087,7 +1093,6 @@ Creates a new catalog directory with the bare minimum state to get started:
   `set_estimate` for all input sizes.
 
 * A golden is intentionally NOT added by default.
-<!-- help -->
 
 The new catalog directory is named by the `-C` argument.
 The requirement for `-C` is *opposite* all other commands:
@@ -1163,6 +1168,7 @@ existing state would be overwritten.
 
 The session lock is low-level state that is not exclusive to this tool;
 it is implicitly created without any user action.
+There is also no default Halide path set.
 <!-- end help -->
 <!-- impl -->
 
@@ -1386,6 +1392,22 @@ The warning includes
 
 ## Build, Benchmark, and Warning Tools
 
+### Halide Path Tool
+
+    dh_hl set_halide_path -s ... {path}
+    dh_hl get_halide_path -s ...
+
+IMPL TASK: add this
+
+IMPL TASK: Test `set_halide_path` by setting a bogus path that doesn't include
+the sub-string `/halide/` (case insensitive) and assert the build.ninja
+created by the `build` tool contains no `/halide/` sub-string.
+This will guard against future mistakes hard-wiring a path somewhere.
+
+Set or get the path to the Halide directory.
+It must contain the build outputs in its `build` sub-directory.
+
+
 ### Init-Build Tool
 
     dh_hl init_build -s ...
@@ -1467,6 +1489,15 @@ one made canonical), so editing the workspace to match that sibling still trips
 ### Build Tool
 
     dh_hl build -s ...
+
+IMPL TASK: Fail here if no Halide path is set in private workspace state.
+Note, there is no contradiction with not holding the catalog lock,
+because the private workspace is outside the catalog lock jurisdiction.
+
+IMPL TASK: Advise the `dh_hl set_halide_path` tool in case no Halide path is set.
+Write a test that this advice came through.
+Note, this doesn't apply for an incorrect Halide path:
+just let the build fail naturally in that case.
 
 Builds the schedule nodes selected by the latest `dh_hl init_build`
 done with the current session (state stored in the session private workspace)
