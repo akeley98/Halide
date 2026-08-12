@@ -399,10 +399,20 @@ or inlined.
 ## 7. Benchmarking hygiene — CRITICAL
 
 Halide CPU schedules use all cores. Even one stray binary competing
-for CPU can double the reported runtime. The `dh_hl` harness locks
-out other harness usage while a profiler is running, but cannot block
-all other processes.
+for CPU can double the reported runtime.
 
+<!-- harness_T -->
+<!-- All mentions of dh_hl must be wrapped in these harness_T blocks. -->
+The `dh_hl` harness locks out other harness usage while a profiler is
+running, but cannot block all other processes.
+
+<!-- end harness_T -->
+<!-- harness_F -->
+Take extra caution to ensure you don't attempt to run multiple
+profilers as background tasks, or have expensive background tasks
+running while profiling.
+
+<!-- end harness_F -->
 If a number is surprising (5–10× worse than expected), do NOT
 conclude "my change regressed" — first check for stray processes,
 then re-run. Unstable numbers are noise, not signal.
@@ -418,6 +428,7 @@ the profile-driven half of the pre-flight checklist.
 
 The profiler emits to `stdout` a per-Func table plus explicit warnings
 for known antipatterns, along with JSON statistics.
+<!-- harness_T -->
 
 The `dh_hl` harness captures these information, accessed with tools
 
@@ -426,6 +437,7 @@ The `dh_hl` harness captures these information, accessed with tools
 * `dh_hl view_benchmark_warnings`
 
 * `dh_hl json_profiler_stats`
+<!-- end harness_T -->
 
 Sample (max_filter):
 
@@ -449,10 +461,12 @@ Performance warnings:
 ```
 
 Make improving the worst column of the hottest func a priority.
+<!-- harness_T -->
 
 As an alternative, you may use `dh_hl json_profiler_stats`
 to aggregate information across multiple benchmark runs.
 Use `dh_hl new_idea` to save ideas for fixing these bottlenecks.
+<!-- end harness_T -->
 
 ### Top-line stats
 

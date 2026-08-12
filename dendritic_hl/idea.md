@@ -905,6 +905,10 @@ The audience is deliberately **not** inferred from the current session,
 so the prompt can double-check that the agent is running with the role it thinks
 it is (e.g. that a spawned sub-agent wasn't handed a main-agent's session).
 <!-- end help -->
+<!-- impl -->
+
+Undocumented: `dh_hl prompt --guide-only` (see impl details).
+<!-- end impl -->
 <!-- guide -->
 
 
@@ -949,6 +953,17 @@ content in between the `guide/end guide` fences is hidden.
 
 
 ### Harness Prompt Tools — Implementation Details
+
+IMPL TASK: `dh_hl prompt --guide-only` prints `loopdoc.md`
+and `adams_opus_scheduling_guide.md` only.
+Furthermore, there are new fences `harness_T` and `harness_F`
+for `adams_opus_scheduling_guide.md`.
+`--guide-only` omits the content in `harness_T` blocks.
+All other prompt tools omit the content in `harness_F` blocks.
+Work this into the documentation below.
+If it makes the implementation easier,
+you can assume the `guide_flag.enabled` is True
+with an assertion.
 
 All three live in `prompts.py` (the assembly logic) with thin `cmd_*` wrappers
 in `tools.py`; none needs a catalog or session (they read the harness *source*
