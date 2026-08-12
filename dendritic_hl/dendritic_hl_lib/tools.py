@@ -295,6 +295,115 @@ def cmd_new_root(args):
 
 
 # ---------------------------------------------------------------------------
+# experiment (throwaway tools for the LLM Halide scheduling experiment)
+# ---------------------------------------------------------------------------
+
+_EXPERIMENT_LABELS = ("harness_T_guide_T", "harness_T_guide_F",
+                      "harness_F_guide_T", "harness_F_guide_F")
+_EXPERIMENT_IGNORE_PREFIX = "EXPERIMENT IGNORE:"
+
+
+def _experiment_dir(catalog):
+    return os.path.join(catalog.catalog_dir, "experiment")
+
+
+def _experiment_active_ignore(node):
+    """True if *node* has any non-cancelled commentary whose text starts with
+    the EXPERIMENT IGNORE prefix.  Mirrors the non-cancelled filter used by
+    ScheduleNode.review (a commentary is cancelled iff some other commentary on
+    the same node names it in `cancels`)."""
+    cancelled = set()
+    for c in node.commentary:
+        cancelled.update(c.cancels)
+    for c in node.commentary:
+        if c.local_id in cancelled:
+            continue
+        if c.text.startswith(_EXPERIMENT_IGNORE_PREFIX):
+            return True
+    return False
+
+
+def cmd_experiment(args):
+    action = args.action
+    if action == "begin":
+        _experiment_begin(args)
+    elif action == "get_begin_label":
+        _experiment_get(args, "label.txt")
+    elif action == "get_begin_timestamp":
+        _experiment_get(args, "begin_timestamp.txt")
+    elif action == "add_schedule_node":
+        _experiment_add_schedule_node(args)
+    elif action == "json_test_schedule":
+        _experiment_json_test_schedule(args)
+    else:  # argparse `choices` should make this unreachable
+        raise DhHlError("unknown experiment action: " + action)
+
+
+def _experiment_begin(args):
+    label = args.arg1
+    if label is None:
+        raise DhHlError("experiment begin requires a label argument")
+    if label not in _EXPERIMENT_LABELS:
+        raise DhHlError("experiment begin label must be one of: "
+                        + ", ".join(_EXPERIMENT_LABELS))
+    # For the harness_T_* cases the guide state is asserted; harness_F_* asserts
+    # nothing.  The _guide_T/_guide_F suffix is the expected guide_flag state.
+    if label == "harness_T_guide_T" and not guide_flag.enabled:
+        raise DhHlError("experiment begin {}: guide is disabled "
+                        "(guide_flag.enabled=False)".format(label))
+    if label == "harness_T_guide_F" and guide_flag.enabled:
+        raise DhHlError("experiment begin {}: guide is enabled "
+                        "(guide_flag.enabled=True)".format(label))
+    ctx = Context.for_catalog(args)
+    exp_dir = _experiment_dir(ctx.catalog)
+    ts = ids.now_timestamp()
+    safety.makedirs_tracked(exp_dir)
+    # Write-once: the default exclusive create makes a second `begin` fail on
+    # label.txt with FileExistsError, which we surface as a clean DhHlError.
+    try:
+        safety.new_file(os.path.join(exp_dir, "label.txt"), label + "\n")
+        safety.new_file(os.path.join(exp_dir, "begin_timestamp.txt"), ts + "\n")
+    except FileExistsError:
+        raise DhHlError("experiment begin has already been called")
+    ctx.finish()
+
+
+def _experiment_get(args, filename):
+    ctx = Context.for_catalog(args)
+    path = os.path.join(_experiment_dir(ctx.catalog), filename)
+    try:
+        with open(path) as f:
+            text = f.read()
+    except FileNotFoundError:
+        raise DhHlError("experiment begin has not been called")
+    print(text.rstrip("\n"))
+
+
+def _experiment_add_schedule_node(args):
+    if args.arg1 is None or args.arg2 is None:
+        raise DhHlError("experiment add_schedule_node requires a generator.cpp "
+                        "and a generator_parameters.json path")
+    ctx = Context.for_catalog(args)
+    source = _read_file_or_stdin(args.arg1)
+    params_text = _read_file_or_stdin(args.arg2)
+    node = ctx.catalog.create_schedule(source, parent_idea=None,
+                                       params_text=params_text)
+    for text in getattr(args, "ignore", None) or []:
+        node.add_commentary("{} {}".format(_EXPERIMENT_IGNORE_PREFIX, text),
+                            review=Review.NEGATIVE)
+    ctx.finish()
+    # Only stdout output is the new node's full ID plus a newline.
+    print(node.full_id)
+
+
+def _experiment_json_test_schedule(args):
+    ctx = Context.for_catalog(args)
+    ids_out = [n.full_id for n in ctx.catalog.schedules.values()
+               if n.is_major() and not _experiment_active_ignore(n)]
+    print(json.dumps(ids_out))
+
+
+# ---------------------------------------------------------------------------
 # set_idea
 # ---------------------------------------------------------------------------
 

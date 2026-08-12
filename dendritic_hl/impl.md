@@ -82,10 +82,14 @@ as well as
 * `private` directory
 * `.gitignore`, ignores `private`
 
-and undocumented experiment state, new files added by `dh_hl experiment begin`:
+and undocumented experiment state under an `experiment` subdirectory,
+new files written write-once by `dh_hl experiment begin`:
 
-* `experiment_begin_timestamp.txt`, timestamp + newline set by `dh_hl experiment begin`
-* `experiment_begin_label.txt`, label + newline set by `dh_hl experiment begin`
+* `experiment/begin_timestamp.txt`, timestamp + newline set by `dh_hl experiment begin`
+* `experiment/label.txt`, label + newline set by `dh_hl experiment begin`
+
+The write-once rule (`safety.new_file` with the default exclusive create) makes
+`begin` fail on a second call, so the label/timestamp are recorded exactly once.
 
 
 ## Schedule Nodes on Disk

@@ -3221,11 +3221,6 @@ Optimize this if needed, but this shouldn't be in the agent hot loop.
     dh_hl experiment -C ... add_schedule_node {generator.cpp} {generator_parameters.json}
     dh_hl experiment -C ... json_test_schedule
 
-IMPL TASK: add tool.
-
-IMPL TASK: please add tests for these tools in completely new `test_experiment_*.py` files
-so that this throwaway tool can be removed in the future relatively easily.
-
 Throwaway tools for the LLM Halide scheduling experiment.
 
 **begin:**

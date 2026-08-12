@@ -176,6 +176,7 @@ COMMAND_HELP = {
     "fix_canonical": "Resolve a canonical.txt merge conflict for an idea node.",
     "exec": "Run a command (after `--`) with the machine lock held (shared).",
     "exec_exclusive": "Run a command (after `--`) with the machine lock held exclusively.",
+    "experiment": "Throwaway tools for the LLM Halide scheduling experiment.",
     # Phase 4: session lifecycle + queries
     "new_catalog": "Create a brand-new catalog + first session from an input C++ file.",
     "new_sub_session": "Spawn a sub-agent session (depth+1) off a parent schedule.",
@@ -629,6 +630,22 @@ def _build_parser():
         sp = add("examples")
         sp.add_argument("name", help="file name inside the examples/ directory")
 
+    # Throwaway experiment tools (registered even when the guide is disabled, so
+    # the guide-ablation harness can drive it either way).  A single positional
+    # action selects the sub-tool; the two optional positionals carry the label
+    # (begin) or the two file paths (add_schedule_node).
+    sp = add("experiment")
+    sp.add_argument("action", choices=["begin", "get_begin_label",
+                                       "get_begin_timestamp", "add_schedule_node",
+                                       "json_test_schedule"])
+    sp.add_argument("arg1", nargs="?",
+                    help="begin: label; add_schedule_node: generator.cpp path")
+    sp.add_argument("arg2", nargs="?",
+                    help="add_schedule_node: generator_parameters.json path")
+    sp.add_argument("--ignore", action="append", metavar="TEXT",
+                    help="add_schedule_node: add an 'EXPERIMENT IGNORE: TEXT' "
+                         "negative commentary (repeatable)")
+
     return p
 
 
@@ -731,6 +748,7 @@ _DISPATCH = {
     "prompt": tools.cmd_prompt,
     "detail": tools.cmd_detail,
     "examples": tools.cmd_examples,
+    "experiment": tools.cmd_experiment,
 }
 
 
