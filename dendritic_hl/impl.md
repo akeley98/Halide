@@ -23,6 +23,7 @@ Avoid extra blank lines after removing IMPL TASKs
 1 blank line for all other paragraph breaks).
 Also please stop referencing these tasks in tests/comments/etc.
 as these references are DOA once the task gets erased (and confuse greppers).
+PS ignore concurrent changes in `human_stuff/` and don't commit them.
 
 NOTE: I got tired of the split of per-tool information between
 `idea.md` and `impl.md`, so now the tool-specific implementation information
