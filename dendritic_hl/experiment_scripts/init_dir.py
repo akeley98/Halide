@@ -284,6 +284,7 @@ programs as progress for the experiment.""")
   {'the harness' if harness else 'runner.py'}. \
 Overfitting, including making assumptions that would
   break the pipeline on other problem sizes, is explicitly allowed.
+  The scoring is the min of all schedules ever logged, not just the last.
 
 * Modify only the Halide schedule, not the Halide algorithm
   (further instructions inside the provided generator C++ source).
