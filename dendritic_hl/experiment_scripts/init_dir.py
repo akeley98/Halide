@@ -266,12 +266,14 @@ These are entirely optional.
 You may also do your own Halide experimentation or read Halide code/docs.""")
 
     chunks.append("The Halide header for this experiment is in `~/Halide/build/include/Halide.h`.")
+    if harness:
+        chunks.append("The Halide path is `~/Halide/`.")
 
     if not harness:
         chunks.append("")
         chunks.append("""\
-Read the build.py script to understand the build tool.
-DON'T inspect the underlying dh_hl tool (experiment infrastructure).
+Read the `build.py` script to understand the build tool.
+DON'T inspect the underlying `dh_hl` tool (experiment infrastructure).
 You may copy the build script and C++ source as you wish, as long as
 the whole generator is in one C++ file. The build tool logs all
 programs as progress for the experiment.""")
@@ -292,10 +294,19 @@ Overfitting, including making assumptions that would
 
 * You may make git commits or git worktrees in this directory at any
   time without human oversight.
+""")
 
+    if harness:
+        chunks.append("""\
 * Only edit files inside this directory, EXCLUDING `catalog.dh_hl`
-  (experiment private logging state). The catalog must remain git ignored.
+  (interact with it only through `dh_hl`). The catalog must remain git ignored.""")
 
+    if not harness:
+        chunks.append("""\
+* Only edit files inside this directory, EXCLUDING `catalog.dh_hl`
+  (experiment private logging state). The catalog must remain git ignored.""")
+
+    chunks.append("""
 * DON'T read any files except those in this directory and in `~/Halide`;
   do not use web tools to seek outside information.
 
