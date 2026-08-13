@@ -3259,6 +3259,7 @@ Optimize this if needed, but this shouldn't be in the agent hot loop.
     dh_hl experiment -C ... get_begin_timestamp {label}
     dh_hl experiment -C ... add_schedule_node {generator.cpp} {generator_parameters.json}
     dh_hl experiment -C ... json_test_schedule
+    dh_hl experiment build_external {generator.cpp} {generator_parameters.json} {bin dir}
 
 Throwaway tools for the LLM Halide scheduling experiment.
 
@@ -3286,14 +3287,22 @@ Prints timestamp + newline set by `begin`
 
 **add schedule node:**
 Add a new root schedule node holding the given files.
-This is distinct from `new_root` in that there's no workspace and no hash collision check.
+This is distinct from `new_root` in that there's no workspace,
+and hash collisions are silent no-ops rather than errors
+(i.e. don't add a new node if one with the same contents already exists).
 
 Takes optional `--ignore {text}` arguments.
-For each such argument, add a negative commentary to the new node
+For each such argument, only if a new schedule node was added,
+add a negative commentary to the new node
 whose text is `EXPERIMENT IGNORE: {text}`.
 
+Rationale: don't retroactively cause a non-ignored node to be ignored.
+**However,** the logic doesn't hold for the opposite direction.
+An ignored node will not be un-ignored by adding a discarded duplicate node.
+Hence, the current experiment only adds the ignored anchor nodes at the end.
+
 For a successful tool execution, the only text on `stdout` is the
-full ID of the new schedule node and a newline.
+full ID of the new or found schedule node and a newline.
 
 **JSON test schedules:**
 Print a JSON list containing (in any order) the string full ID of each schedule node that:
@@ -3301,6 +3310,16 @@ Print a JSON list containing (in any order) the string full ID of each schedule 
 * is a major schedule, and,
 
 * has no non-cancelled commentary whose text starts with `EXPERIMENT IGNORE:`
+
+**Build External:**
+Recycles the existing build infrastructure but without a catalog.
+Compile the normal build outputs from the supplied C++ and parameters.
+Assume `bin` is exclusively used for the current build outputs.
+
+Don't embed the `full_id` into the build outputs.
+However, do somehow number 0, 1, 2, 3... the builds done for each generator parameters object.
+(even though I'm not sure I will actually allow this generator parameters
+automation for the no-harness tests, which this sub-tool is meant for).
 <!-- end help -->
 <!-- main -->
 

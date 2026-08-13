@@ -821,6 +821,72 @@ def _compile_phase(bin_dir, nodes, param_indices, toolchain):
     return all_ok
 
 
+# ---------------------------------------------------------------------------
+# build_external: catalog-free compile for the LLM scheduling experiment
+# (idea.md "Experiment Tools" / "Build External").
+# ---------------------------------------------------------------------------
+
+# A fixed stand-in for the per-node full_id that the shared build primitives key
+# their param-independent output names on.  build_external has no catalog node,
+# and the outputs must NOT embed a catalog full_id (idea.md "Build External"), so
+# every build shares this neutral base: bin/external.ninja + bin/external_generator.
+_EXTERNAL_ID = "external"
+
+
+def build_external(source_path, params_path, bin_dir, halide_root="~/Halide"):
+    """Compile the normal build outputs for *source_path* + *params_path* into
+    *bin_dir*, with NO catalog/session and Halide hard-wired to *halide_root*
+    (idea.md "Build External").  Recycles the shared build primitives: the
+    generator exe + shared RunGenMain.o are built once, then EACH
+    generator-parameters object in the params list is emitted, static-linked
+    (RunGenMain) and shared-linked into its own numbered subdir (bin/0, bin/1,
+    ...).  *bin_dir* is assumed exclusive to this build.  No profiling and no
+    benchmark objects -- the caller runs the linked binary itself; measurement is
+    offline (profiler_session.py).  Raises DhHlError / HalideBuildError on a bad
+    argument or any toolchain failure."""
+    for label, path in (("generator C++", source_path),
+                        ("generator parameters", params_path)):
+        if not os.path.isfile(path):
+            raise DhHlError(
+                "build_external: no such {} file: {}".format(label, path))
+    with open(params_path, "r", encoding="utf-8") as f:
+        params_list = validate_parameters(json.load(f))
+    if not params_list:
+        raise DhHlError(
+            "build_external: generator parameters list is empty; nothing to build")
+    bin_dir = os.path.abspath(bin_dir)
+    os.makedirs(bin_dir, exist_ok=True)
+    toolchain = _Toolchain(halide_root)
+
+    # Param-independent: the generator exe and the shared RunGenMain.o.
+    print("dh_hl: begin C++ compile (build_external)")
+    ninja_path = _write_ninja(bin_dir, _EXTERNAL_ID, source_path, toolchain)
+    gen_exe = _gen_exe_name(_EXTERNAL_ID)
+    if _ninja_build(bin_dir, ninja_path, [gen_exe]) != 0:
+        raise HalideBuildError("build_external: generator compile failed")
+    if _ninja_build(bin_dir, ninja_path, [_RUNGENMAIN_OBJ]) != 0:
+        raise HalideBuildError("build_external: RunGenMain.o compile failed")
+    gen_name = _discover_generator_name(bin_dir, gen_exe)
+    print("dh_hl: end C++ compile success")
+
+    # Per-parameters emit + link, into numbered subdirs 0, 1, 2, ... (no full_id).
+    for i, params in enumerate(params_list):
+        print("dh_hl: begin Halide generator {}: params={}".format(
+            i, json.dumps(params)))
+        if _emit(bin_dir, gen_exe, gen_name, str(i), params, with_stmt=True) != 0:
+            raise HalideBuildError(
+                "build_external: generator emit failed (params index {})".format(i))
+        _ensure_runtime(bin_dir, gen_exe)
+        if _link(bin_dir, str(i)) != 0:
+            raise HalideBuildError(
+                "build_external: RunGenMain link failed (params index {})".format(i))
+        if _link_shared(bin_dir, str(i)) != 0:
+            raise HalideBuildError(
+                "build_external: shared library link failed (params index {})"
+                .format(i))
+        print("dh_hl: end Halide generator {} success".format(i))
+
+
 def _profile_phase(bin_dir, nodes, param_indices, sched, catalog, batches,
                    problems, ws):
     """For each problem, run *batches* interleaved profiling passes over every

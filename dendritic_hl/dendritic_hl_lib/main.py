@@ -638,16 +638,21 @@ def _build_parser():
 
     # Throwaway experiment tools (registered even when the guide is disabled, so
     # the guide-ablation harness can drive it either way).  A single positional
-    # action selects the sub-tool; the two optional positionals carry the label
-    # (begin) or the two file paths (add_schedule_node).
+    # action selects the sub-tool; the optional positionals carry the label
+    # (begin), the two file paths (add_schedule_node), or the two file paths + a
+    # bin directory (build_external, which needs no -C).
     sp = add("experiment")
     sp.add_argument("action", choices=["begin", "get_begin_label",
                                        "get_begin_timestamp", "add_schedule_node",
-                                       "json_test_schedule"])
+                                       "json_test_schedule", "build_external"])
     sp.add_argument("arg1", nargs="?",
-                    help="begin: label; add_schedule_node: generator.cpp path")
+                    help="begin: label; add_schedule_node/build_external: "
+                         "generator.cpp path")
     sp.add_argument("arg2", nargs="?",
-                    help="add_schedule_node: generator_parameters.json path")
+                    help="add_schedule_node/build_external: "
+                         "generator_parameters.json path")
+    sp.add_argument("arg3", nargs="?",
+                    help="build_external: output bin directory")
     sp.add_argument("--ignore", action="append", metavar="TEXT",
                     help="add_schedule_node: add an 'EXPERIMENT IGNORE: TEXT' "
                          "negative commentary (repeatable)")

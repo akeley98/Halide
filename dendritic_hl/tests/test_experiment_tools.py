@@ -3,15 +3,17 @@
 These live in their own file (per idea.md) so the whole experiment feature can
 be deleted in one sweep once the LLM Halide scheduling experiment is done.
 
-Covers the five sub-actions: begin / get_begin_label / get_begin_timestamp
+Covers the sub-actions: begin / get_begin_label / get_begin_timestamp
 (catalog-level write-once state under `experiment/`), add_schedule_node (a
-workspace-free root schedule creator with optional EXPERIMENT IGNORE
-commentary), and json_test_schedule (major schedules with no active
-EXPERIMENT IGNORE commentary).
+workspace-free root schedule creator that silent-dedups on content hash and
+takes optional EXPERIMENT IGNORE commentary), json_test_schedule (major
+schedules with no active EXPERIMENT IGNORE commentary), and build_external (a
+catalog-free compile with Halide hard-wired to ~/Halide).
 """
 
 import json
 import os
+import shutil
 
 import pytest
 
@@ -19,12 +21,13 @@ from dendritic_hl_lib import guide_flag, ids, safety, tools
 from dendritic_hl_lib.enums import Review
 from dendritic_hl_lib.errors import DhHlError
 
-from conftest import open_catalog
+from conftest import _PKG_ROOT, HALIDE_BUILD_DIR, open_catalog
 
 
-def _xp(session, action, arg1=None, arg2=None, ignore=None):
+def _xp(session, action, arg1=None, arg2=None, arg3=None, ignore=None):
     """Namespace for cmd_experiment with all argparse-provided fields set."""
-    return session.ns(action=action, arg1=arg1, arg2=arg2, ignore=ignore)
+    return session.ns(action=action, arg1=arg1, arg2=arg2, arg3=arg3,
+                      ignore=ignore)
 
 
 def _begin(run_tool, session, label):
@@ -140,12 +143,37 @@ def test_add_schedule_node_creates_root(run_tool, session, tmp_path, capsys):
     assert node.source == "// A\n"
 
 
-def test_add_schedule_node_no_dedup(run_tool, session, tmp_path, capsys):
-    """Unlike new_root there is no hash-collision check: identical content twice
-    yields two distinct nodes."""
+def test_add_schedule_node_dedup(run_tool, session, tmp_path, capsys):
+    """Identical content (source + params) twice returns the SAME node -- a
+    silent no-op collision, so profiler_session.py never measures a schedule
+    twice."""
     a = _add_node(run_tool, session, tmp_path, capsys, source="// same\n")
     b = _add_node(run_tool, session, tmp_path, capsys, source="// same\n")
+    assert a == b
+
+
+def test_add_schedule_node_dedup_keys_on_params(run_tool, session, tmp_path, capsys):
+    """The content hash covers BOTH files, so the same source with different
+    generator parameters is a distinct node."""
+    a = _add_node(run_tool, session, tmp_path, capsys, source="// s\n",
+                  params="[{}]")
+    b = _add_node(run_tool, session, tmp_path, capsys, source="// s\n",
+                  params='[{"pyramid_levels": 4}]')
     assert a != b
+
+
+def test_add_schedule_node_dedup_does_not_reignore(
+        run_tool, session, tmp_path, capsys):
+    """A dedup hit adds no --ignore commentary, so a later call can never
+    retroactively hide an existing non-ignored node."""
+    first = _add_node(run_tool, session, tmp_path, capsys, source="// keep\n")
+    second = _add_node(run_tool, session, tmp_path, capsys, source="// keep\n",
+                       ignore=["too late"])
+    assert second == first
+    cat = open_catalog(session.catalog_dir)
+    node = cat.get_schedule(first)
+    assert not any(c.text.startswith("EXPERIMENT IGNORE:")
+                   for c in node.commentary)
 
 
 def test_add_schedule_node_ignore_commentary(run_tool, session, tmp_path, capsys):
@@ -253,3 +281,60 @@ def test_cli_guide_env_assertion(run_cli, session):
     r = run_cli("experiment", "-C", session.catalog_dir, "begin",
                 "harness_T_guide_T", env={"DENDRITIC_HL_GUIDE_ENABLED": "1"})
     assert r.returncode == 0, r.stderr
+
+
+# ---------------------------------------------------------------------------
+# build_external: catalog-free compile (no -C).  Validation paths need no
+# Halide; the real build is opt-in (marked `halide`).
+# ---------------------------------------------------------------------------
+
+def test_cli_build_external_needs_three_args(run_cli, tmp_path):
+    src = tmp_path / "g.cpp"; src.write_text("// x\n")
+    prm = tmp_path / "p.json"; prm.write_text("[{}]")
+    r = run_cli("experiment", "build_external", str(src), str(prm))  # no bin dir
+    assert r.returncode != 0
+    assert "requires a generator" in r.stderr
+
+
+def test_cli_build_external_missing_source_is_clean_error(run_cli, tmp_path):
+    prm = tmp_path / "p.json"; prm.write_text("[{}]")
+    r = run_cli("experiment", "build_external", str(tmp_path / "nope.cpp"),
+                str(prm), str(tmp_path / "bin"))
+    assert r.returncode != 0
+    assert "no such generator" in r.stderr and "Traceback" not in r.stderr
+
+
+def test_cli_build_external_empty_params_is_clean_error(run_cli, tmp_path):
+    src = tmp_path / "g.cpp"; src.write_text("// x\n")
+    prm = tmp_path / "p.json"; prm.write_text("[]")
+    r = run_cli("experiment", "build_external", str(src), str(prm),
+                str(tmp_path / "bin"))
+    assert r.returncode != 0
+    assert "empty" in r.stderr and "Traceback" not in r.stderr
+
+
+@pytest.mark.halide
+@pytest.mark.skipif(not os.path.isdir(HALIDE_BUILD_DIR),
+                    reason="no local Halide build at " + HALIDE_BUILD_DIR)
+@pytest.mark.skipif(shutil.which("ninja") is None, reason="ninja not found")
+def test_cli_build_external_real_build_numbers_params(run_cli, tmp_path):
+    """A real build (no -C, Halide hard-wired to ~/Halide): each generator-params
+    object lands in its own numbered subdir (0, 1), and no output name embeds a
+    catalog full_id."""
+    histp = os.path.join(_PKG_ROOT, "tests", "hist_params.cpp")
+    prm = tmp_path / "p.json"
+    prm.write_text('[{}, {"enable_parallel": true}]')
+    bin_dir = tmp_path / "bin"
+    r = run_cli("experiment", "build_external", histp, str(prm), str(bin_dir))
+    assert r.returncode == 0, r.stderr
+    for i in ("0", "1"):
+        assert (bin_dir / i / "dh_hl_pipeline.rungen").is_file(), i
+        assert (bin_dir / i / "dh_hl_pipeline.h").is_file(), i
+    # Param-independent outputs use the neutral base, not a catalog full_id.
+    assert (bin_dir / "external_generator").is_file()
+    assert (bin_dir / "external.ninja").is_file()
+    assert (bin_dir / "RunGenMain.o").is_file()
+    import re
+    # No bin/ entry embeds a catalog full_id (a "<timestamp>_<hash>" string).
+    assert not any(re.search(r"\d{4}-\d\d-\d\dT\d", n)
+                   for n in os.listdir(str(bin_dir)))

@@ -335,6 +335,8 @@ def cmd_experiment(args):
         _experiment_add_schedule_node(args)
     elif action == "json_test_schedule":
         _experiment_json_test_schedule(args)
+    elif action == "build_external":
+        _experiment_build_external(args)
     else:  # argparse `choices` should make this unreachable
         raise DhHlError("unknown experiment action: " + action)
 
@@ -386,14 +388,37 @@ def _experiment_add_schedule_node(args):
     ctx = Context.for_catalog(args)
     source = _read_file_or_stdin(args.arg1)
     params_text = _read_file_or_stdin(args.arg2)
-    node = ctx.catalog.create_schedule(source, parent_idea=None,
-                                       params_text=params_text)
-    for text in getattr(args, "ignore", None) or []:
-        node.add_commentary("{} {}".format(_EXPERIMENT_IGNORE_PREFIX, text),
-                            review=Review.NEGATIVE)
+    # Silent-dedup on content hash (covers source AND params): if a schedule with
+    # the same contents already exists, reuse it -- no new node, and no --ignore
+    # commentary (so we never retroactively ignore an existing non-ignored node).
+    # This keeps profiler_session.py from measuring the same schedule twice
+    # (idea.md "add schedule node").
+    h = ids.schedule_content_hash(source, params_text)
+    existing = [n for n in ctx.catalog.schedules.values() if n.hash == h]
+    if existing:
+        # Prefer a major node (the ones json_test_schedule surfaces); pick
+        # deterministically among any ties.
+        majors = [n for n in existing if n.is_major()]
+        node = min(majors or existing, key=lambda n: n.full_id)
+    else:
+        node = ctx.catalog.create_schedule(source, parent_idea=None,
+                                           params_text=params_text)
+        for text in getattr(args, "ignore", None) or []:
+            node.add_commentary("{} {}".format(_EXPERIMENT_IGNORE_PREFIX, text),
+                                review=Review.NEGATIVE)
     ctx.finish()
-    # Only stdout output is the new node's full ID plus a newline.
+    # Only stdout output is the new-or-found node's full ID plus a newline.
     print(node.full_id)
+
+
+def _experiment_build_external(args):
+    """Catalog-free compile of the normal build outputs (idea.md "Build
+    External"): no -C, Halide hard-wired to ~/Halide, outputs into the given bin
+    directory.  Contra the rest of the harness, needs no session/catalog."""
+    if args.arg1 is None or args.arg2 is None or args.arg3 is None:
+        raise DhHlError("experiment build_external requires a generator.cpp, a "
+                        "generator_parameters.json, and a bin directory")
+    build.build_external(args.arg1, args.arg2, args.arg3)
 
 
 def _experiment_json_test_schedule(args):
