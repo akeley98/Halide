@@ -16,8 +16,6 @@ constexpr int maxJ = 20;
 
 class LocalLaplacian : public Halide::Generator<LocalLaplacian> {
 public:
-    GeneratorParam<int> pyramid_levels{"pyramid_levels", 8, 1, maxJ};
-
     Input<Buffer<uint16_t, 3>> input{"input"};
     Input<int> levels{"levels"};
     Input<float> alpha{"alpha"};
@@ -26,7 +24,9 @@ public:
 
     void generate() {
         /* THE ALGORITHM */
-        const int J = pyramid_levels;
+        // Pyramid depth: a fixed constant, not a GeneratorParam (the experiment
+        // uses a single fixed algorithm; was `pyramid_levels`, default 8).
+        const int J = 8;
 
         // Make the remapping function as a lookup table.
         Func remap;
