@@ -6,25 +6,31 @@
 *label* is one of the four ablation cells -- harness_{T,F}_guide_{T,F} -- crossing
 "agent has the dh_hl harness" with "agent has the scheduling guide".  This creates
 `{data_dir}/{label}_{n}` (lowest n that avoids a collision) holding the fixed
-inputs plus a generated `begin_experiment.py`; running that script later stands up
-the catalog and (for the relevant cells) the guide contents.
+inputs, the guide contents (harness_F_guide_T), and a generated
+`begin_experiment.py`; running that script later stands up the catalog.
 
-Typo protection:
+Typo protection -- both flags are probed on the on-PATH dh_hl (the one the agent
+runs) BEFORE any directory is made, so a mislabelled or stale setup fails loudly:
   * `{data_dir}` must already be a directory (so a mistyped path fails loudly
     rather than creating a stray tree).
-  * The label's guide state must match reality: `dh_hl help detail` exits 0 iff the
-    guide is enabled, so we assert `(exit == 0) == label.endswith("guide_T")`.  The
-    human flips the guide in `dh_hl` by hand before running this; the assert catches
-    a label/flag mismatch BEFORE any directory is made.
+  * Guide axis: `dh_hl help detail` exits 0 iff the guide is enabled, asserted
+    `== label.endswith("guide_T")` (probed with the harness forced on, since
+    `help` is itself a no-harness-blocklisted tool).
+  * Harness axis: a blocklisted tool (`dh_hl status -h`) is available iff the
+    harness is allowed, asserted `== label.startswith("harness_T")`.  The human
+    sets DENDRITIC_HL_ALLOW_HARNESS / DENDRITIC_HL_GUIDE_ENABLED (or the flag
+    defaults) to match the label before running this.
 
 NOTE: for the no-harness cells `begin_experiment.py` ships `runner.py` (run a
-RunGenMain binary with the standard benchmark args); the full `build.py` wrapper
-is still TODO.
+RunGenMain binary with the standard benchmark args) and `build.py`
+(build Halide generator and binaries by recycling minimal dh_hl internals;
+the rest of dh_hl is off limits using tool blocklisting).
 """
 
 import argparse
 import os
 import shutil
+import subprocess
 import sys
 
 
@@ -51,22 +57,57 @@ LABELS = ("harness_T_guide_T", "harness_T_guide_F",
 # ("benchmark once, no generator parameters"), matching new_catalog's default.
 _PARAMS_JSON = "[\n  {\n  }\n]\n"
 
-_README_PLACEHOLDER = """\
-# Experiment {label}
+# The two-phase hidden prompt here is because begin_experiment.py logs
+# the start time of the experiment in the catalog, and I want that to
+# happen when the agent actually starts, not when init_dir runs.
+_README_TEMPLATE = """\
+# LLM Halide Scheduling Experiment {label}
 
-PLACEHOLDER README (the real contents are embedded later).
+Please run `./begin_experiment.py` and read and execute the resulting `prompt.md`.
 
-This directory was created by `experiment_scripts/init_dir.py`.  Run
-`./begin_experiment.py` from inside it to stand up the catalog.
 """
 
 
+def _dh_env(allow_harness):
+    """os.environ with DENDRITIC_HL_ALLOW_HARNESS forced on/off (None = inherit)."""
+    env = dict(os.environ)
+    if allow_harness is not None:
+        env["DENDRITIC_HL_ALLOW_HARNESS"] = "1" if allow_harness else "0"
+    return env
+
+
 def _guide_enabled_via_cli():
-    """True iff `dh_hl help detail` exits 0 (i.e. the guide is enabled)."""
-    import subprocess
-    r = subprocess.run([_DH_HL, "help", "detail"],
+    """True iff `dh_hl help detail` exits 0 (i.e. the guide is enabled).  Run with
+    the harness forced ON: `help` is a blocklisted tool, so a no-harness ambient
+    DENDRITIC_HL_ALLOW_HARNESS would otherwise block the probe itself and mask the
+    guide state we are trying to read (the two flags are independent)."""
+    r = subprocess.run([_DH_HL, "help", "detail"], env=_dh_env(allow_harness=True),
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return r.returncode == 0
+
+
+def _harness_allowed_via_cli():
+    """True iff a blocklisted tool is available under the AMBIENT allow-harness
+    setting (no override): `dh_hl status -h` exits 0 when the harness is on, and is
+    turned off (nonzero) when it is not.  Checks that the environment the agent
+    will run in matches the label's harness axis."""
+    r = subprocess.run([_DH_HL, "status", "-h"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return r.returncode == 0
+
+
+def _write_guide_contents(exp_dir):
+    """harness_F_guide_T only: the agent has no harness to serve the guide, so ship
+    it as plain files next to the prompt.  `dh_hl prompt --guide-only` is a
+    blocklisted tool, so run it with the harness forced ON -- this script is
+    trusted setup, not the agent."""
+    guide = subprocess.run(
+        [_DH_HL, "prompt", "--guide-only"], env=_dh_env(allow_harness=True),
+        check=True, capture_output=True, text=True).stdout
+    with open(os.path.join(exp_dir, "guide.md"), "w", encoding="utf-8") as f:
+        f.write(guide)
+    shutil.copytree(_DETAIL_DIR, os.path.join(exp_dir, "detail"))
+    shutil.copytree(_EXAMPLES_DIR, os.path.join(exp_dir, "examples"))
 
 
 def _lowest_free_dir(data_dir, label):
@@ -76,6 +117,14 @@ def _lowest_free_dir(data_dir, label):
         if not os.path.exists(candidate):
             return candidate
         n += 1
+
+
+def label_allows_harness(label):
+    return label.startswith("harness_T")
+
+
+def label_enables_guide(label):
+    return label.endswith("guide_T")
 
 
 def main(argv=None):
@@ -89,8 +138,10 @@ def main(argv=None):
         parser.error("data_dir is not a directory: {!r} (typo protection)"
                      .format(args.data_dir))
 
-    # Guide state must match the label BEFORE we create anything.
-    expected_guide = args.label.endswith("guide_T")
+    # Guide AND harness state must match the label BEFORE we create anything --
+    # both probe the on-PATH dh_hl the agent will actually run, so a mis-set flag
+    # (or a stale snapshot) fails loudly rather than silently mislabelling a run.
+    expected_guide = label_enables_guide(args.label)
     actual_guide = _guide_enabled_via_cli()
     assert actual_guide == expected_guide, (
         "guide state mismatch: label {!r} expects guide {}, but `dh_hl help "
@@ -98,6 +149,17 @@ def main(argv=None):
         "the label, then re-run (no directory was created).".format(
             args.label, "enabled" if expected_guide else "disabled",
             "enabled" if actual_guide else "disabled"))
+
+    expected_harness = label_allows_harness(args.label)
+    actual_harness = _harness_allowed_via_cli()
+    assert actual_harness == expected_harness, (
+        "harness state mismatch: label {!r} expects the harness {}, but a "
+        "blocklisted dh_hl tool is {}. Set DENDRITIC_HL_ALLOW_HARNESS (or the "
+        "allow_harness_flag default in the on-PATH dh_hl) to match the label, "
+        "then re-run (no directory was created).".format(
+            args.label,
+            "enabled" if expected_harness else "disabled (allowlist only)",
+            "available" if actual_harness else "turned off"))
 
     exp_dir = _lowest_free_dir(args.data_dir, args.label)
     os.makedirs(exp_dir)
@@ -108,7 +170,12 @@ def main(argv=None):
               "w", encoding="utf-8") as f:
         f.write(_PARAMS_JSON)
     with open(os.path.join(exp_dir, "README.md"), "w", encoding="utf-8") as f:
-        f.write(_README_PLACEHOLDER.format(label=args.label))
+        f.write(_README_TEMPLATE.format(label=args.label))
+
+    # Guide contents shipped as plain files (moved here from begin_experiment.py
+    # so that generated script never mentions the guide / --guide-only).
+    if args.label == "harness_F_guide_T":
+        _write_guide_contents(exp_dir)
 
     begin_path = os.path.join(exp_dir, "begin_experiment.py")
     with open(begin_path, "w", encoding="utf-8") as f:
@@ -130,17 +197,113 @@ def _render_begin_experiment(label):
     space) from corrupting the generated source.  The template's @@RUN_ARGS@@
     sentinel is intentionally left untouched -- the generated script substitutes
     it later, itself via repr (write_runner)."""
+
+    harness = label_allows_harness(label)
+    guide = label_enables_guide(label)
+
     subs = {
         "@@LABEL@@": repr(label),
         "@@DH_HL@@": repr(_DH_HL),
         "@@DETAIL_DIR@@": repr(_DETAIL_DIR),
         "@@EXAMPLES_DIR@@": repr(_EXAMPLES_DIR),
+        "@@PROMPT@@": repr(_make_prompt(harness, guide)),
     }
     with open(_TEMPLATE_PATH, "r", encoding="utf-8") as f:
         text = f.read()
     for key, value in subs.items():
         text = text.replace(key, value)
     return text
+
+
+# --------------------------------------------------------------------------
+# Prompt
+# --------------------------------------------------------------------------
+
+def _make_prompt(harness, guide):
+    """Prompt text, parameterized on (harness, guide)."""
+    chunks = []
+
+    chunks.append("""\
+You are the "main agent" participating in a controlled experiment
+on fully autonomous LLM optimization of a Halide schedule.
+You will optimize the Local Laplacian filter provided in `original_generator.cpp`.
+
+Please work independently and try to make as much progress as possible
+in one turn, stopping only when asked or you see no further progress possible.
+Note, we anticipate the experiment to take about two hours of wall time.
+
+Local minima are everywhere! If performance plateaus,
+consider if there's complete alternative strategies to try out.
+
+Delegate tasks to sub-agents at your at your discretion,
+as appropriate to support the goal of maximizing progress
+within the bounds of one session.
+""")
+
+    if harness:
+        chunks.append("""\
+Run `dh_hl prompt --main` and read the result IN FULL
+for the usage instructions of the `dh_hl` experiment harness,
+which builds and logs the history of Halide code for the experiment.
+This reading is critical, as testing the efficacy of the provided
+information is the independent variable for the experiment.""")
+
+    if not harness and guide:
+        chunks.append("""\
+Read `guide.md` IN FULL prior to starting the experiment.
+This reading is critical, as testing the efficacy of the provided
+information is the independent variable for the experiment.""")
+
+    if not guide:
+        chunks.append("""\
+For this experiment, you will rely on your own knowledge of Halide,
+from prior training, Halide experimentation, or reading Halide code/docs.""")
+
+    if guide:
+        chunks.append(f"""\
+The {'prompt' if harness else 'guide'} mentions supplemental reading.
+These are entirely optional.
+You may also do your own Halide experimentation or read Halide code/docs.""")
+
+    chunks.append("The Halide header for this experiment is in `~/Halide/build/include/Halide.h`.")
+
+    if not harness:
+        chunks.append("")
+        chunks.append("""\
+Read the build.py script to understand the build tool.
+DON'T inspect the underlying dh_hl tool (experiment infrastructure).
+You may copy the build script and C++ source as you wish, as long as
+the whole generator is in one C++ file. The build tool logs all
+programs as progress for the experiment.""")
+
+    chunks.append(f"""
+
+=== RULES ===
+
+* The goal is to minimize the runtime for the specific problem size used by
+  {'the harness' if harness else 'runner.py'}. \
+Overfitting, including making assumptions that would
+  break the pipeline on other problem sizes, is explicitly allowed.
+
+* Modify only the Halide schedule, not the Halide algorithm
+  (further instructions inside the provided generator C++ source).
+  The code must remain functionally correct for the tested problem size.
+
+* You may make git commits or git worktrees in this directory at any
+  time without human oversight.
+
+* Only edit files inside this directory, EXCLUDING `catalog.dh_hl`
+  (experiment private logging state). The catalog must remain git ignored.
+
+* DON'T read any files except those in this directory and in `~/Halide`;
+  do not use web tools to seek outside information.
+
+* Do not use the autoscheduler or try to read existing Local Laplacian apps.
+  The generated Halide schedule must be your original work.
+  (Caveat: we ignore the fact the "answer key" is likely in your training data).
+
+""")
+    return "\n".join(chunks)
 
 
 if __name__ == "__main__":

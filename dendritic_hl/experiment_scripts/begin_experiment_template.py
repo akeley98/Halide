@@ -34,47 +34,9 @@ PROMPT_MD = os.path.join(HERE, "prompt.md")
 CATALOG = os.path.join(HERE, "catalog.dh_hl")
 
 
-# --------------------------------------------------------------------------
-# Prompt
-# --------------------------------------------------------------------------
-
-def add_prompt():
-    """PLACEHOLDER prompt text, parameterized on (HARNESS, GUIDE).
-
-    The human fills this in.  Most text is shared across >=2 of the 4 cells, so
-    build it from a common block plus per-cell additions.  The four branches
-    below make it obvious where each cell's text goes."""
-    common = "add prompt\n"
-
-    if HARNESS and GUIDE:
-        specific = ""       # harness_T_guide_T: harness + guide
-    elif HARNESS and not GUIDE:
-        specific = ""       # harness_T_guide_F: harness, no guide
-    elif not HARNESS and GUIDE:
-        specific = ""       # harness_F_guide_T: no harness, guide shipped as files
-    else:
-        specific = ""       # harness_F_guide_F: neither
-
-    return common + specific
-
-
 def write_prompt():
     with open(PROMPT_MD, "w", encoding="utf-8") as f:
-        f.write(add_prompt())
-
-
-# --------------------------------------------------------------------------
-# Guide contents (harness_F_guide_T only): the agent has no harness to serve the
-# guide, so ship it as plain files next to the prompt.
-# --------------------------------------------------------------------------
-
-def write_guide_contents():
-    guide = subprocess.run([DH_HL, "prompt", "--guide-only"],
-                           check=True, capture_output=True, text=True).stdout
-    with open(os.path.join(HERE, "guide.md"), "w", encoding="utf-8") as f:
-        f.write(guide)
-    shutil.copytree(DETAIL_DIR, os.path.join(HERE, "detail"))
-    shutil.copytree(EXAMPLES_DIR, os.path.join(HERE, "examples"))
+        f.write(@@PROMPT@@)
 
 
 # --------------------------------------------------------------------------
@@ -86,7 +48,7 @@ def write_guide_contents():
 # runner.py, dropped next to the prompt for the no-harness cells.  @@RUN_ARGS@@ is
 # filled in by write_runner() from PROBLEM_ARGV, so the standalone binary is run
 # exactly as `dh_hl` would run it (idea.md problem argv).
-_RUNNER_SCRIPT = '''#!/usr/bin/env python3
+_RUNNER_TEMPLATE = '''#!/usr/bin/env python3
 """Run a specific RunGenMain binary with this experiment's standard benchmark
 arguments -- the SAME arguments the harness would pass.  RunGenMain prints its
 profiler table to stdout on exit, so just read the output.
@@ -114,11 +76,67 @@ if __name__ == "__main__":
     main()
 '''
 
+_BUILD_TEMPLATE = '''#!/usr/bin/env python3
+"""
+Usage: build.py {generator C++} {JSON parameters file} {bin dir}
+
+The JSON parameters must hold a list of objects.
+Each object maps the name of a Halide parameter to a boolean, number, or str,
+e.g. {"abc": 10} would substitute abc=10 in the below:
+
+    GeneratorParam<int> abc{"abc", default_value, min_allowed, max_allowed};
+
+This feature may be useful for parameter sweeps.
+Each generator parameters yields a new Halide binary in a different numbered
+subdirectory of the bin directory.
+
+This build script also logs a "catalog" of Halide schedules found.
+The experiment catalog is targetted by absolute path and not git tracked.
+Therefore this script should work even if a git worktree is used
+or the script is otherwise copied to other locations.
+
+Please do not circumvent the experiment logging the build script does.
+We are hoping to create real time vs. performance charts.
+If you must compile Halide code yourself for whatever reason,
+please use this script ASAP to also get the code logged.
+"""
+import sys, os, subprocess
+
+DH_HL = @@DH_HL@@
+CATALOG_PATH = @@CATALOG_PATH@@
+
+if len(sys.argv) != 4:
+    sys.stderr.write(f"Usage: {sys.argv[0]} {{generator C++}} {{JSON parameters}} {{bin dir}}")
+    sys.exit(1)
+
+_, cpp_path, json_path, bin_path = sys.argv
+
+def _dh(*args, **kwargs):
+    try:
+        subprocess.run([DH_HL, *args], check=True, **kwargs)
+    except subprocess.CalledProcessError:
+        sys.exit(1)
+
+_dh("experiment", "build_external", *sys.argv[1:])
+_dh("experiment", "-C", CATALOG_PATH, "add_schedule_node", cpp_path, json_path, stdout=subprocess.DEVNULL)
+
+print(f"Use ./runner.py {bin_path}/{{parameters idx}}/dh_hl_pipeline.rungen to profile with the official experiment input sizes.")
+'''
+
+
+def write_build():
+    """Write build.py"""
+    text = _BUILD_TEMPLATE.replace("@@CATALOG_PATH@@", repr(CATALOG))
+    path = os.path.join(HERE, "build.py")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.chmod(path, 0o755)
+
 
 def write_runner():
     """Write runner.py: run a given RunGenMain binary with the experiment's
     standard benchmark arguments (PROBLEM_ARGV minus the <RunGenMain> token)."""
-    text = _RUNNER_SCRIPT.replace("@@RUN_ARGS@@", repr(PROBLEM_ARGV[1:]))
+    text = _RUNNER_TEMPLATE.replace("@@RUN_ARGS@@", repr(PROBLEM_ARGV[1:]))
     path = os.path.join(HERE, "runner.py")
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
@@ -126,10 +144,8 @@ def write_runner():
 
 
 def write_build_helpers():
+    write_build()
     write_runner()
-    print("NOTE: the build.py wrapper is not implemented yet (deferred); the "
-          "no-harness cell " + LABEL + " has runner.py but no build.py.",
-          file=sys.stderr)
 
 
 # --------------------------------------------------------------------------
@@ -149,13 +165,29 @@ PROBLEM_ARGV = [
     "input=zero:[1536,2560,3]", "levels=8", "alpha=1", "beta=1",
 ]
 
+def _git(*args):
+    subprocess.run(["git", *args], check=True, cwd=HERE)
 
 def _dh(*args):
-    subprocess.run([DH_HL, *args], check=True)
+    subprocess.run([DH_HL, *args], check=True, stdout=subprocess.DEVNULL)
 
 
-def make_catalog():
+def make_git_and_catalog():
+    _git("init")
+    # Immediately switch to a new branch because Claudes
+    # are tuned to not commit to main.
+    _git("checkout", "-b", "llm_experiment_main")
+    with open(os.path.join(HERE, ".gitignore"), "x") as f:
+        f.write("*~\n")
+        f.write("__*\n")
+        f.write("/begin_experiment.py\n")
+        f.write("/detail\n")
+        f.write("/examples\n")
+        f.write("/guide.md\n")
+        f.write("/runner.py\n")
+        f.write("/catalog.dh_hl\n")  # Not CATALOG, want relative path
     _dh("new_catalog", "-C", CATALOG, "seed", PROMPT_MD, GENERATOR, PARAMS)
+    subprocess.run(["git", "init"], check=True, cwd=CATALOG, stdout=subprocess.DEVNULL)
     # The default problem needs generator set_estimates (which we removed), so
     # disable it and add our explicitly-sized problem instead.
     _dh("disable_problem", "-C", CATALOG, "problem.default")
@@ -165,11 +197,11 @@ def make_catalog():
 
 def main():
     write_prompt()
-    if not HARNESS and GUIDE:      # harness_F_guide_T
-        write_guide_contents()
+    if not HARNESS:
+        write_build_helpers()
     if not HARNESS:                # both no-harness cells
         write_build_helpers()
-    make_catalog()                 # always, last
+    make_git_and_catalog()         # always, last
 
 
 if __name__ == "__main__":
