@@ -595,8 +595,10 @@ They are lazily allocated for each unique `(catalog directory, session node full
 The `tmp.` prefix is to emphasize how fragile these handles are.
 If you need to identify a session in commentary or other text checked-in to the catalog,
 use the full session ID.
+<!-- impl -->
 
 NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
+<!-- end impl -->
 
 
 # The Machine Directory
@@ -620,8 +622,10 @@ All tools that require a current session (`-s`) acquire an exclusive per-session
 except for a subset of read-only commands, marked when their syntax is introduced.
 This locking *never* fails for correct usage: failure to acquire is diagnosed as an error
 (two concurrent agents using the same session).
+<!-- impl -->
 
 NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
+<!-- end impl -->
 
 
 # Cost Comparison Methodology
