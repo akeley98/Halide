@@ -2368,7 +2368,7 @@ The purpose of this feature is to quickly verify the typical case
 where only scheduling changes are made.
 New goldens will keep a record of when the algorithm changed,
 which warrants additional scrutiny.
-these decisions are between the user and the agent.
+These decisions are between the user and the agent.
 
 This is obviously vulnerable to reward hacking (don't do this).
 The human programmer should manually review the final pipeline
