@@ -13,6 +13,15 @@ from . import tools
 from . import build as build_mod
 from .errors import DhHlError
 from . import guide_flag
+from . import allow_harness_flag
+
+# When allow_harness_flag.enabled is False (a no-harness experiment run), the CLI
+# exposes ONLY these commands -- the minimum to stand up a catalog and log a
+# no-harness run (begin_experiment.py's new_catalog/disable_problem/new_problem
+# and the agent's `experiment build_external`/`add_schedule_node`).  Every other
+# tool is turned off (see _build_parser and main()).
+_NO_HARNESS_ALLOWLIST = frozenset({
+    "experiment", "new_catalog", "disable_problem", "new_problem"})
 
 # idea.md is the human-facing spec; `dh_hl help <command>` renders the relevant
 # tool section from it so the detailed per-command docs have a single source.
@@ -243,6 +252,12 @@ def _build_parser():
     sub = p.add_subparsers(dest="command", metavar="command")
 
     def add(name):
+        if not allow_harness_flag.enabled and name not in _NO_HARNESS_ALLOWLIST:
+            # No-harness run: this tool is turned off, so it is never registered
+            # (hidden from --help too).  A direct attempt is caught by the
+            # pre-parse gate in main() with a clear message.  Return a detached
+            # throwaway parser so the caller's .add_argument() calls are harmless.
+            return argparse.ArgumentParser(add_help=False)
         sp = sub.add_parser(name, help=COMMAND_HELP[name])
         # Every tool accepts both -C and -s (idea.md); required-ness is enforced
         # per-tool via Context.for_catalog / for_session.
@@ -250,8 +265,9 @@ def _build_parser():
         sp.add_argument("-s", "--session", help="session handle or full ID")
         return sp
 
-    hp = sub.add_parser("help", help=COMMAND_HELP["help"])
-    hp.add_argument("topic", nargs="?", help="command to describe")
+    if allow_harness_flag.enabled or "help" in _NO_HARNESS_ALLOWLIST:
+        hp = sub.add_parser("help", help=COMMAND_HELP["help"])
+        hp.add_argument("topic", nargs="?", help="command to describe")
 
     add("status")
 
@@ -808,6 +824,18 @@ def main():
     locks.acquire_machine_shared()
     argv = sys.argv[1:]
     try:
+        # DRM (no-harness experiment run): only the allowlist is available.  Catch
+        # a real-but-turned-off command up front with a clear, imperative message
+        # (an unknown name falls through to argparse's usage against the allowed
+        # set).  This precedes the exec/init_build shortcuts below, so those are
+        # gated too.
+        if not allow_harness_flag.enabled and argv and argv[0] in COMMAND_HELP \
+                and argv[0] not in _NO_HARNESS_ALLOWLIST:
+            sys.stderr.write(
+                "dh_hl: the '{}' tool is turned OFF for this run and cannot be "
+                "used. Work with the plain files and tools you were given; do "
+                "not attempt to re-enable the harness.\n".format(argv[0]))
+            sys.exit(2)
         if argv and argv[0] in ("exec", "exec_exclusive"):
             _cmd_exec(argv[0], argv[1:])
             return
