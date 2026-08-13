@@ -336,7 +336,8 @@ Anyway, this current design has already caused some fair amount of agent confusi
 
 NOTE: this section does not override any other prompts if they forbid
 sub-agent launch. It only explains how to use the tool in concert with
-sub-agents.
+sub-agents. Furthermore, the section only applies to sub-agents
+assigned to do tasks related to editing Halide code.
 
 Create a new session for the sub-agent with the `dh_hl new_sub_session` tool.
 Include a detailed prompt for the sub-agent as the "proposal text".
