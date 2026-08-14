@@ -24,7 +24,7 @@ The anchor node doubles as the parent schedule for the profiling sub-session:
 it is the one node this script fully controls, so `new_sub_session` never has to
 fall back to the parent session's workspace node (which might not resolve).
 
-The experiment query tool is `json_test_schedule`.  The session handle is parsed
+The experiment query tool is `json_test_schedules`.  The session handle is parsed
 from `new_sub_session`'s "Session handle: " line (pinned by
 tests/test_sessions.py::test_new_sub_session_handle_line, which names this
 script).
@@ -41,7 +41,7 @@ import tempfile
 DH_HL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                      "dh_hl")
 
-# json_test_schedule skips any major schedule with a non-cancelled commentary
+# json_test_schedules skips any major schedule with a non-cancelled commentary
 # whose text starts with EXPERIMENT IGNORE:.  The anchor gets that commentary via
 # `experiment add_schedule_node --ignore` (which prepends the prefix itself); the
 # anchor's duplicate canonical (created by new_sub_session) gets it via a plain
@@ -90,7 +90,7 @@ def _line_after(text, prefix):
 
 def _ignore_node(runner, sess, node_id, full_text):
     """Attach *full_text* (which must start with EXPERIMENT IGNORE:) to *node_id*
-    as a negative commentary, so json_test_schedule skips it.  `comment` reads
+    as a negative commentary, so json_test_schedules skips it.  `comment` reads
     its text from a file, so route the text through a throwaway temp file."""
     with tempfile.NamedTemporaryFile(
             "w", suffix=".txt", delete=False, encoding="utf-8") as cf:
@@ -186,7 +186,7 @@ def main():
     # EXPERIMENT IGNORE commentary (so the anchor and its duplicate are excluded).
     runner.run("set_current_anchor", *sess, anchor_id)
     node_list = json.loads(
-        runner.run("experiment", *cat, "json_test_schedule"))
+        runner.run("experiment", *cat, "json_test_schedules"))
 
     # Profile one node / one batch at a time (deliberately not using --profile N,
     # N > 1), PROFILE_PASSES times over the whole set.
