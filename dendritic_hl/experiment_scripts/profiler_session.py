@@ -167,7 +167,7 @@ def main():
     # work and then die before persisting where the results landed.
     if args.json_append:
         session_id = runner.run("session_full_id", *sess).strip()
-        _json_append(args.json_append, [args.catalog_path, session_id])
+        _json_append(args.json_append, [os.path.abspath(args.catalog_path), session_id])
 
     # Initialize the sub-session's workspace: a sub-session with an
     # uninitialized workspace is off-label usage that may break later tools.
@@ -190,7 +190,11 @@ def main():
 
     # Profile one node / one batch at a time (deliberately not using --profile N,
     # N > 1), PROFILE_PASSES times over the whole set.
+    counter = 0
+    total = PROFILE_PASSES * len(node_list)
     for _ in range(PROFILE_PASSES):
+        print(f"{counter}/{total}", file=sys.stderr)
+        counter += 1
         for node in node_list:
             runner.run("init_build", *sess,
                        "--target", node, "--other", "none")
