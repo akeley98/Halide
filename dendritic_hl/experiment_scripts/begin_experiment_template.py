@@ -40,9 +40,9 @@ def write_prompt():
 
 
 # --------------------------------------------------------------------------
-# Build helpers (no-harness cells).  The full build.py wrapper is still TODO;
-# for now we ship runner.py so a built RunGenMain binary can be benchmarked with
-# the same arguments the harness uses.
+# Build helpers (no-harness cells).  build.py which wraps dh_hl
+# and runner.py that benchmarks a built RunGenMain binary
+# with the same arguments dh_hl uses.
 # --------------------------------------------------------------------------
 
 # runner.py, dropped next to the prompt for the no-harness cells.  @@RUN_ARGS@@ is
