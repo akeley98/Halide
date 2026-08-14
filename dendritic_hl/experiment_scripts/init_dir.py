@@ -5,8 +5,8 @@
 
 *label* is one of the four ablation cells -- harness_{T,F}_guide_{T,F} -- crossing
 "agent has the dh_hl harness" with "agent has the scheduling guide".  This creates
-`{data_dir}/{label}_{n}` (lowest n that avoids a collision) holding the fixed
-inputs, the guide contents (harness_F_guide_T), and a generated
+`{data_dir}/{label}_{n}` (lowest n that avoids a collision) holding a symlink to
+the fixed inputs, the guide contents (harness_F_guide_T), and a generated
 `begin_experiment.py`; running that script later stands up the catalog.
 
 Typo protection -- both flags are probed on the on-PATH dh_hl (the one the agent
@@ -32,6 +32,13 @@ import os
 import shutil
 import subprocess
 import sys
+import time
+
+from datetime import datetime, timezone
+
+def now_timestamp():
+    """Current UTC wall-clock time as a dendritic_hl timestamp string."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%S_%fZ")
 
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -110,11 +117,11 @@ def _write_guide_contents(exp_dir):
     shutil.copytree(_EXAMPLES_DIR, os.path.join(exp_dir, "examples"))
 
 
-def _lowest_free_dir(data_dir, label):
+def _lowest_free_dir_name(data_dir, label):
     n = 0
     while True:
-        candidate = os.path.join(data_dir, "{}_{}".format(label, n))
-        if not os.path.exists(candidate):
+        candidate = "{}_{}".format(label, n)
+        if not os.path.exists(os.path.join(data_dir, candidate)):
             return candidate
         n += 1
 
@@ -161,8 +168,11 @@ def main(argv=None):
             "enabled" if expected_harness else "disabled (allowlist only)",
             "available" if actual_harness else "turned off"))
 
-    exp_dir = _lowest_free_dir(args.data_dir, args.label)
+    exp_dir_name = _lowest_free_dir_name(args.data_dir, now_timestamp())
+    exp_dir = os.path.join(args.data_dir, exp_dir_name)
+    link_name = _lowest_free_dir_name(args.data_dir, args.label)
     os.makedirs(exp_dir)
+    os.symlink(exp_dir_name, os.path.join(args.data_dir, link_name))
 
     shutil.copyfile(_GENERATOR_SRC,
                     os.path.join(exp_dir, "original_generator.cpp"))
