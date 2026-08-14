@@ -6,7 +6,7 @@ be deleted in one sweep once the LLM Halide scheduling experiment is done.
 Covers the sub-actions: begin / get_begin_label / get_begin_timestamp
 (catalog-level write-once state under `experiment/`), add_schedule_node (a
 workspace-free root schedule creator that silent-dedups on content hash and
-takes optional EXPERIMENT IGNORE commentary), json_test_schedule (major
+takes optional EXPERIMENT IGNORE commentary), json_test_schedules (major
 schedules with no active EXPERIMENT IGNORE commentary), and build_external (a
 catalog-free compile with Halide hard-wired to ~/Halide).
 """
@@ -191,22 +191,22 @@ def test_add_schedule_node_ignore_commentary(run_tool, session, tmp_path, capsys
 
 
 # ---------------------------------------------------------------------------
-# json_test_schedule
+# json_test_schedules
 # ---------------------------------------------------------------------------
 
-def _json_test_schedule(run_tool, session, capsys):
+def _json_test_schedules(run_tool, session, capsys):
     capsys.readouterr()
-    run_tool(tools.cmd_experiment, _xp(session, "json_test_schedule"))
+    run_tool(tools.cmd_experiment, _xp(session, "json_test_schedules"))
     return json.loads(capsys.readouterr().out)
 
 
-def test_json_test_schedule_lists_majors_excluding_ignored(
+def test_json_test_schedules_lists_majors_excluding_ignored(
         run_tool, session, tmp_path, capsys):
     plain = _add_node(run_tool, session, tmp_path, capsys, source="// plain\n")
     ignored = _add_node(run_tool, session, tmp_path, capsys, source="// hide\n",
                         ignore=["dead end"])
 
-    result = _json_test_schedule(run_tool, session, capsys)
+    result = _json_test_schedules(run_tool, session, capsys)
     assert plain in result
     assert ignored not in result
     # The fixture's seed root + canonical are majors and should be listed too.
@@ -216,13 +216,13 @@ def test_json_test_schedule_lists_majors_excluding_ignored(
     assert set(baseline_majors) <= set(result)
 
 
-def test_json_test_schedule_cancelled_ignore_reappears(
+def test_json_test_schedules_cancelled_ignore_reappears(
         run_tool, session, tmp_path, capsys):
     ignored = _add_node(run_tool, session, tmp_path, capsys, ignore=["oops"])
-    assert ignored not in _json_test_schedule(run_tool, session, capsys)
+    assert ignored not in _json_test_schedules(run_tool, session, capsys)
 
     # Cancel the EXPERIMENT IGNORE commentary; the node becomes a test schedule
-    # again (json_test_schedule counts only non-cancelled commentary).
+    # again (json_test_schedules counts only non-cancelled commentary).
     cat = open_catalog(session.catalog_dir)
     try:
         node = cat.get_schedule(ignored)
@@ -235,7 +235,7 @@ def test_json_test_schedule_cancelled_ignore_reappears(
         from dendritic_hl_lib import locks
         locks._reset_for_tests()
 
-    assert ignored in _json_test_schedule(run_tool, session, capsys)
+    assert ignored in _json_test_schedules(run_tool, session, capsys)
 
 
 # ---------------------------------------------------------------------------

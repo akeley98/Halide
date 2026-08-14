@@ -3255,10 +3255,10 @@ Optimize this if needed, but this shouldn't be in the agent hot loop.
 ### Experiment Tools
 
     dh_hl experiment -C ... begin {label}
-    dh_hl experiment -C ... get_begin_label {label}
-    dh_hl experiment -C ... get_begin_timestamp {label}
+    dh_hl experiment -C ... get_begin_label
+    dh_hl experiment -C ... get_begin_timestamp
     dh_hl experiment -C ... add_schedule_node {generator.cpp} {generator_parameters.json}
-    dh_hl experiment -C ... json_test_schedule
+    dh_hl experiment -C ... json_test_schedules
     dh_hl experiment build_external {generator.cpp} {generator_parameters.json} {bin dir}
 
 Throwaway tools for the LLM Halide scheduling experiment.

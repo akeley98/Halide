@@ -46,8 +46,8 @@ def test_help_is_blocked_off(run_cli):
 
 
 def test_allowlisted_commands_reachable_off(run_cli, session):
-    # experiment json_test_schedule: allowlisted, needs only -C -> succeeds.
-    r = run_cli("experiment", "-C", session.catalog_dir, "json_test_schedule",
+    # experiment json_test_schedules: allowlisted, needs only -C -> succeeds.
+    r = run_cli("experiment", "-C", session.catalog_dir, "json_test_schedules",
                 env=_OFF)
     assert r.returncode == 0, r.stderr
     # The other three allowlisted commands parse (reach their own arg handling)

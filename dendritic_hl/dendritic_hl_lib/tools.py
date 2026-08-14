@@ -333,8 +333,8 @@ def cmd_experiment(args):
         _experiment_get(args, "begin_timestamp.txt")
     elif action == "add_schedule_node":
         _experiment_add_schedule_node(args)
-    elif action == "json_test_schedule":
-        _experiment_json_test_schedule(args)
+    elif action == "json_test_schedules":
+        _experiment_json_test_schedules(args)
     elif action == "build_external":
         _experiment_build_external(args)
     else:  # argparse `choices` should make this unreachable
@@ -396,7 +396,7 @@ def _experiment_add_schedule_node(args):
     h = ids.schedule_content_hash(source, params_text)
     existing = [n for n in ctx.catalog.schedules.values() if n.hash == h]
     if existing:
-        # Prefer a major node (the ones json_test_schedule surfaces); pick
+        # Prefer a major node (the ones json_test_schedules surfaces); pick
         # deterministically among any ties.
         majors = [n for n in existing if n.is_major()]
         node = min(majors or existing, key=lambda n: n.full_id)
@@ -421,7 +421,7 @@ def _experiment_build_external(args):
     build.build_external(args.arg1, args.arg2, args.arg3)
 
 
-def _experiment_json_test_schedule(args):
+def _experiment_json_test_schedules(args):
     ctx = Context.for_catalog(args)
     ids_out = [n.full_id for n in ctx.catalog.schedules.values()
                if n.is_major() and not _experiment_active_ignore(n)]
