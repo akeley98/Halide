@@ -188,10 +188,11 @@ def make_git_and_catalog():
         f.write("/catalog.dh_hl\n")  # Not CATALOG, want relative path
     _dh("new_catalog", "-C", CATALOG, "seed", PROMPT_MD, GENERATOR, PARAMS)
     subprocess.run(["git", "init"], check=True, cwd=CATALOG, stdout=subprocess.DEVNULL)
-    # The default problem needs generator set_estimates (which we removed), so
-    # disable it and add our explicitly-sized problem instead.
+    # The default problem needs generator set_estimates (which we removed),
+    # so disable it and add our explicitly-sized problem instead.
     _dh("disable_problem", "-C", CATALOG, "problem.default")
     _dh("new_problem", "-C", CATALOG, PROBLEM_SHORT_NAME, *PROBLEM_ARGV)
+    _dh("set_main_problem", "-C", CATALOG, f"problem.{PROBLEM_SHORT_NAME}")
     _dh("experiment", "-C", CATALOG, "begin", LABEL)
 
 

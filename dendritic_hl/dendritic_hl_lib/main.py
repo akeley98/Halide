@@ -21,7 +21,7 @@ from . import allow_harness_flag
 # and the agent's `experiment build_external`/`add_schedule_node`).  Every other
 # tool is turned off (see _build_parser and main()).
 _NO_HARNESS_ALLOWLIST = frozenset({
-    "experiment", "new_catalog", "disable_problem", "new_problem"})
+    "experiment", "new_catalog", "disable_problem", "new_problem", "set_main_problem"})
 
 # idea.md is the human-facing spec; `dh_hl help <command>` renders the relevant
 # tool section from it so the detailed per-command docs have a single source.
