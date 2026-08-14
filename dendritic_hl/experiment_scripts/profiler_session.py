@@ -36,6 +36,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import uuid
 
 # ./dh_hl sits one directory up from this script (dendritic_hl/dh_hl).
 DH_HL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -156,12 +157,15 @@ def main():
         proposal_path = pf.name
     try:
         out = runner.run("new_sub_session", *cat, "-s", parent_session,
-                         "profiler_session", proposal_path, anchor_id)
+                         "profiler_session_{}".format(uuid.uuid4().hex),
+                         proposal_path, anchor_id)
     finally:
         os.unlink(proposal_path)
     handle = _line_after(out, "Session handle: ")
     print(handle)
     sess = [*cat, "-s", handle]
+
+    runner.run("set_halide_path", *sess, os.path.expanduser("~/Halide"))
 
     # Record [catalog, session_full_id] early, so we don't do all the profiling
     # work and then die before persisting where the results landed.
@@ -193,9 +197,9 @@ def main():
     counter = 0
     total = PROFILE_PASSES * len(node_list)
     for _ in range(PROFILE_PASSES):
-        print(f"{counter}/{total}", file=sys.stderr)
-        counter += 1
         for node in node_list:
+            print(f"{counter}/{total}", file=sys.stderr)
+            counter += 1
             runner.run("init_build", *sess,
                        "--target", node, "--other", "none")
             runner.run("build", *sess, "--profile", "1")
