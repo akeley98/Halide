@@ -49,7 +49,9 @@ _FALLBACK_STYLE = [
 ]
 
 
-seen_legend_labels = set()
+legend_handles = []
+legend_labels = []
+seen_labels_for_legend = set()
 
 
 def get_legend_label(label):
@@ -162,20 +164,19 @@ def plot_series(ax, series, style, x_end, show_scatter=False):
     short = series["session"].split("_")[0] + "@" + series["session"][:19]
     label = series['label']
 
-    if label not in seen_legend_labels:
-        maybe_label = {"label": get_legend_label(label)}
-        seen_legend_labels.add(label)
-    else:
-        maybe_label = {}
-
-    ax.step(step_t, step_c, where="post", color=colour, lw=1.8, zorder=3, **maybe_label)
+    h_step, = ax.step(step_t, step_c, where="post", color=colour, lw=1.8, zorder=3)
     # Markers on the down-step corners (the new-record schedules).
-    ax.scatter(improve_t, improve_c, color=colour, marker=marker, s=55,
-               zorder=4, edgecolors="white", linewidths=0.6)
+    h_scatter = ax.scatter(improve_t, improve_c, color=colour, marker=marker, s=55,
+                           zorder=4, edgecolors="white", linewidths=0.6)
     if show_scatter:
         # Faint context: every evaluated schedule.  Off by default -- it clutters
         # charts that overlay many sessions.
         ax.scatter(ts, costs, color=colour, marker=marker, s=18, alpha=0.22, zorder=2)
+
+    if label not in seen_labels_for_legend:
+        legend_labels.append(get_legend_label(label))
+        legend_handles.append((h_step, h_scatter))
+        seen_labels_for_legend.add(label)
 
     return {"colour": colour, "start": (ts[0], running[0]), "finish": (x_end, running[-1])}
 
@@ -237,6 +238,7 @@ def main(argv=None):
     if not args.show:
         matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.legend_handler import HandlerTuple
 
     fig, ax = plt.subplots(figsize=(9, 5.5))
     seen_styles = {}
@@ -268,7 +270,11 @@ def main(argv=None):
     ax.set_ylabel("cost  (runtime relative to reference)")
     ax.set_title(args.title)
     ax.grid(True, which="major", axis="both", alpha=0.25)
-    ax.legend(fontsize=8, framealpha=0.9)
+    ax.legend(
+        handles=legend_handles,
+        labels=legend_labels,
+        handler_map={tuple: HandlerTuple(ndivide=None)},
+        fontsize=8, framealpha=0.9)
     fig.tight_layout()
 
     fig.savefig(args.output, dpi=150)
