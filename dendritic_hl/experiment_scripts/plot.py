@@ -38,15 +38,31 @@ _ID_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{6}_\d{6}Z)_([0-9a-f]{64})$")
 # Gold o: Guide true (purple x, guide false)
 # Heavy/darker: Harness true (lighter, harness false)
 _LABEL_STYLE = {
-    "harness_T_guide_T": ("#957c00", "o"),
-    "harness_T_guide_F": ("#7c007c", "x"),
-    "harness_F_guide_T": ("#e1bc00", "o"),
-    "harness_F_guide_F": ("#e800e8", "x"),
+    "harness_T_guide_T": ("#B39500", "o"),
+    "harness_T_guide_F": ("#950095", "x"),
+    "harness_F_guide_T": ("#dac489", "o"),
+    "harness_F_guide_F": ("#daa0da", "x"),
 }
 # Fallback styles for unrecognised labels.
 _FALLBACK_STYLE = [
     ("#7c3aed", "v"), ("#0891b2", "P"), ("#be185d", "X"), ("#4b5563", "*"),
 ]
+
+
+seen_legend_labels = set()
+
+
+def get_legend_label(label):
+    legend = ""
+    if label.startswith("harness_T_"):
+        legend += " harness ON"
+    if label.startswith("harness_F_"):
+        legend += " harness OFF"
+    if label.endswith("_guide_T"):
+        legend += " guide ON"
+    if label.endswith("_guide_F"):
+        legend += " guide OFF"
+    return legend or label
 
 
 def _find_dh_hl(explicit):
@@ -144,9 +160,15 @@ def plot_series(ax, series, style, x_end, show_scatter=False):
     step_c = running + [running[-1]]
 
     short = series["session"].split("_")[0] + "@" + series["session"][:19]
-    legend = f"{series['label']}  [{short}]"
+    label = series['label']
 
-    ax.step(step_t, step_c, where="post", color=colour, lw=1.8, zorder=3, label=legend)
+    if label not in seen_legend_labels:
+        maybe_label = {"label": get_legend_label(label)}
+        seen_legend_labels.add(label)
+    else:
+        maybe_label = {}
+
+    ax.step(step_t, step_c, where="post", color=colour, lw=1.8, zorder=3, **maybe_label)
     # Markers on the down-step corners (the new-record schedules).
     ax.scatter(improve_t, improve_c, color=colour, marker=marker, s=55,
                zorder=4, edgecolors="white", linewidths=0.6)
