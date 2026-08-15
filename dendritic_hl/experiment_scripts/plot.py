@@ -34,12 +34,14 @@ _TS_FMT = "%Y-%m-%dT%H%M%S_%fZ"
 # A schedule node full ID is "{timestamp}_{sha256hex}".
 _ID_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{6}_\d{6}Z)_([0-9a-f]{64})$")
 
-# Colour + marker per experiment label (plot.md: code by experiment label).
+# Color + marker per experiment label
+# Gold o: Guide true (purple x, guide false)
+# Heavy/darker: Harness true (lighter, harness false)
 _LABEL_STYLE = {
-    "harness_T_guide_T": ("#2563eb", "o"),  # blue circle
-    "harness_T_guide_F": ("#dc2626", "s"),  # red square
-    "harness_F_guide_T": ("#16a34a", "^"),  # green triangle
-    "harness_F_guide_F": ("#d9820a", "D"),  # amber diamond
+    "harness_T_guide_T": ("#957c00", "o"),
+    "harness_T_guide_F": ("#7c007c", "x"),
+    "harness_F_guide_T": ("#e1bc00", "o"),
+    "harness_F_guide_F": ("#e800e8", "x"),
 }
 # Fallback styles for unrecognised labels.
 _FALLBACK_STYLE = [
