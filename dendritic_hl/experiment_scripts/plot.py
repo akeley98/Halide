@@ -55,9 +55,9 @@ seen_legend_labels = set()
 def get_legend_label(label):
     legend = ""
     if label.startswith("harness_T_"):
-        legend += " harness ON"
+        legend += "harness ON"
     if label.startswith("harness_F_"):
-        legend += " harness OFF"
+        legend += "harness OFF"
     if label.endswith("_guide_T"):
         legend += " guide ON"
     if label.endswith("_guide_F"):
