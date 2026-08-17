@@ -60,7 +60,7 @@ class CliRunner:
         self.log_path = log_path
         self._log = []
 
-    def run(self, *args):
+    def run(self, *args, allow_fail=False):
         argv = [DH_HL, *args]
         # Record before running so a command that fails is still logged.
         self._log.append(list(argv))
@@ -69,9 +69,12 @@ class CliRunner:
         if result.returncode != 0:
             sys.stderr.write(result.stdout)
             sys.stderr.write(result.stderr)
-            raise SystemExit(
-                "dh_hl command failed ({}): {}".format(
-                    result.returncode, " ".join(args)))
+            msg ="dh_hl command failed ({}): {}".format(result.returncode, " ".join(args))
+            if allow_fail:
+                sys.stderr.write(msg)
+                sys.stderr.write("\n")
+            else:
+                raise SystemExit(msg)
         return result.stdout
 
     def _flush_log(self):
@@ -202,7 +205,11 @@ def main():
             counter += 1
             runner.run("init_build", *sess,
                        "--target", node, "--other", "none")
-            runner.run("build", *sess, "--profile", "1")
+            # Note, no harness sessions can have runtime failures for major schedule nodes.
+            # Therefore, I have to forgive failures.
+            # Even the json_schedule_info "result" is useless since it
+            # checks compile errors only.
+            runner.run("build", *sess, "--profile", "1", allow_fail=True)
 
 
 if __name__ == "__main__":
