@@ -28,9 +28,7 @@ Add a `--json-append ...` argument to add a record of that profiler run into som
 
 NOTE: error prone issues: the record will be added to the profiler sessions even if the profiling failed for some reason.
 
-Use `plot.py` on that "profiler sessions" file to plot the results.
-
-TODO split `plot.py` into "aggreate summary stats" and "plot stats"
+Use `plot_generate_data.py` and `plot_render.py` 
 
 
 # Halide Path
