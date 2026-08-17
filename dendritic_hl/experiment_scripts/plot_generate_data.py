@@ -4,8 +4,8 @@
 Input: File path to JSON list holding pairs of (catalog dir, session id).
 This should have been assembled by the previous script, profiler_session.py
 
-Output: JSON object for passing to plot_render.py.
-It is a list of experiment objects, with schema
+Output: JSON list of experiment objects for passing to plot_render.py.
+The experiment object schema is:
 
     obj["label"] -> label: string
     obj["begin_timestamp"] -> experiment begin timestamp: string
@@ -17,7 +17,7 @@ The obj["schedules"] list has one object for each node named by
 `dh_hl experiment json_test_schedules` sorted by timestamp,
 with "null" cost schedules excluded (likely build failure).
 
-The schedule object schema is
+The schedule object schema is:
 
     sch["id"] -> full ID of node: string
     sch["timestamp"] -> timestamp: string (same format as dh_hl)
