@@ -1121,10 +1121,8 @@ You will have to set the Halide path afterwards.
 
 * One top-level session node (terminus) seeded with that idea node.
 
-* A problem object with short name `default`, state `main`,
-  and CLI `<RunGenMain> --benchmarks=all --estimate_all`.
-  Note this problem only works for generators that include
-  `set_estimate` for all input sizes.
+* A problem is intentionally NOT added by default (so a fresh catalog has no
+  main problem; add one with `new_problem` and `set_main_problem`).
 
 * A golden is intentionally NOT added by default.
 

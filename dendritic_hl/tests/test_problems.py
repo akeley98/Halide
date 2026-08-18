@@ -1,6 +1,6 @@
 """Problem objects: model (create/dup/validate), state transitions, short-ID
-resolution/formatting, the CRUD/query tools, new_catalog's default problem, and
-json_export inclusion (idea.md "Problem Object State" / "Problem Object Tools")."""
+resolution/formatting, the CRUD/query tools, new_catalog creating no problem,
+and json_export inclusion (idea.md "Problem Object State" / "Problem Object Tools")."""
 
 import json
 import os
@@ -248,7 +248,7 @@ def test_set_problem_short_name(tmp_path, run_tool, capsys, reset_safety):
 
 
 # ---------------------------------------------------------------------------
-# new_catalog default problem + json_export
+# new_catalog creates no default problem + json_export
 # ---------------------------------------------------------------------------
 
 def _write(tmp_path, name, text):
@@ -257,8 +257,8 @@ def _write(tmp_path, name, text):
     return str(p)
 
 
-def test_new_catalog_creates_default_main_problem(tmp_path, run_tool, capsys,
-                                                  reset_safety):
+def test_new_catalog_creates_no_default_problem(tmp_path, run_tool, capsys,
+                                                reset_safety):
     cat_dir = str(tmp_path / "fresh.dh_hl")
     run_tool(tools.cmd_new_catalog, ns(
         catalog=cat_dir, proposal_name="seed",
@@ -267,10 +267,12 @@ def test_new_catalog_creates_default_main_problem(tmp_path, run_tool, capsys,
         input_parameters=None))
     capsys.readouterr()
 
-    j = json.loads(_out(run_tool, capsys, tools.cmd_json_problem_info,
-                        ns(catalog=cat_dir, problem="main")))
-    assert j == {"argv": ["<RunGenMain>", "--benchmarks=all", "--estimate_all"],
-                 "state": "main", "short_name": "default"}
+    # A fresh catalog has no problems, so there is no main problem to resolve.
+    with pytest.raises(DhHlError, match="no main problem"):
+        run_tool(tools.cmd_json_problem_info, ns(catalog=cat_dir, problem="main"))
+    obj = json.loads(_out(run_tool, capsys, tools.cmd_json_export,
+                          ns(catalog=cat_dir)))
+    assert obj["problems"] == {}
 
 
 def test_json_export_includes_problems(tmp_path, run_tool, capsys, reset_safety):

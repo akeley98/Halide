@@ -48,8 +48,9 @@ def _line(out, prefix):
 
 
 def _bootstrap_two_problems(run_cli, tmp_path):
-    """new_catalog + init_workspace + a `small` and `large` RunGenMain problem
-    (the default problem is disabled so it doesn't get profiled).  Returns the
+    """new_catalog + init_workspace + a `small` and `large` RunGenMain problem.
+    new_catalog creates no problem, so these two are the only enabled problems
+    and `build --profile` (no --problem) profiles exactly them.  Returns the
     session handle."""
     cat_dir = str(tmp_path / "proj.dh_hl")
     (tmp_path / "p.txt").write_text("problem sizes\n")
@@ -63,9 +64,6 @@ def _bootstrap_two_problems(run_cli, tmp_path):
     for name, argv in (("small", _SMALL), ("large", _LARGE)):
         r = run_cli("new_problem", "-s", handle, name, *argv)
         assert r.returncode == 0, r.stderr
-    # Disable the default problem so `build --profile` (no --problem) profiles
-    # exactly small + large.
-    assert run_cli("disable_problem", "-s", handle, "problem.default").returncode == 0
     return cat_dir, handle
 
 

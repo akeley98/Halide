@@ -15,7 +15,7 @@ import shutil
 
 import pytest
 
-from conftest import _PKG_ROOT, HALIDE_DIR, HALIDE_BUILD_DIR
+from conftest import _PKG_ROOT, HALIDE_DIR, HALIDE_BUILD_DIR, add_default_problem_cli
 
 pytestmark = [
     pytest.mark.halide,
@@ -39,6 +39,7 @@ def _bootstrap(run_cli, tmp_path):
     (tmp_path / "p.txt").write_text("golden explore\n")
     r = run_cli("new_catalog", "-C", cat_dir, "seed", str(tmp_path / "p.txt"), _GEN)
     assert r.returncode == 0, r.stderr
+    add_default_problem_cli(run_cli, cat_dir)
     handle = _line(r.stdout, "Session handle: ")
     assert run_cli("init_workspace", "-s", handle).returncode == 0, "init_workspace"
     assert run_cli("set_halide_path", "-s", handle,

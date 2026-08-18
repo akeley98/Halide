@@ -10,6 +10,8 @@ them via -C/-s.
 import json
 import os
 
+from conftest import add_default_problem_cli
+
 
 def _snapshot(root):
     """Map of relpath -> bytes for every file under *root*, excluding the
@@ -319,7 +321,8 @@ def test_new_problem_cli_remainder_dispatch_and_exit_codes(run_cli, tmp_path):
     flag-laden runner command line, real dispatch + list/json formatting, and
     genuine process exit codes for the empty-argv / bad-short-name / bad-<...> /
     duplicate error paths."""
-    cat_dir, _ = _bootstrap_cli(run_cli, tmp_path)   # has a `default` main problem
+    cat_dir, _ = _bootstrap_cli(run_cli, tmp_path)
+    add_default_problem_cli(run_cli, cat_dir)   # a `default` main problem
 
     # REMAINDER captures flag-like tokens and the <RunGenMain> placeholder
     # verbatim (argv distinct from `default` so it is not a duplicate).

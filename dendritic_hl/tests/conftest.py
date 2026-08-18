@@ -125,10 +125,10 @@ def make_catalog_session(cat_dir, source=DUMMY_SOURCE, idea_name="seed"):
         idea = cat.create_idea(root, idea_name, "seed proposal\n")
         dup = cat.create_schedule(source, parent_idea=idea)
         idea.set_canonical(dup.full_id)
-        # Mimic new_catalog's default problem (a main RunGenMain problem), so
-        # profiling has a problem to run (idea.md "New Catalog Tool").  Created
-        # BEFORE the session, matching new_catalog, so the session records it in
-        # "enabled problems on opening".
+        # Give fixture-based tests a main RunGenMain problem so profiling has a
+        # problem to run (`new_catalog` itself no longer creates one).  Created
+        # BEFORE the session so the session records it in "enabled problems on
+        # opening".
         cat.create_problem(
             ["<RunGenMain>", "--benchmarks=all", "--estimate_all"],
             "default", state=ProblemState.MAIN)
@@ -147,6 +147,21 @@ def make_catalog_session(cat_dir, source=DUMMY_SOURCE, idea_name="seed"):
         return cat.catalog_dir, sess.full_id
     finally:
         locks._reset_for_tests()
+
+
+def add_default_problem_cli(run_cli, cat_dir):
+    """Add the historical `default` main problem to a CLI-created catalog.
+
+    `new_catalog` no longer creates a problem, so CLI bootstraps that need one
+    (e.g. `build --profile`, or the should-accept failed-problem check) add it
+    themselves: a standalone RunGenMain benchmarking all outputs at their
+    set_estimate sizes, set as the main problem.  Mirrors the model-level
+    default in `make_catalog_session`."""
+    r = run_cli("new_problem", "-C", cat_dir, "default",
+                "<RunGenMain>", "--benchmarks=all", "--estimate_all")
+    assert r.returncode == 0, r.stderr
+    r = run_cli("set_main_problem", "-C", cat_dir, "problem.default")
+    assert r.returncode == 0, r.stderr
 
 
 _branch_idea_counter = itertools.count()

@@ -213,9 +213,7 @@ def test_lib_problem_profiled_end_to_end(run_cli, tmp_path):
     r = run_cli("new_problem", "-s", handle, "librun",
                 runner_bin, "<Lib>", "--marker=MAGIC")
     assert r.returncode == 0, r.stderr
-    # Profile with ONLY the lib problem.
-    assert run_cli("disable_problem", "-s", handle,
-                   "problem.default").returncode == 0
+    # Profile with ONLY the lib problem (named explicitly via --problem).
     assert run_cli("init_build", "-s", handle, "--other", "none",
                    "--anchor", "none").returncode == 0
     r = run_cli("build", "-s", handle, "--profile", "2", "--only", "all",
@@ -263,8 +261,6 @@ def test_broken_runner_no_json_is_catalogued_bad_outcome(run_cli, tmp_path):
 
     r = run_cli("new_problem", "-s", handle, "broken", broken, "<Lib>")
     assert r.returncode == 0, r.stderr
-    assert run_cli("disable_problem", "-s", handle,
-                   "problem.default").returncode == 0
     assert run_cli("init_build", "-s", handle, "--other", "none",
                    "--anchor", "none").returncode == 0
     r = run_cli("build", "-s", handle, "--profile", "1", "--only", "all",

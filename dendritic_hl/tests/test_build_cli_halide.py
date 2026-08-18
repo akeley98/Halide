@@ -20,7 +20,7 @@ import shutil
 
 import pytest
 
-from conftest import _PKG_ROOT, HALIDE_DIR, HALIDE_BUILD_DIR
+from conftest import _PKG_ROOT, HALIDE_DIR, HALIDE_BUILD_DIR, add_default_problem_cli
 
 pytestmark = [
     pytest.mark.halide,
@@ -46,6 +46,7 @@ def _bootstrap(run_cli, tmp_path):
     r = run_cli("new_catalog", "-C", cat_dir, "seed",
                 str(tmp_path / "p.txt"), _HISTP)
     assert r.returncode == 0, r.stderr
+    add_default_problem_cli(run_cli, cat_dir)
     handle = _line(r.stdout, "Session handle: ")
     r = run_cli("init_workspace", "-s", handle)
     assert r.returncode == 0, r.stderr

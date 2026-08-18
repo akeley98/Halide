@@ -12,8 +12,8 @@ from dendritic_hl_lib import build, locks, safety, tools
 from dendritic_hl_lib.context import SessionWorkspace
 from dendritic_hl_lib.enums import ProblemState
 from dendritic_hl_lib.errors import DhHlError
-from conftest import (DUMMY_SOURCE, add_synthetic_benchmark_set, ns,
-                      open_catalog)
+from conftest import (DUMMY_SOURCE, add_default_problem_cli,
+                      add_synthetic_benchmark_set, ns, open_catalog)
 
 
 def _reset():
@@ -200,6 +200,7 @@ def _bootstrap(run_cli, tmp_path):
     (tmp_path / "p.txt").write_text("explore\n")
     assert run_cli("new_catalog", "-C", cat_dir, "seed",
                    str(tmp_path / "p.txt"), str(tmp_path / "in.cpp")).returncode == 0
+    add_default_problem_cli(run_cli, cat_dir)
     r = run_cli("list_termini", "-C", cat_dir)
     handle = [l.split("handle:")[1].strip() for l in r.stdout.splitlines()
               if "handle:" in l][0]

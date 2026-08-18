@@ -1254,15 +1254,9 @@ def cmd_new_catalog(args):
     catalog.ensure_created()
     root = catalog.create_schedule(input_source, parent_idea=None,
                                    params_text=params_text)
-    # The default problem reproduces the harness's historical hard-wired runner
-    # (idea.md "New Catalog Tool"): a standalone RunGenMain benchmarking all
-    # outputs at their set_estimate sizes.  It is the `main` problem so the cost
-    # tools have a well-defined default.  Created BEFORE the session so the first
-    # session records it in "enabled problems on opening".
-    catalog.create_problem(
-        ["<RunGenMain>", "--benchmarks=all", "--estimate_all"],
-        "default", state=ProblemState.MAIN)
-    # No parent session and no default anchor (a user-provided schedule may be
+    # No problem is created by default (the user adds one with `new_problem`),
+    # so a fresh catalog has no main problem and records no "enabled problems on
+    # opening".  No parent session and no default anchor (a user-provided schedule may be
     # poor, so it's not a safe anchor -- profiling might never terminate).  No
     # golden is added by default, so golden-on-opening is none.
     session, handle = _create_session(
