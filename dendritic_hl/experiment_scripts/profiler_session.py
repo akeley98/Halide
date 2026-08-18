@@ -49,7 +49,21 @@ DH_HL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # `comment`, where we supply the full prefixed text.
 ANCHOR_IGNORE_TEXT = "anchor schedule for benchmark"
 DUP_IGNORE_TEXT = "EXPERIMENT IGNORE: anchor canonical duplicate"
-PROFILE_PASSES = 8
+
+# At least N batches will be done if the cost so far
+# is less than profile_cost_thresholds[N - 1].
+# Max of len(profile_cost_thresholds)-many profiler runs.
+profile_cost_thresholds = [
+    None,  # 1
+    2.0,   # 2
+    2.0,   # 3
+    1.25,  # 4
+    1.25,  # 5
+    1.25,  # 6
+    1.00,  # 7
+    1.00,  # 8
+    1.00,  # 9
+]
 
 
 class CliRunner:
@@ -198,13 +212,21 @@ def main():
     # Profile one node / one batch at a time (deliberately not using --profile N,
     # N > 1), PROFILE_PASSES times over the whole set.
     counter = 0
-    total = PROFILE_PASSES * len(node_list)
-    for _ in range(PROFILE_PASSES):
+    MAX_PROFILE_PASSES = len(profile_cost_thresholds)
+    total = MAX_PROFILE_PASSES * len(node_list)
+    for batch in range(MAX_PROFILE_PASSES):
         for node in node_list:
             print(f"{counter}/{total}", file=sys.stderr)
             counter += 1
             runner.run("init_build", *sess,
                        "--target", node, "--other", "none")
+
+            if batch > 0:
+                cost = json.loads(runner.run("json_ranking_cost", *sess, node))["cost"]
+                if cost is None or not (cost < profile_cost_thresholds[batch]):
+                    # Trace the code carefully if you think [batch] is wrong.
+                    continue
+
             # Note, no harness sessions can have runtime failures for major schedule nodes.
             # Therefore, I have to forgive failures.
             # Even the json_schedule_info "result" is useless since it
