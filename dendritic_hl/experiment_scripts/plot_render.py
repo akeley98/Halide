@@ -186,21 +186,29 @@ def _draw_experiment(ax, exp, scatter_all, x_right):
     ax.step(step_x, step_y, where="post", color=color, lw=1.8, zorder=3)
 
     # Scatter plot: O if clone_in, X otherwise.
+    # Experiment end marker: square at (newest schedule seconds, best cost).
+    # Drawn *behind* the X/O scatter (but above the curve) and made a little
+    # larger so its corners peek out: when the final schedule has ~the same
+    # cost as the best and the two markers overlap, the X/O on top still shows
+    # what kind of schedule the last one was.
+    ax.scatter([exp.end_seconds], [exp.best_cost], color=color, marker="s",
+               s=90, zorder=3.5, edgecolors="white", linewidths=0.8)
+
     scattered = exp.schedules if scatter_all else corners
     for s in scattered:
         marker = marker_for_schedule(s.clone_in)
         if marker == "x":
-            # 'x' is an unfilled marker: color it directly, no edge.
+            # 'x' is unfilled and can't take an edgecolor, so give it a white
+            # halo -- a thicker white 'x' underneath -- which keeps the X shape
+            # legible even when it sits on the same-colored end square.
+            ax.scatter([s.seconds], [s.cost], color="white", marker=marker,
+                       s=42, zorder=3.8, linewidths=3.5)
             ax.scatter([s.seconds], [s.cost], color=color, marker=marker,
                        s=42, zorder=4, linewidths=1.5)
         else:
             # 'o' gets a thin white edge so light colors stay visible.
             ax.scatter([s.seconds], [s.cost], color=color, marker=marker,
                        s=42, zorder=4, edgecolors="white", linewidths=0.8)
-
-    # Experiment end marker: square at (newest schedule seconds, best cost).
-    ax.scatter([exp.end_seconds], [exp.best_cost], color=color, marker="s",
-               s=60, zorder=5, edgecolors="white", linewidths=0.8)
 
 
 def _x_bounds(experiments):
