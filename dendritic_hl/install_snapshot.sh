@@ -6,7 +6,15 @@
 # shares no data with the dev tree.
 #
 # Usage:
-#   ./install_snapshot.sh [LABEL]     # LABEL defaults to a UTC timestamp
+#   ./install_snapshot.sh ALLOW_HARNESS GUIDE_ENABLED [LABEL]
+#
+# ALLOW_HARNESS and GUIDE_ENABLED are booleans (1/0, true/false, yes/no, on/off)
+# that get baked into the snapshot's dendritic_hl_lib/harness_config.json, which
+# is what dendritic_hl_lib.allow_harness_flag.enabled and
+# dendritic_hl_lib.guide_flag.enabled read their default from at import time.  No
+# code editing, no grep-and-replace: the snapshot is just a frozen tree plus a
+# rewritten JSON.
+# LABEL (optional) defaults to a UTC timestamp.
 #
 # Freezes the tree to ~/.dh_hl/snapshots/<LABEL>/ and (re)points the symlink
 #   ~/.local/bin/dh_hl -> <that snapshot>/dh_hl
@@ -15,8 +23,27 @@
 # `dh_hl` -- no root, no /usr/local/bin, no PATH edits.
 set -euo pipefail
 
+# --- parse the two boolean flag args -------------------------------------
+# Accept the common spellings and normalise to JSON literals true/false.
+parse_bool() {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on|y|t)   echo true ;;
+    0|false|no|off|n|f)  echo false ;;
+    *) echo "install_snapshot: invalid boolean '$1' (use 1/0, true/false)" >&2
+       exit 1 ;;
+  esac
+}
+
+if [[ $# -lt 2 ]]; then
+  echo "usage: $0 ALLOW_HARNESS GUIDE_ENABLED [LABEL]" >&2
+  echo "  ALLOW_HARNESS / GUIDE_ENABLED: 1/0, true/false, yes/no, on/off" >&2
+  exit 1
+fi
+ALLOW_HARNESS="$(parse_bool "$1")"
+GUIDE_ENABLED="$(parse_bool "$2")"
+
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LABEL="${1:-$(date -u +%Y%m%d-%H%M%SZ)}"
+LABEL="${3:-$(date -u +%Y%m%d-%H%M%SZ)}"
 DEST_ROOT="${DH_HL_SNAPSHOT_ROOT:-$HOME/.dh_hl/snapshots}"
 DEST="$DEST_ROOT/$LABEL"
 LINK_DIR="$HOME/.local/bin"
@@ -56,6 +83,20 @@ rsync -a \
   --exclude='*~' \
   --exclude='#*#' \
   "$SRC/" "$DEST/"
+
+# Bake the requested flag defaults into the snapshot's config.  This is the ONLY
+# knob the two flag modules read at import time, so rewriting this one file is
+# what freezes allow_harness_flag.enabled / guide_flag.enabled for the snapshot.
+CONFIG="$DEST/dendritic_hl_lib/harness_config.json"
+[[ -f "$CONFIG" ]] || { echo "install_snapshot: missing '$CONFIG' in snapshot" >&2; exit 1; }
+cat > "$CONFIG" <<EOF
+{
+  "allow_harness": $ALLOW_HARNESS,
+  "guide_enabled": $GUIDE_ENABLED
+}
+EOF
+
+echo "Snapshot flags:    allow_harness=$ALLOW_HARNESS  guide_enabled=$GUIDE_ENABLED"
 
 # Freeze it: no writes to the snapshotted harness.
 chmod -R a-w "$DEST"
