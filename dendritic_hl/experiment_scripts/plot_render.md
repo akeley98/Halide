@@ -39,6 +39,9 @@ See `plot_generate_data.py`
 
 * `{label}_{n}/cost_list.json`, per-experiment cost list (see output C).
 
+* `{label}_{n}/best_generator.cpp`, `{label}_{n}/best_parameters.json`,
+  a copy of that experiment's lowest-cost schedule (see output B).
+
 NB inconsistency of per-experiment chart not being in the
 per-experiment directory is intentional.
 This is to make flipping through the charts in `eog` easier.
@@ -121,7 +124,9 @@ associated with the corresponding experiment's curve.
 ## X/Y Bounds
 
 X bounds should be such that all scatter plot points fit
-(NB this varies for the per-experiment charts).
+for the "all experiments" top level chart.
+Use these bounds for all charts, even if tighter bounds are possible
+for a single-experiment chart.
 
 Y bounds are as specified by the CLI.
 
@@ -138,6 +143,11 @@ In the per-experiment directory, for each schedule, output
 * `{seconds}_{n}_generator.cpp`, generator C++ source
 
 * `{seconds}_{n}_parameters.json`, parameters JSON object
+
+Furthermore, for the lowest-cost schedule (arbitrary tiebreaker)
+*per-experiment* output that schedule's C++/JSON as
+`best_generator.cpp` and `best_parameters.json`
+in the per-experiment directory.
 
 
 # Output C: Per-Experiment Cost List

@@ -131,6 +131,10 @@ class Experiment:
     def best_cost(self):
         return min(s.cost for s in self.schedules)
 
+    def best_schedule(self):
+        """The lowest-cost schedule (earliest one wins ties, arbitrarily)."""
+        return min(self.schedules, key=lambda s: s.cost)
+
     @property
     def end_seconds(self):
         # Newest schedule (schedules are time-sorted).
@@ -246,13 +250,12 @@ def _make_legend(ax, plt, labels_in_order):
     ax.legend(handles, texts, fontsize=8, framealpha=0.9)
 
 
-def render_top_chart(plt, experiments, out_path, title, ymin, ymax):
+def render_top_chart(plt, experiments, out_path, title, ymin, ymax, x_bounds):
     """Top-level chart: every experiment, best-yet scatter only."""
     fig, ax = plt.subplots(figsize=(9, 5.5))
-    bounds = _x_bounds(experiments)
     for exp in experiments:
-        _draw_experiment(ax, exp, scatter_all=False, x_right=bounds[1])
-    _finish_axes(ax, bounds, title, ymin, ymax)
+        _draw_experiment(ax, exp, scatter_all=False, x_right=x_bounds[1])
+    _finish_axes(ax, x_bounds, title, ymin, ymax)
     # Legend lists every configured label, in configuration order.
     _make_legend(ax, plt, [label for label, _, _ in LABEL_STYLE])
     fig.tight_layout()
@@ -260,12 +263,15 @@ def render_top_chart(plt, experiments, out_path, title, ymin, ymax):
     plt.close(fig)
 
 
-def render_experiment_chart(plt, exp, out_path, title, ymin, ymax):
-    """Per-experiment chart: one experiment, all schedules scattered."""
+def render_experiment_chart(plt, exp, out_path, title, ymin, ymax, x_bounds):
+    """Per-experiment chart: one experiment, all schedules scattered.
+
+    Uses the same `x_bounds` as the top-level chart so the charts share an
+    x-axis and can be flipped through without the axis shifting.
+    """
     fig, ax = plt.subplots(figsize=(9, 5.5))
-    bounds = _x_bounds([exp])
-    _draw_experiment(ax, exp, scatter_all=True, x_right=bounds[1])
-    _finish_axes(ax, bounds, title, ymin, ymax)
+    _draw_experiment(ax, exp, scatter_all=True, x_right=x_bounds[1])
+    _finish_axes(ax, x_bounds, title, ymin, ymax)
     _make_legend(ax, plt, [exp.label])
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
@@ -286,6 +292,13 @@ def write_experiment_dir(exp, exp_dir):
             f.write(s.source)
         with open(os.path.join(exp_dir, s.name + "_parameters.json"), "w") as f:
             json.dump(s.parameters, f, indent=2)
+
+    # A copy of the lowest-cost schedule, for convenient reference.
+    best = exp.best_schedule()
+    with open(os.path.join(exp_dir, "best_generator.cpp"), "w") as f:
+        f.write(best.source)
+    with open(os.path.join(exp_dir, "best_parameters.json"), "w") as f:
+        json.dump(best.parameters, f, indent=2)
 
     # Output C: cost_list.json.
     write_cost_list(exp, os.path.join(exp_dir, "cost_list.json"))
@@ -353,9 +366,13 @@ def main(argv=None):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
+    # X bounds are computed once over all experiments and shared by every
+    # chart, so the axes line up when flipping through them.
+    x_bounds = _x_bounds(experiments)
+
     # Top-level chart.
     render_top_chart(plt, experiments, os.path.join(args.output, "chart.png"),
-                     args.title, args.ymin, args.ymax)
+                     args.title, args.ymin, args.ymax, x_bounds)
 
     # Per-experiment outputs.
     for exp in experiments:
@@ -364,7 +381,7 @@ def main(argv=None):
         # per-experiment directory.
         render_experiment_chart(
             plt, exp, os.path.join(args.output, exp.dir_name + ".png"),
-            args.title, args.ymin, args.ymax)
+            args.title, args.ymin, args.ymax, x_bounds)
         write_experiment_dir(exp, os.path.join(args.output, exp.dir_name))
 
     print("wrote {} ({} experiments)".format(args.output, len(experiments)))
