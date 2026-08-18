@@ -659,7 +659,8 @@ def _build_parser():
     # bin directory (build_external, which needs no -C).
     sp = add("experiment")
     sp.add_argument("action", choices=["begin", "get_begin_label",
-                                       "get_begin_timestamp", "add_schedule_node",
+                                       "get_begin_timestamp", "time",
+                                       "add_schedule_node",
                                        "json_test_schedules", "build_external"])
     sp.add_argument("arg1", nargs="?",
                     help="begin: label; add_schedule_node/build_external: "

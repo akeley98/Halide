@@ -3255,6 +3255,7 @@ Optimize this if needed, but this shouldn't be in the agent hot loop.
     dh_hl experiment -C ... begin {label}
     dh_hl experiment -C ... get_begin_label
     dh_hl experiment -C ... get_begin_timestamp
+    dh_hl experiment -C ... time
     dh_hl experiment -C ... add_schedule_node {generator.cpp} {generator_parameters.json}
     dh_hl experiment -C ... json_test_schedules
     dh_hl experiment build_external {generator.cpp} {generator_parameters.json} {bin dir}
@@ -3282,6 +3283,10 @@ Prints label + newline set by `begin`
 
 **get begin timestamp:**
 Prints timestamp + newline set by `begin`
+
+**time:**
+Prints number of seconds elapsed + newline, in microsecond precision.
+The only output on `stdout` is the number and its newline.
 
 **add schedule node:**
 Add a new root schedule node holding the given files.

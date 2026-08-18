@@ -3,7 +3,7 @@
 These live in their own file (per idea.md) so the whole experiment feature can
 be deleted in one sweep once the LLM Halide scheduling experiment is done.
 
-Covers the sub-actions: begin / get_begin_label / get_begin_timestamp
+Covers the sub-actions: begin / get_begin_label / get_begin_timestamp / time
 (catalog-level write-once state under `experiment/`), add_schedule_node (a
 workspace-free root schedule creator that silent-dedups on content hash and
 takes optional EXPERIMENT IGNORE commentary), json_test_schedules (major
@@ -13,6 +13,7 @@ catalog-free compile with Halide hard-wired to ~/Halide).
 
 import json
 import os
+import re
 import shutil
 
 import pytest
@@ -69,6 +70,25 @@ def test_get_before_begin_fails(run_tool, session):
         run_tool(tools.cmd_experiment, _xp(session, "get_begin_label"))
     with pytest.raises(DhHlError, match="has not been called"):
         run_tool(tools.cmd_experiment, _xp(session, "get_begin_timestamp"))
+
+
+# ---------------------------------------------------------------------------
+# time
+# ---------------------------------------------------------------------------
+
+def test_time_prints_elapsed_seconds(run_tool, session, capsys):
+    _begin(run_tool, session, "harness_F_guide_F")
+    capsys.readouterr()  # discard anything from begin
+    run_tool(tools.cmd_experiment, _xp(session, "time"))
+    out = capsys.readouterr().out
+    # The ONLY stdout is the number + newline, in microsecond precision.
+    assert re.fullmatch(r"\d+\.\d{6}\n", out), repr(out)
+    assert float(out) >= 0.0
+
+
+def test_time_before_begin_fails(run_tool, session):
+    with pytest.raises(DhHlError, match="has not been called"):
+        run_tool(tools.cmd_experiment, _xp(session, "time"))
 
 
 # ---------------------------------------------------------------------------

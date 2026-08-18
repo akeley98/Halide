@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sys
+from datetime import datetime, timezone
 
 from . import build
 from . import cost
@@ -331,6 +332,8 @@ def cmd_experiment(args):
         _experiment_get(args, "label.txt")
     elif action == "get_begin_timestamp":
         _experiment_get(args, "begin_timestamp.txt")
+    elif action == "time":
+        _experiment_time(args)
     elif action == "add_schedule_node":
         _experiment_add_schedule_node(args)
     elif action == "json_test_schedules":
@@ -379,6 +382,19 @@ def _experiment_get(args, filename):
     except FileNotFoundError:
         raise DhHlError("experiment begin has not been called")
     print(text.rstrip("\n"))
+
+
+def _experiment_time(args):
+    ctx = Context.for_catalog(args)
+    path = os.path.join(_experiment_dir(ctx.catalog), "begin_timestamp.txt")
+    try:
+        with open(path) as f:
+            ts = f.read().strip()
+    except FileNotFoundError:
+        raise DhHlError("experiment begin has not been called")
+    elapsed = (datetime.now(timezone.utc) - ids.parse_timestamp(ts)).total_seconds()
+    # microsecond precision; NB the only stdout is the number + newline
+    print("{:.6f}".format(elapsed))
 
 
 def _experiment_add_schedule_node(args):

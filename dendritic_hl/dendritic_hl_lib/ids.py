@@ -44,9 +44,17 @@ _HASH_RE = re.compile(r"[0-9a-f]{64}\Z")
 _PROPOSAL_NAME_RE = re.compile(r"[A-Za-z0-9_]{1,72}\Z")
 
 
+_TIMESTAMP_FORMAT = "%Y-%m-%dT%H%M%S_%fZ"
+
+
 def now_timestamp():
     """Current UTC wall-clock time as a dendritic_hl timestamp string."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%S_%fZ")
+    return datetime.now(timezone.utc).strftime(_TIMESTAMP_FORMAT)
+
+
+def parse_timestamp(s):
+    """Parse a dendritic_hl timestamp string into a UTC-aware datetime."""
+    return datetime.strptime(s, _TIMESTAMP_FORMAT).replace(tzinfo=timezone.utc)
 
 
 def sha256_hex(data):
