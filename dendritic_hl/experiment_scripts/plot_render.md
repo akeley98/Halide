@@ -61,7 +61,7 @@ The top-level chart legend starts with a list of
 
 * `harness_F_guide_F`: "harness OFF guide OFF" (color: `#BCBCBC`)
 * `harness_F_guide_T`: "harness OFF guide ON" (color: `#AAE8AA`)
-* `harness_T_guide_F`: "harness ON guide ON" (color: `#333333`)
+* `harness_T_guide_F`: "harness ON guide OFF" (color: `#333333`)
 * `harness_T_guide_T`: "harness ON guide ON" (color: `#009500`)
 
 The per-experiment plot has only the line legend entry
