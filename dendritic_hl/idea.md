@@ -3288,8 +3288,6 @@ Prints timestamp + newline set by `begin`
 Prints number of seconds elapsed + newline, in microsecond precision.
 The only output on `stdout` is the number and its newline.
 
-IMPL TASK: `success` flag set.
-
 **add schedule node:**
 Add a new root schedule node holding the given files.
 This is distinct from `new_root` in that there's no workspace,
@@ -3313,8 +3311,6 @@ full ID of the new or found schedule node and a newline.
 
 **JSON test schedules:**
 Print a JSON list containing (in any order) the string full ID of each schedule node that:
-
-IMPL TASK: replace "major schedule" requirement with `success` requirement.
 
 * has result `success`
 

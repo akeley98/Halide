@@ -3,7 +3,7 @@
 
 Creates a fresh sub-session off the catalog's single terminus, registers an
 externally-supplied "anchor" schedule as the benchmark baseline, then profiles
-every test schedule (major schedule nodes without an EXPERIMENT IGNORE
+every test schedule (success schedule nodes without an EXPERIMENT IGNORE
 commentary) in 8 one-batch passes.
 
     python3 profiler_session.py {catalog_path} {generator.cpp} {generator_parameters.json}
@@ -42,7 +42,7 @@ import uuid
 DH_HL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                      "dh_hl")
 
-# json_test_schedules skips any major schedule with a non-cancelled commentary
+# json_test_schedules skips any success schedule with a non-cancelled commentary
 # whose text starts with EXPERIMENT IGNORE:.  The anchor gets that commentary via
 # `experiment add_schedule_node --ignore` (which prepends the prefix itself); the
 # anchor's duplicate canonical (created by new_sub_session) gets it via a plain

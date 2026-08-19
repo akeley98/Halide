@@ -412,13 +412,15 @@ def _experiment_add_schedule_node(args):
     h = ids.schedule_content_hash(source, params_text)
     existing = [n for n in ctx.catalog.schedules.values() if n.hash == h]
     if existing:
-        # Prefer a major node (the ones json_test_schedules surfaces); pick
+        # Prefer a success node (the ones json_test_schedules surfaces); pick
         # deterministically among any ties.
-        majors = [n for n in existing if n.is_major()]
-        node = min(majors or existing, key=lambda n: n.full_id)
+        successes = [n for n in existing if n.result == Result.SUCCESS]
+        node = min(successes or existing, key=lambda n: n.full_id)
     else:
         node = ctx.catalog.create_schedule(source, parent_idea=None,
                                            params_text=params_text)
+        # Intended for use after a successful build_external, so record success.
+        node.set_result(Result.SUCCESS)
         for text in getattr(args, "ignore", None) or []:
             node.add_commentary("{} {}".format(_EXPERIMENT_IGNORE_PREFIX, text),
                                 review=Review.NEGATIVE)
@@ -443,7 +445,7 @@ def _experiment_build_external(args):
 def _experiment_json_test_schedules(args):
     ctx = Context.for_catalog(args)
     ids_out = [n.full_id for n in ctx.catalog.schedules.values()
-               if n.is_major() and not _experiment_active_ignore(n)]
+               if n.result == Result.SUCCESS and not _experiment_active_ignore(n)]
     print(json.dumps(ids_out))
 
 

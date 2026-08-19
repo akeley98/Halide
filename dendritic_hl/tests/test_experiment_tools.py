@@ -6,7 +6,7 @@ be deleted in one sweep once the LLM Halide scheduling experiment is done.
 Covers the sub-actions: begin / get_begin_label / get_begin_timestamp / time
 (catalog-level write-once state under `experiment/`), add_schedule_node (a
 workspace-free root schedule creator that silent-dedups on content hash and
-takes optional EXPERIMENT IGNORE commentary), json_test_schedules (major
+takes optional EXPERIMENT IGNORE commentary), json_test_schedules (success
 schedules with no active EXPERIMENT IGNORE commentary), and build_external (a
 catalog-free compile taking an explicit Halide path).
 """
@@ -19,7 +19,7 @@ import shutil
 import pytest
 
 from dendritic_hl_lib import guide_flag, ids, safety, tools
-from dendritic_hl_lib.enums import Review
+from dendritic_hl_lib.enums import Result, Review
 from dendritic_hl_lib.errors import DhHlError
 
 from conftest import _PKG_ROOT, HALIDE_BUILD_DIR, HALIDE_DIR, open_catalog
@@ -160,6 +160,8 @@ def test_add_schedule_node_creates_root(run_tool, session, tmp_path, capsys):
     node = cat.get_schedule(full_id)
     assert node.is_root()
     assert node.is_major()
+    # Created for use after a successful build_external, so recorded as success.
+    assert node.result == Result.SUCCESS
     assert node.source == "// A\n"
 
 
@@ -220,7 +222,7 @@ def _json_test_schedules(run_tool, session, capsys):
     return json.loads(capsys.readouterr().out)
 
 
-def test_json_test_schedules_lists_majors_excluding_ignored(
+def test_json_test_schedules_lists_successes_excluding_ignored(
         run_tool, session, tmp_path, capsys):
     plain = _add_node(run_tool, session, tmp_path, capsys, source="// plain\n")
     ignored = _add_node(run_tool, session, tmp_path, capsys, source="// hide\n",
@@ -229,11 +231,14 @@ def test_json_test_schedules_lists_majors_excluding_ignored(
     result = _json_test_schedules(run_tool, session, capsys)
     assert plain in result
     assert ignored not in result
-    # The fixture's seed root + canonical are majors and should be listed too.
+    # The listing is exactly the success + non-ignored nodes.  The fixture's seed
+    # root + canonical are majors but their result is still `unknown`, so they are
+    # NOT listed (the criterion is success, not majorness).
     cat = open_catalog(session.catalog_dir)
-    baseline_majors = [n.full_id for n in cat.schedules.values()
-                       if n.is_major() and n.full_id != ignored]
-    assert set(baseline_majors) <= set(result)
+    non_success = [n.full_id for n in cat.schedules.values()
+                   if n.result != Result.SUCCESS]
+    assert non_success  # the fixture roots are unbuilt
+    assert set(non_success).isdisjoint(result)
 
 
 def test_json_test_schedules_cancelled_ignore_reappears(
