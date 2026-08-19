@@ -430,6 +430,10 @@ Overfitting, including making assumptions that would
 
 * The experiment must end within two hours.
 
+* Unless under severe time pressure, before ending the experiment,
+  output a file issues.md listing problems encountered regarding the
+  experiment toolchain or custom profiler.
+
 * Use `end_experiment.py` when all your tasks are done.
   NOTE: this may kill any running sub-agents and background tasks!
 
