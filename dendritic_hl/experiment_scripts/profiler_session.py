@@ -54,15 +54,15 @@ DUP_IGNORE_TEXT = "EXPERIMENT IGNORE: anchor canonical duplicate"
 # is less than profile_cost_thresholds[N - 1].
 # Max of len(profile_cost_thresholds)-many profiler runs.
 profile_cost_thresholds = [
-    None,  # 1
-    2.0,   # 2
-    2.0,   # 3
-    1.25,  # 4
-    1.25,  # 5
-    1.25,  # 6
-    1.00,  # 7
-    1.00,  # 8
-    1.00,  # 9
+    float('inf'), # 1
+    float('inf'), # 2
+    float('inf'), # 3
+    2.0,          # 4
+    2.0,          # 5
+    1.5,          # 6
+    1.5,          # 7
+    1.0,          # 8
+    1.0,          # 9
 ]
 
 
