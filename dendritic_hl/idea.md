@@ -3288,11 +3288,15 @@ Prints timestamp + newline set by `begin`
 Prints number of seconds elapsed + newline, in microsecond precision.
 The only output on `stdout` is the number and its newline.
 
+IMPL TASK: `success` flag set.
+
 **add schedule node:**
 Add a new root schedule node holding the given files.
 This is distinct from `new_root` in that there's no workspace,
 and hash collisions are silent no-ops rather than errors
 (i.e. don't add a new node if one with the same contents already exists).
+The new node has its result set to `success`.
+(intention, this is used after a successful `build_external`)
 
 Takes optional `--ignore {text}` arguments.
 For each such argument, only if a new schedule node was added,
@@ -3310,7 +3314,9 @@ full ID of the new or found schedule node and a newline.
 **JSON test schedules:**
 Print a JSON list containing (in any order) the string full ID of each schedule node that:
 
-* is a major schedule, and,
+IMPL TASK: replace "major schedule" requirement with `success` requirement.
+
+* has result `success`
 
 * has no non-cancelled commentary whose text starts with `EXPERIMENT IGNORE:`
 
