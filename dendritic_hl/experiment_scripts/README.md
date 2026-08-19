@@ -12,21 +12,10 @@ There are 4 possible experiment labels / configurations:
 
 (Harness usage false/true; guide usage false/true).
 
-Edit `../dendritic_hl_lib/allow_harness_flag.py` and `../dendritic_hl_lib/guide_flag.py`
-to have the correct flag values for the experiment label.
-Then install the customized `dh_hl` harness to `~/.local/bin` using `../install_snapshot.sh`.
-
-Use `init_dir.py` with the label to create a directory seeded with the experiment files.
-This checks that the correct `dh_hl` for the configuration was installed.
-
-Start an agent in that new experiment dir.
-Give `top_level_prompt.txt` to the agent.
-
-After the experiment, run `profiler_session.py` in that directory.
-This is what will create the "official" profiler run for the experiment.
-Add a `--json-append ...` argument to add a record of that profiler run into some "profiler sessions" JSON file.
-
-NOTE: error prone issues: the record will be added to the profiler sessions even if the profiling failed for some reason.
+Pick an experiment directory.
+Run `./run_headless.py {experiment dir} {label}` to run one experiment.
+Multiple experiments ultimately aggregate into `{experiment dir}/sessions.json`.
+Can also use the helper `./run_headless_4.py {experiment dir} {count}`.
 
 Use `plot_generate_data.py` and `plot_render.py` 
 
