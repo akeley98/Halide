@@ -1587,6 +1587,18 @@ Flags:
   only one binary, for the `N`-th generator parameters object;
   in this case `halide error` is the best result possible.
 
+* `--gen-timeout {seconds}` (fractional ok; default: no limit).
+  Kills any single Halide generator invocation (the emit step) that runs
+  longer than this and fails the build for that binary.
+
+* `--exec-timeout {seconds}` (fractional ok; default: no limit).
+  Kills any single profiler pipeline execution that runs longer than this
+  and fails that run (so it yields no benchmark).
+
+Both timeouts guard against untrusted schedules that blow up (exponentially)
+during generation or execution.  They do NOT bound the C++/ninja compile,
+which is not reliably killable; a wedged compile can still hang the build.
+
 This tool exits successfully iff no harness errors occurred
 and all subprocesses succeeded.
 
@@ -1606,6 +1618,28 @@ Important lines emitted by the harness itself are prefixed with
 It's crucial that the catalog lock is not acquired during the
 compilation phase. This prevents locking out other agents
 needlessly (despite they will be locked out soon by profiling).
+
+`--gen-timeout`/`--exec-timeout` are enforced by signalling the **direct child
+only** (`os.kill` on its pid, never the process group): signalling our own group
+would hit `dh_hl` itself, and the emit and pipeline-run are leaf processes, so
+the child is the whole tree.  Escalation is SIGTERM, then a short grace
+(`_KILL_GRACE_SEC`), then SIGKILL.  A timed-out step returns a nonzero
+(negative-signal) exit, so it flows through the same failure handling as any
+other emit/run failure -- timeouts are **not** catalogued distinctly; the only
+signal is a `dh_hl: TIMEOUT:` line on stderr (agents read the output for detail).
+This is exactly why the C++/ninja compile is **not** timed: killing ninja would
+orphan its `cc1plus` grandchildren, and reaping those would need a process group
+we deliberately do not create.  The pipeline run captures stdout via a temp file
+(not a pipe), so killing it can't leave us blocked draining a pipe a survivor
+holds open, nor deadlock on a full pipe buffer.
+
+`--gen-timeout` wraps the `_emit` generator invocation ONLY -- not
+`_ensure_runtime` or generator-name discovery.  A killed emit leaves partial
+artifacts in its subdir, which is harmless *only* because emit is always re-run
+and never cached.  Do NOT add skip-if-exists or ninja-tracking to emit outputs
+(in particular, do not copy `_ensure_runtime`'s `os.path.exists` short-circuit):
+that would let a truncated artifact from a killed emit be silently reused by a
+later link/run.  Such an optimization is incompatible with a killable emit.
 
 The `... with Benchmark ID:` line leads with `...` to tie it to the preceding
 `Profiled ...` line, so agents don't misread the ID as belonging to the

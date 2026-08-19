@@ -44,7 +44,8 @@ def fake_build(monkeypatch):
         return knobs["gen_name"]
     monkeypatch.setattr(build, "_discover_generator_name", fake_discover)
 
-    def fake_emit(bin_dir, gen_exe, gen_name, out_subdir, params, with_stmt):
+    def fake_emit(bin_dir, gen_exe, gen_name, out_subdir, params, with_stmt,
+                  timeout=None):
         # Materialize the .stmt outputs (in the per-(node,i) subdir, as the real
         # emit does) so _publish_stmt has something to copy.
         if with_stmt and knobs["emit_rc"] == 0:
@@ -61,7 +62,7 @@ def fake_build(monkeypatch):
     monkeypatch.setattr(build, "_link_shared",
                         lambda bin_dir, out_subdir: knobs["shared_rc"])
 
-    def fake_bench(bin_dir, cmd, extra_env, json_out, warnings_out):
+    def fake_bench(bin_dir, cmd, extra_env, json_out, warnings_out, timeout=None):
         if not knobs.get("emit_json", True):
             # A broken runner: exits 0 but writes no profiler JSON.
             return knobs["bench_rc"], knobs["stdout"]
@@ -359,7 +360,7 @@ def test_profile_json_path_is_absolute_with_relative_catalog(
     absolute (it is handed to a child running with cwd=bin_dir)."""
     seen = {}
 
-    def spy_bench(bin_dir, cmd, extra_env, json_out, warnings_out):
+    def spy_bench(bin_dir, cmd, extra_env, json_out, warnings_out, timeout=None):
         seen["json_out"] = json_out
         with open(json_out, "w") as f:
             json.dump({"pipelines": [{"name": "x", "profiler_version": 1,
@@ -642,10 +643,10 @@ def test_emit_requests_both_stmt_forms(monkeypatch, tmp_path):
     `-f dh_hl_pipeline` and `-o {subdir}`."""
     seen = {}
 
-    def spy(cmd, cwd=None, env=None):
+    def spy(cmd, cwd=None, env=None, capture=False, timeout=None, label=None):
         seen["cmd"] = cmd
-        return 0
-    monkeypatch.setattr(build, "_run_streamed", spy)
+        return 0, ""
+    monkeypatch.setattr(build, "_run_toolchain", spy)
 
     bin_dir = str(tmp_path)
     build._emit(bin_dir, "gen_exe", "gen", "sub_0", {}, with_stmt=True)

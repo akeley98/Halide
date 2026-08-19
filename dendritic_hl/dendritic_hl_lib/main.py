@@ -298,6 +298,19 @@ def _build_parser():
     sp.add_argument("--problem", action="append", metavar="PROBLEM_ID",
                     help="profile with this problem (repeatable; default: all "
                          "enabled problems)")
+    sp.add_argument("--gen-timeout", type=float, default=None, metavar="SECONDS",
+                    help="kill any single Halide generator emit that runs longer "
+                         "than SECONDS (fractional ok; SIGTERM then SIGKILL) and "
+                         "fail the build. Applies ONLY to the generator step -- "
+                         "NOT the C++/ninja "
+                         "compile, which cannot be reliably killed without process "
+                         "groups (build is not time-bounded in general)")
+    sp.add_argument("--exec-timeout", type=float, default=None,
+                    metavar="SECONDS",
+                    help="kill any single profiler pipeline execution that runs "
+                         "longer than SECONDS (fractional ok; SIGTERM then "
+                         "SIGKILL) and fail that run. Applies ONLY to the "
+                         "pipeline execution step")
 
     sp = add("copy_build_output")
     sp.add_argument("output", help="output file ('-' for stdout)")

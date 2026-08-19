@@ -31,8 +31,10 @@ import argparse
 import json
 import os
 import random
+import signal
 import subprocess
 import sys
+import tempfile
 
 from . import ids
 from . import locks
@@ -172,6 +174,84 @@ def _run_capture(cmd, cwd=None):
     return p.returncode, p.stdout
 
 
+# ---- per-process timeout for the two steps that run untrusted code ----------
+# Only the Halide generator emit and the pipeline run are ever time-limited (they
+# execute schedule-driven / compiled untrusted code that can blow up
+# exponentially).  We enforce the budget by signalling the DIRECT CHILD ONLY --
+# never a process group -- because (a) signalling our own group would hit dh_hl
+# itself, and (b) those two steps are leaf processes, so the child is the whole
+# tree.  This is exactly why ninja/C++ compiles are deliberately NOT timed:
+# killing ninja would orphan its cc1plus grandchildren, and reaping those would
+# require a process group we intentionally do not create.  See idea.md / the
+# feature discussion for the "we can only kill reliably in these two restricted
+# cases" scoping.
+
+# Grace between SIGTERM and the SIGKILL backstop for a timed-out child.  Kept
+# short: the child is a leaf we give a last chance to unwind; one that ignores
+# SIGTERM this long is killed outright.  The timeout tests import this to bracket
+# the SIGTERM-vs-SIGKILL timing, so treat its value as a light test contract.
+_KILL_GRACE_SEC = 2.0
+
+
+def _signal_child(proc, sig):
+    """Send *sig* to the direct child *proc* only (os.kill on its pid, never
+    os.killpg).  Tolerates a child that already exited."""
+    try:
+        os.kill(proc.pid, sig)
+    except ProcessLookupError:
+        pass
+
+
+def _wait_or_kill(proc, timeout, label):
+    """Wait for *proc*, enforcing a wall-clock *timeout* in seconds (None waits
+    forever).  On expiry: print a non-catalogued TIMEOUT notice, SIGTERM the
+    child, allow _KILL_GRACE_SEC, then SIGKILL.  Returns the exit code (negative
+    == killed by that signal) so a timeout flows through the caller's ordinary
+    nonzero-failure handling with no special case."""
+    if timeout is None:
+        return proc.wait()
+    try:
+        return proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        pass
+    sys.stdout.flush()
+    print("dh_hl: TIMEOUT: {} exceeded {:g}s; terminating (SIGTERM)".format(
+        label, timeout), file=sys.stderr)
+    _signal_child(proc, signal.SIGTERM)
+    try:
+        return proc.wait(timeout=_KILL_GRACE_SEC)
+    except subprocess.TimeoutExpired:
+        pass
+    print("dh_hl: TIMEOUT: {} ignored SIGTERM for {:g}s; killing (SIGKILL)".format(
+        label, _KILL_GRACE_SEC), file=sys.stderr)
+    _signal_child(proc, signal.SIGKILL)
+    return proc.wait()
+
+
+def _run_toolchain(cmd, cwd=None, env=None, capture=False, timeout=None,
+                   label="child process"):
+    """Run *cmd* as a direct child with an optional wall-clock *timeout* (see
+    _wait_or_kill).  Flushes our own stdout/stderr first so our banners order
+    before the child's output (see _run_streamed).
+
+    capture=False: child stdout/stderr flow to ours; returns (rc, "").
+    capture=True:  child stdout is captured via a TEMP FILE (not a pipe) and
+                   returned as text; stderr flows to ours.  The temp file is what
+                   makes the timeout safe: killing the child cannot leave us
+                   blocked draining a pipe, and a chatty child cannot deadlock on
+                   a full pipe buffer while we wait."""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    if not capture:
+        proc = subprocess.Popen(cmd, cwd=cwd, env=env)
+        return _wait_or_kill(proc, timeout, label), ""
+    with tempfile.TemporaryFile() as outf:
+        proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=outf)
+        rc = _wait_or_kill(proc, timeout, label)
+        outf.seek(0)
+        return rc, outf.read().decode("utf-8", errors="replace")
+
+
 # ---------------------------------------------------------------------------
 # generator parameter formatting
 # ---------------------------------------------------------------------------
@@ -265,10 +345,18 @@ def _discover_generator_name(bin_dir, gen_exe):
 # phase 2 (emit) + phase 4 (link) + run
 # ---------------------------------------------------------------------------
 
-def _emit(bin_dir, gen_exe, gen_name, out_subdir, params, with_stmt):
+def _emit(bin_dir, gen_exe, gen_name, out_subdir, params, with_stmt,
+          timeout=None):
     """Run the generator, emitting all artifacts into bin/{out_subdir}/ under the
     fixed `-f dh_hl_pipeline` basename.  The subdir isolates this (node, params
-    index)'s outputs, so the stable basename never clobbers another's."""
+    index)'s outputs, so the stable basename never clobbers another's.
+
+    *timeout* (seconds, None = none) caps this generator run only: the emit runs
+    schedule-driven untrusted code that can blow up exponentially.  On expiry the
+    generator is SIGTERM/SIGKILLed and a nonzero code returned, so the caller
+    skips link/run for this index exactly as for any emit failure -- which is safe
+    against partial artifacts because emit is always re-run, never cached (see the
+    _ensure_runtime skip-if-exists note; do NOT copy that pattern here)."""
     os.makedirs(os.path.join(bin_dir, out_subdir), exist_ok=True)
     # Emit the pipeline as a `no_runtime` OBJECT (not static_library): the object
     # has undefined halide_* symbols and carries no runtime of its own, so the
@@ -290,7 +378,9 @@ def _emit(bin_dir, gen_exe, gen_name, out_subdir, params, with_stmt):
     env = dict(os.environ)
     env["DENDRITIC_HL_ALGORITHM_HLPIPE"] = os.path.abspath(
         os.path.join(bin_dir, out_subdir, _PIPELINE + ".hlpipe"))
-    return _run_streamed(cmd, cwd=bin_dir, env=env)
+    rc, _ = _run_toolchain(cmd, cwd=bin_dir, env=env, timeout=timeout,
+                           label="generator emit [{}]".format(out_subdir))
+    return rc
 
 
 def _ensure_runtime(bin_dir, gen_exe):
@@ -357,11 +447,17 @@ def _resolve_run(bin_dir, problem_argv, rungen_rel, shared_rel):
     return cmd, extra_env
 
 
-def _run_benchmark(bin_dir, cmd, extra_env, json_out_path, warnings_out_path):
+def _run_benchmark(bin_dir, cmd, extra_env, json_out_path, warnings_out_path,
+                   timeout=None):
     """Run one profiling command (the problem's resolved argv).  Captures the
     binary's stdout -- it is redirected into the benchmark sub-object (later read
     back by `view_benchmark_stdout`), NOT echoed to the harness stdout (idea.md
-    Build Tool) -- while letting stderr flow.  Returns (rc, stdout_text)."""
+    Build Tool) -- while letting stderr flow.  Returns (rc, stdout_text).
+
+    *timeout* (seconds, None = none) caps this pipeline run only: it executes
+    compiled untrusted code that can blow up exponentially.  On expiry the run is
+    SIGTERM/SIGKILLed and a nonzero code returned, which the profile loop already
+    treats as a failed run (no benchmark recorded)."""
     env = dict(os.environ)
     env["HL_PROFILER_JSON_OUTPUT"] = json_out_path
     # Andrew Adams's profiler doesn't put warnings in the main JSON yet; a
@@ -372,9 +468,8 @@ def _run_benchmark(bin_dir, cmd, extra_env, json_out_path, warnings_out_path):
     # RunGen is deliberately NOT run with --quiet: its `halide_print:`
     # profiler-stats table stays in the captured stdout (an easy read next to the
     # JSON tools; it lands in the benchmark sub-object, not the harness output).
-    p = subprocess.run(cmd, cwd=bin_dir, env=env, stdout=subprocess.PIPE,
-                       universal_newlines=True)
-    return p.returncode, p.stdout or ""
+    return _run_toolchain(cmd, cwd=bin_dir, env=env, capture=True,
+                          timeout=timeout, label="pipeline run")
 
 
 # ---------------------------------------------------------------------------
@@ -633,6 +728,16 @@ def _load_selection(ws):
             "it after fixing the failure)")
 
 
+def _parse_timeout_arg(value, flag):
+    """Validate a --gen-timeout/--exec-timeout value: None (unset) passes through;
+    anything else must be a positive number of seconds."""
+    if value is None:
+        return None
+    if value <= 0:
+        raise DhHlError("{} must be a positive number of seconds".format(flag))
+    return value
+
+
 def cmd_build(args):
     # Phase 0: resolve session + take session/concurrent-machine locks (NOT the
     # catalog lock -- the compile below must not block other agents).
@@ -664,6 +769,12 @@ def cmd_build(args):
     if profile_batches < 0:
         raise DhHlError("--profile batch count must be non-negative")
 
+    # Per-process timeouts for the two untrusted-code steps (None = no limit).
+    gen_timeout = _parse_timeout_arg(getattr(args, "gen_timeout", None),
+                                     "--gen-timeout")
+    exec_timeout = _parse_timeout_arg(getattr(args, "exec_timeout", None),
+                                      "--exec-timeout")
+
     selection = _load_selection(ws)
     target = _NodeBuild(selection["target"], catalog_dir)
     other = (_NodeBuild(selection["other"], catalog_dir)
@@ -686,7 +797,8 @@ def cmd_build(args):
     else:
         param_indices = {n.full_id: list(range(len(n.params))) for n in nodes}
 
-    all_ok = _compile_phase(bin_dir, nodes, param_indices, toolchain)
+    all_ok = _compile_phase(bin_dir, nodes, param_indices, toolchain,
+                            gen_timeout=gen_timeout)
 
     # Profiling is all-or-nothing on the build: if any generator/link failed,
     # skip it entirely (don't take the exclusive machine lock for a doomed run --
@@ -712,7 +824,7 @@ def cmd_build(args):
                   "profile", file=sys.stderr)
         problem_indexes, problem_run_ok, prof_ok = _profile_phase(
             bin_dir, nodes, param_indices, sched, catalog, profile_batches,
-            selected, ws)
+            selected, ws, exec_timeout=exec_timeout)
         all_ok = all_ok and prof_ok
 
     # Phase 3: result-state updates (monotone; never regress).  A harness error
@@ -745,10 +857,12 @@ def cmd_build(args):
     sys.exit(0 if all_ok else 1)
 
 
-def _compile_phase(bin_dir, nodes, param_indices, toolchain):
+def _compile_phase(bin_dir, nodes, param_indices, toolchain, gen_timeout=None):
     """Phases 1a (per-node C++ generator exe + shared RunGenMain.o) and 1b
     (per-(node, params-index) emit + link).  Mutates the _NodeBuild records.
     *toolchain* carries the session's Halide paths for ninja generation.
+    *gen_timeout* (seconds, None = none) caps each generator emit only -- the
+    ninja/C++ compile below is deliberately never timed (see _run_toolchain).
     Returns whether every attempted subprocess succeeded."""
     all_ok = True
     # 1a: compile each node's generator exe (and the shared RunGenMain.o).
@@ -793,7 +907,7 @@ def _compile_phase(bin_dir, nodes, param_indices, toolchain):
             # `copy_build_output stmt` works for any built node), not just the
             # target (idea.md Build Tool).
             if _emit(bin_dir, _gen_exe_name(n.full_id), n.gen_name, subdir,
-                     n.params[i], with_stmt=True) != 0:
+                     n.params[i], with_stmt=True, timeout=gen_timeout) != 0:
                 n.gen_ok[i] = False
                 all_ok = False
                 print("dh_hl: end Halide generator {} fail".format(i))
@@ -888,7 +1002,7 @@ def build_external(source_path, params_path, bin_dir, halide_root):
 
 
 def _profile_phase(bin_dir, nodes, param_indices, sched, catalog, batches,
-                   problems, ws):
+                   problems, ws, exec_timeout=None):
     """For each problem, run *batches* interleaved profiling passes over every
     linked binary, attaching a benchmark sub-object (tagged with the problem full
     ID + parameters index) to each binary's source schedule node.
@@ -929,7 +1043,8 @@ def _profile_phase(bin_dir, nodes, param_indices, sched, catalog, batches,
                     bin_dir, problem.argv, _rungen_bin_rel(n.full_id, i),
                     _shared_lib_rel(n.full_id, i))
                 rc, stdout_text = _run_benchmark(
-                    bin_dir, cmd, extra_env, json_out, warnings_out)
+                    bin_dir, cmd, extra_env, json_out, warnings_out,
+                    timeout=exec_timeout)
                 ok = rc == 0
                 # The profile phase holds the catalog lock, so format the short
                 # IDs live from the resolved node/problem.
