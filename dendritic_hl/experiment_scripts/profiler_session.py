@@ -231,7 +231,12 @@ def main():
             # Therefore, I have to forgive failures.
             # Even the json_schedule_info "result" is useless since it
             # checks compile errors only.
-            runner.run("build", *sess, "--profile", "1", allow_fail=True)
+            runner.run(
+                "build", *sess,
+                "--profile", "1",
+                "--gen-timeout", "120.0",
+                "--exec-timeout", "120.0",
+                allow_fail=True)
 
 
 if __name__ == "__main__":
