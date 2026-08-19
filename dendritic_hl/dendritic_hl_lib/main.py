@@ -18,10 +18,12 @@ from . import allow_harness_flag
 # When allow_harness_flag.enabled is False (a no-harness experiment run), the CLI
 # exposes ONLY these commands -- the minimum to stand up a catalog and log a
 # no-harness run (begin_experiment.py's new_catalog/disable_problem/new_problem
-# and the agent's `experiment build_external`/`add_schedule_node`).  Every other
-# tool is turned off (see _build_parser and main()).
+# and the agent's `experiment build_external`/`add_schedule_node`), plus the
+# exec/exec_exclusive escape hatches for running plain commands under the machine
+# lock.  Every other tool is turned off (see _build_parser and main()).
 _NO_HARNESS_ALLOWLIST = frozenset({
-    "experiment", "new_catalog", "disable_problem", "new_problem", "set_main_problem"})
+    "experiment", "new_catalog", "disable_problem", "new_problem",
+    "set_main_problem", "exec", "exec_exclusive"})
 
 # idea.md is the human-facing spec; `dh_hl help <command>` renders the relevant
 # tool section from it so the detailed per-command docs have a single source.

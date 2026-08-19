@@ -33,11 +33,12 @@ def test_prompt_is_blocked_off(run_cli):
     assert "turned OFF" in r.stderr
 
 
-def test_exec_shortcut_is_blocked_off(run_cli, session):
-    # exec/exec_exclusive bypass argparse, so the pre-parse gate must catch them.
+def test_exec_shortcut_reachable_off(run_cli, session):
+    # exec/exec_exclusive are allowlisted: even with the harness off they run the
+    # given command (here `true`, exit 0) rather than hitting the DRM gate.
     for cmd in ("exec", "exec_exclusive"):
         r = run_cli(cmd, "-s", session.session_id, "--", "true", env=_OFF)
-        assert r.returncode == 2 and "turned OFF" in r.stderr, cmd
+        assert r.returncode == 0 and "turned OFF" not in r.stderr, cmd
 
 
 def test_help_is_blocked_off(run_cli):
@@ -62,7 +63,9 @@ def test_help_hides_blocked_commands_off(run_cli):
     refused), so the command menu does not advertise the full harness."""
     r = run_cli("--help", env=_OFF)
     assert r.returncode == 0
-    for allowed in sorted(main._NO_HARNESS_ALLOWLIST):
+    # exec/exec_exclusive are allowlisted but never argparse-registered (they are
+    # pre-parse shortcuts), so they never show in --help; the rest do.
+    for allowed in sorted(main._NO_HARNESS_ALLOWLIST - {"exec", "exec_exclusive"}):
         assert allowed in r.stdout, allowed
     for blocked in ("status", "build", "prompt", "new_root", "close_session"):
         assert blocked not in r.stdout, blocked
