@@ -32,6 +32,7 @@ GENERATOR = os.path.join(HERE, "original_generator.cpp")
 PARAMS = os.path.join(HERE, "original_generator_parameters.json")
 PROMPT_MD = os.path.join(HERE, "prompt.md")
 CATALOG = os.path.join(HERE, "catalog.dh_hl")
+HALIDE = os.path.join(HERE, "Halide")
 
 
 def write_prompt():
@@ -54,14 +55,14 @@ arguments -- the SAME arguments the harness would pass.  RunGenMain prints its
 profiler table to stdout on exit, so just read the output.
 
     ./runner.py path/to/dh_hl_pipeline.rungen
+
+This is the executable for which you may want to set the environment variable
+HL_PROFILER_JSON_OUTPUT.
 """
 import os
 import sys
 
-# The experiment's standard RunGenMain arguments (baked in from PROBLEM_ARGV,
-# with the leading <RunGenMain> placeholder dropped).
 RUN_ARGS = @@RUN_ARGS@@
-
 
 def main():
     if len(sys.argv) != 2:
@@ -104,6 +105,7 @@ import sys, os, subprocess
 
 DH_HL = @@DH_HL@@
 CATALOG_PATH = @@CATALOG_PATH@@
+HALIDE_PATH = @@HALIDE_PATH@@
 
 if len(sys.argv) != 4:
     sys.stderr.write(f"Usage: {sys.argv[0]} {{generator C++}} {{JSON parameters}} {{bin dir}}")
@@ -117,16 +119,39 @@ def _dh(*args, **kwargs):
     except subprocess.CalledProcessError:
         sys.exit(1)
 
-_dh("experiment", "build_external", *sys.argv[1:])
+_dh("experiment", "build_external", *sys.argv[1:], HALIDE_PATH)
 _dh("experiment", "-C", CATALOG_PATH, "add_schedule_node", cpp_path, json_path, stdout=subprocess.DEVNULL)
 
 print(f"Use ./runner.py {bin_path}/{{parameters idx}}/dh_hl_pipeline.rungen to profile with the official experiment input sizes.")
 '''
 
+_TIME_TEMPLATE = '''#!/usr/bin/env python3
+"""
+Usage: time.py
+"""
+import sys, os, subprocess
+
+DH_HL = @@DH_HL@@
+CATALOG_PATH = @@CATALOG_PATH@@
+
+def _dh(*args, **kwargs):
+    try:
+        subprocess.run([DH_HL, *args], check=True, **kwargs)
+    except subprocess.CalledProcessError:
+        sys.exit(1)
+
+sys.stderr.write("Seconds elapsed: ")
+sys.stderr.flush()
+_dh("experiment", "-C", CATALOG_PATH, "time")
+'''
+
 
 def write_build():
     """Write build.py"""
-    text = _BUILD_TEMPLATE.replace("@@CATALOG_PATH@@", repr(CATALOG))
+    text = _BUILD_TEMPLATE.replace(
+        "@@CATALOG_PATH@@", repr(CATALOG)).replace(
+        "@@HALIDE_PATH@@", repr(HALIDE)
+    )
     path = os.path.join(HERE, "build.py")
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
@@ -143,9 +168,19 @@ def write_runner():
     os.chmod(path, 0o755)
 
 
+def write_time():
+    """Write time.py"""
+    text = _TIME_TEMPLATE.replace("@@CATALOG_PATH@@", repr(CATALOG))
+    path = os.path.join(HERE, "time.py")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.chmod(path, 0o755)
+
+
 def write_build_helpers():
     write_build()
     write_runner()
+    write_time()
 
 
 # --------------------------------------------------------------------------
@@ -185,6 +220,7 @@ def make_git_and_catalog():
         f.write("/examples\n")
         f.write("/guide.md\n")
         f.write("/runner.py\n")
+        f.write("/experiment\n")
         f.write("/catalog.dh_hl\n")  # Not CATALOG, want relative path
     _dh("new_catalog", "-C", CATALOG, "seed", PROMPT_MD, GENERATOR, PARAMS)
     subprocess.run(["git", "init"], check=True, cwd=CATALOG, stdout=subprocess.DEVNULL)

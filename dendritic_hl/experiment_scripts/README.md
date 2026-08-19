@@ -33,16 +33,13 @@ Use `plot_generate_data.py` and `plot_render.py`
 
 # Halide Path
 
-Unlike the `dh_hl` harness itself, the experiments hard-wire `~/Halide` as the "Halide path".
+The experiment copies a snapshot of the built Halide repo into the new
+experiment directory.  This needs to be a build of the `Halide` repo
+(this tree), gzip'd into a `Halide.tgz` file here. It needs to be set
+up such that `Halide/build` is the CMake build directory when unzipped.
 
-I recommend making `~/Halide/` a symlink to either
+For that tgz, delete `.git`, `apps`, `dendritic_hl`,
+and `loopdoc` (if that still exists).
 
-* your real Halide repo, when developing
-
-* the stripped experiment Halide repo, when running experiments
-
-WARNING: Claude Code does not like symlinks.
-Don't move any directories already tied to Claude Code sessions
-unless you want to lose all your sessions.
 
 

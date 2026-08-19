@@ -9,6 +9,8 @@
 the fixed inputs, the guide contents (harness_F_guide_T), and a generated
 `begin_experiment.py`; running that script later stands up the catalog.
 
+Prints to stdout ONLY the non-symlink path to the experiment dir created.
+
 Typo protection -- both flags are probed on the on-PATH dh_hl (the one the agent
 runs) BEFORE any directory is made, so a mislabelled or stale setup fails loudly:
   * `{data_dir}` must already be a directory (so a mistyped path fails loudly
@@ -56,6 +58,7 @@ _GENERATOR_SRC = os.path.join(_HERE, "local_laplacian_experiment_generator.cpp")
 # The second-level script is kept in its own .py file (discovered by relative
 # path) so an editor highlights it as Python, not one giant string literal.
 _TEMPLATE_PATH = os.path.join(_HERE, "begin_experiment_template.py")
+_HALIDE_TGZ_PATH = os.path.join(_HERE, "Halide.tgz")
 
 LABELS = ("harness_T_guide_T", "harness_T_guide_F",
           "harness_F_guide_T", "harness_F_guide_F")
@@ -101,6 +104,16 @@ def _harness_allowed_via_cli():
     r = subprocess.run([_DH_HL, "status", "-h"],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return r.returncode == 0
+
+
+def _unzip_halide(exp_dir):
+    r = subprocess.run(["tar", "-xzf", _HALIDE_TGZ_PATH, "-C", exp_dir])
+    if r.returncode != 0:
+        raise ValueError("Extract Halide.tgz failed")
+    halide_h_path = os.path.join(exp_dir, "Halide/build/include/Halide.h")
+    r = subprocess.run(["ls", halide_h_path], stdout=subprocess.DEVNULL)
+    if r.returncode != 0:
+        raise ValueError(f"Extracted Halide.tgz missing {halide_h_path}")
 
 
 def _write_guide_contents(exp_dir):
@@ -192,6 +205,8 @@ def main(argv=None):
         f.write(_render_begin_experiment(args.label))
     os.chmod(begin_path, 0o755)
 
+    _unzip_halide(exp_dir)
+
     print(exp_dir)
     return 0
 
@@ -233,21 +248,29 @@ def _make_prompt(harness, guide):
     """Prompt text, parameterized on (harness, guide)."""
     chunks = []
 
-    chunks.append("""\
+    maybe_min_time_req = ""
+    maybe_perf_req = ""
+    maybe_sub_agent_req = ""
+
+    # Customize later.
+    if True:
+        maybe_min_time_req = "\nDo not stop until a minimum of one hour of effort."
+
+    chunks.append(f"""\
 You are the "main agent" participating in a controlled experiment
 on fully autonomous LLM optimization of a Halide schedule.
 You will optimize the Local Laplacian filter provided in `original_generator.cpp`.
 
-Please work independently and try to make as much progress as possible
-in one turn, stopping only when asked or you see no further progress possible.
-Note, we anticipate the experiment to take about two hours of wall time.
+Please work independently and try to make as much
+progress as possible before stopping.
+Note, the experiment must end within two hours.{maybe_min_time_req}
 
 Local minima are everywhere! If performance plateaus,
 consider if there's complete alternative strategies to try out.
 
 Delegate tasks to sub-agents at your at your discretion,
 as appropriate to support the goal of maximizing progress
-within the bounds of one session.
+within the bounds of one session.{maybe_sub_agent_req}
 """)
 
     if harness:
@@ -275,9 +298,16 @@ The {'prompt' if harness else 'guide'} mentions supplemental reading.
 These are entirely optional.
 You may also do your own Halide experimentation or read Halide code/docs.""")
 
-    chunks.append("The Halide header for this experiment is in `~/Halide/build/include/Halide.h`.")
+    chunks.append("The Halide header for this experiment is in `./Halide/build/include/Halide.h`.")
     if harness:
-        chunks.append("The Halide path is `~/Halide/`.")
+        chunks.append("The Halide path is `./Halide/`.")
+    chunks.append("The built Halide programs enable a custom profiler for the experiment.")
+    chunks.append("This prints top-line stats (pipeline stats) and a table of per-func stats.")
+    if not harness:
+        chunks.append("The environment variable `HL_PROFILER_JSON_OUTPUT`")
+        chunks.append("names a file to dump JSON top-line and per-func stats to.")
+        chunks.append("The environment variable `HL_PROFILER_JSON_TEMPORARY_WARNINGS`")
+        chunks.append("names a file to dump JSON warnings to.")
 
     if not harness:
         chunks.append("")
@@ -308,21 +338,29 @@ Overfitting, including making assumptions that would
 
     if harness:
         chunks.append("""\
-* Only edit files inside this directory, EXCLUDING `catalog.dh_hl`
-  (interact with it only through `dh_hl`). The catalog must remain git ignored.""")
+* Only edit files inside this directory, EXCLUDING `experiment/`, `catalog.dh_hl`
+  (interact with it only through `dh_hl`). These must remain git ignored.""")
 
     if not harness:
         chunks.append("""\
-* Only edit files inside this directory, EXCLUDING `catalog.dh_hl`
-  (experiment private logging state). The catalog must remain git ignored.""")
+* Only edit files inside this directory, EXCLUDING `experiment/`, `catalog.dh_hl`
+  (experiment private logging state). These must remain git ignored.""")
 
     chunks.append("""
-* DON'T read any files except those in this directory and in `~/Halide`;
+* DON'T read any files except those in this directory;
   do not use web tools to seek outside information.
+  However, you are *strongly* encouraged to read relevant files in `./Halide`
+  if needed to clarify Halide usage. Consider in particular
+  `./Halide/src/Func.h` (header for per-Func scheduling directives),
+  `./Halide/src/runtime/profiler_common.cpp` (custom profiler for experiment).
 
 * Do not use the autoscheduler or try to read existing Local Laplacian apps.
   The generated Halide schedule must be your original work.
   (Caveat: we ignore the fact the "answer key" is likely in your training data).
+
+* Use only Opus 4.8 for sub agents.
+
+* Use `time.py` to get time elapsed.
 
 """)
     return "\n".join(chunks)
