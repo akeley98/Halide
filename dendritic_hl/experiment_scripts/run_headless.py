@@ -5,7 +5,7 @@
 
 *label* is one of the four ablation cells -- harness_{T,F}_guide_{T,F} -- crossing
 "agent has the dh_hl harness" with "agent has the scheduling guide".  This creates
-`{data_dir}/{label}_{n}` (lowest n that avoids a collision) holding a symlink to
+`{data_dir}/{_blindfold_label(label)}_{n}` (lowest n that avoids a collision) holding
 the fixed inputs, the guide contents (harness_F_guide_T), and a generated
 `begin_experiment.py`; running that script later stands up the catalog.
 
@@ -78,8 +78,8 @@ _PARAMS_JSON = "[\n  {\n  }\n]\n"
 # The two-phase hidden prompt here is because begin_experiment.py logs
 # the start time of the experiment in the catalog, and I want that to
 # happen when the agent actually starts, not when init_dir runs.
-_README_TEMPLATE = """\
-# LLM Halide Scheduling Experiment {label}
+_README = """\
+# LLM Halide Scheduling Experiment
 
 Please run `./begin_experiment.py` and read and execute the resulting `prompt.md`.
 
@@ -161,6 +161,10 @@ def label_enables_guide(label):
     return label.endswith("guide_T")
 
 
+def _blindfold_label(label):
+    return f"{int(label_allows_harness(label))}{int(label_enables_guide(label))}"
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("data_dir", help="existing directory to create the "
@@ -205,14 +209,11 @@ def main(argv=None):
             "enabled" if expected_harness else "disabled (allowlist only)",
             "available" if actual_harness else "turned off"))
 
-    exp_dir_name = _lowest_free_dir_name(args.data_dir, now_timestamp())
+    exp_dir_name = _lowest_free_dir_name(args.data_dir, _blindfold_label(args.label))
     exp_dir = os.path.join(args.data_dir, exp_dir_name)
-    link_name = _lowest_free_dir_name(args.data_dir, args.label)
     os.makedirs(exp_dir)
-    os.symlink(exp_dir_name, os.path.join(args.data_dir, link_name))
 
     print(f"Experiment dir: {exp_dir}", file=sys.stderr)
-    print(f"Experiment symlink: {link_name}", file=sys.stderr)
 
     shutil.copyfile(_GENERATOR_SRC,
                     os.path.join(exp_dir, "original_generator.cpp"))
@@ -220,7 +221,7 @@ def main(argv=None):
               "w", encoding="utf-8") as f:
         f.write(_PARAMS_JSON)
     with open(os.path.join(exp_dir, "README.md"), "w", encoding="utf-8") as f:
-        f.write(_README_TEMPLATE.format(label=args.label))
+        f.write(_README)
 
     # Guide contents shipped as plain files (moved here from begin_experiment.py
     # so that generated script never mentions the guide / --guide-only).
@@ -295,13 +296,31 @@ def _render_begin_experiment(label):
     That keeps a path with awkward characters (a Windows backslash, a quote, a
     space) from corrupting the generated source.  The template's @@RUN_ARGS@@
     sentinel is intentionally left untouched -- the generated script substitutes
-    it later, itself via repr (write_runner)."""
+    it later, itself via repr (write_runner).
+
+    Docstring for begin experiment file (moved here to avoid showing in
+    rendered begin_experiment.py):
+
+    Stands up the experiment: writes prompt.md, (for harness_F_guide_T) the guide
+    contents, (for the no-harness cells) runner.py, and finally the dh_hl catalog +
+    sized problem + `experiment begin`.
+
+    This file is the TEMPLATE that init_dir.py copies out, replacing the bare @@...@@
+    sentinels (LABEL / DH_HL / DETAIL_DIR / EXAMPLES_DIR) with repr()'d values -- so
+    the substituted paths are always correctly quoted and escaped (a Windows path's
+    backslashes included).  The sentinels are bare (NOT inside quotes), so this
+    template does not parse as Python on its own; that is intentional -- you cannot
+    run it directly, and letting repr supply the quoting is what makes the escaping
+    safe.  @@RUN_ARGS@@ is left for the *generated* script to substitute at runtime
+    (see write_runner).
+"""
 
     harness = label_allows_harness(label)
     guide = label_enables_guide(label)
 
     subs = {
-        "@@LABEL@@": repr(label),
+        "@@LABEL@@": repr(label),  # I wanted to not leak this to agents but hard to fix.
+        "@@NEED_BUILD_PY@@": repr(not harness),
         "@@DH_HL@@": repr(_DH_HL),
         "@@DETAIL_DIR@@": repr(_DETAIL_DIR),
         "@@EXAMPLES_DIR@@": repr(_EXAMPLES_DIR),
@@ -396,9 +415,8 @@ The tool is safely usable in parallel; the catalog does locking and rollbacks.
 Overfitting, including making assumptions that would
   break the pipeline on other problem sizes, is explicitly allowed.
   The scoring is based on benchmarking all schedules ever logged, not
-  just the last. The score is the schedule with the lowest "cost"; we
-  are intentionally vague about the cost definition, but it will be
-  based on a large number of profiling runs.
+  just the last. The score is the schedule with the lowest cost,
+  based on a large number of benchmarks run strictly after the experiment.
 
 * Modify only the Halide schedule, not the Halide algorithm
   (further instructions inside the provided generator C++ source).
