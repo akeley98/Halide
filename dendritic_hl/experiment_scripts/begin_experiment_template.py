@@ -180,7 +180,6 @@ def write_time():
 def write_build_helpers():
     write_build()
     write_runner()
-    write_time()
 
 
 # --------------------------------------------------------------------------
@@ -232,6 +231,7 @@ def make_git_and_catalog():
 
 def main():
     write_prompt()
+    write_time()
     if not HARNESS:
         write_build_helpers()
     if not HARNESS:                # both no-harness cells
