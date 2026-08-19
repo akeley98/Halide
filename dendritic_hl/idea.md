@@ -3258,7 +3258,7 @@ Optimize this if needed, but this shouldn't be in the agent hot loop.
     dh_hl experiment -C ... time
     dh_hl experiment -C ... add_schedule_node {generator.cpp} {generator_parameters.json}
     dh_hl experiment -C ... json_test_schedules
-    dh_hl experiment build_external {generator.cpp} {generator_parameters.json} {bin dir}
+    dh_hl experiment build_external {generator.cpp} {generator_parameters.json} {bin dir} {Halide path}
 
 Throwaway tools for the LLM Halide scheduling experiment.
 

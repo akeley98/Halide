@@ -8,7 +8,7 @@ Covers the sub-actions: begin / get_begin_label / get_begin_timestamp / time
 workspace-free root schedule creator that silent-dedups on content hash and
 takes optional EXPERIMENT IGNORE commentary), json_test_schedules (major
 schedules with no active EXPERIMENT IGNORE commentary), and build_external (a
-catalog-free compile with Halide hard-wired to ~/Halide).
+catalog-free compile taking an explicit Halide path).
 """
 
 import json
@@ -22,7 +22,7 @@ from dendritic_hl_lib import guide_flag, ids, safety, tools
 from dendritic_hl_lib.enums import Review
 from dendritic_hl_lib.errors import DhHlError
 
-from conftest import _PKG_ROOT, HALIDE_BUILD_DIR, open_catalog
+from conftest import _PKG_ROOT, HALIDE_BUILD_DIR, HALIDE_DIR, open_catalog
 
 
 def _xp(session, action, arg1=None, arg2=None, arg3=None, ignore=None):
@@ -308,10 +308,12 @@ def test_cli_guide_env_assertion(run_cli, session):
 # Halide; the real build is opt-in (marked `halide`).
 # ---------------------------------------------------------------------------
 
-def test_cli_build_external_needs_three_args(run_cli, tmp_path):
+def test_cli_build_external_needs_four_args(run_cli, tmp_path):
     src = tmp_path / "g.cpp"; src.write_text("// x\n")
     prm = tmp_path / "p.json"; prm.write_text("[{}]")
-    r = run_cli("experiment", "build_external", str(src), str(prm))  # no bin dir
+    # bin dir but no Halide path.
+    r = run_cli("experiment", "build_external", str(src), str(prm),
+                str(tmp_path / "bin"))
     assert r.returncode != 0
     assert "requires a generator" in r.stderr
 
@@ -319,7 +321,7 @@ def test_cli_build_external_needs_three_args(run_cli, tmp_path):
 def test_cli_build_external_missing_source_is_clean_error(run_cli, tmp_path):
     prm = tmp_path / "p.json"; prm.write_text("[{}]")
     r = run_cli("experiment", "build_external", str(tmp_path / "nope.cpp"),
-                str(prm), str(tmp_path / "bin"))
+                str(prm), str(tmp_path / "bin"), HALIDE_DIR)
     assert r.returncode != 0
     assert "no such generator" in r.stderr and "Traceback" not in r.stderr
 
@@ -328,7 +330,7 @@ def test_cli_build_external_empty_params_is_clean_error(run_cli, tmp_path):
     src = tmp_path / "g.cpp"; src.write_text("// x\n")
     prm = tmp_path / "p.json"; prm.write_text("[]")
     r = run_cli("experiment", "build_external", str(src), str(prm),
-                str(tmp_path / "bin"))
+                str(tmp_path / "bin"), HALIDE_DIR)
     assert r.returncode != 0
     assert "empty" in r.stderr and "Traceback" not in r.stderr
 
@@ -338,14 +340,15 @@ def test_cli_build_external_empty_params_is_clean_error(run_cli, tmp_path):
                     reason="no local Halide build at " + HALIDE_BUILD_DIR)
 @pytest.mark.skipif(shutil.which("ninja") is None, reason="ninja not found")
 def test_cli_build_external_real_build_numbers_params(run_cli, tmp_path):
-    """A real build (no -C, Halide hard-wired to ~/Halide): each generator-params
+    """A real build (no -C, explicit Halide path): each generator-params
     object lands in its own numbered subdir (0, 1), and no output name embeds a
     catalog full_id."""
     histp = os.path.join(_PKG_ROOT, "tests", "hist_params.cpp")
     prm = tmp_path / "p.json"
     prm.write_text('[{}, {"enable_parallel": true}]')
     bin_dir = tmp_path / "bin"
-    r = run_cli("experiment", "build_external", histp, str(prm), str(bin_dir))
+    r = run_cli("experiment", "build_external", histp, str(prm), str(bin_dir),
+                HALIDE_DIR)
     assert r.returncode == 0, r.stderr
     for i in ("0", "1"):
         assert (bin_dir / i / "dh_hl_pipeline.rungen").is_file(), i

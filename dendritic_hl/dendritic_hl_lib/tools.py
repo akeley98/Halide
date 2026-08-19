@@ -429,12 +429,15 @@ def _experiment_add_schedule_node(args):
 
 def _experiment_build_external(args):
     """Catalog-free compile of the normal build outputs (idea.md "Build
-    External"): no -C, Halide hard-wired to ~/Halide, outputs into the given bin
-    directory.  Contra the rest of the harness, needs no session/catalog."""
-    if args.arg1 is None or args.arg2 is None or args.arg3 is None:
+    External"): no -C, Halide taken from the explicit Halide path argument,
+    outputs into the given bin directory.  Contra the rest of the harness, needs
+    no session/catalog."""
+    if (args.arg1 is None or args.arg2 is None or args.arg3 is None
+            or args.arg4 is None):
         raise DhHlError("experiment build_external requires a generator.cpp, a "
-                        "generator_parameters.json, and a bin directory")
-    build.build_external(args.arg1, args.arg2, args.arg3)
+                        "generator_parameters.json, a bin directory, and a "
+                        "Halide path")
+    build.build_external(args.arg1, args.arg2, args.arg3, args.arg4)
 
 
 def _experiment_json_test_schedules(args):

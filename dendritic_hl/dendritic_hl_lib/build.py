@@ -833,9 +833,9 @@ def _compile_phase(bin_dir, nodes, param_indices, toolchain):
 _EXTERNAL_ID = "external"
 
 
-def build_external(source_path, params_path, bin_dir, halide_root="~/Halide"):
+def build_external(source_path, params_path, bin_dir, halide_root):
     """Compile the normal build outputs for *source_path* + *params_path* into
-    *bin_dir*, with NO catalog/session and Halide hard-wired to *halide_root*
+    *bin_dir*, with NO catalog/session and Halide taken from *halide_root*
     (idea.md "Build External").  Recycles the shared build primitives: the
     generator exe + shared RunGenMain.o are built once, then EACH
     generator-parameters object in the params list is emitted, static-linked
