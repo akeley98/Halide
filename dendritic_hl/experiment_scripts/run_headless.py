@@ -325,7 +325,8 @@ def _make_prompt(harness, guide):
     chunks.append(f"""\
 You are the "main agent" participating in a controlled experiment
 on fully autonomous LLM optimization of a Halide schedule.
-You will optimize the {APP} filter provided in `original_generator.cpp`.
+You will optimize the {APP} filter provided in `original_generator.cpp`,
+using only the CPU (ignore the GPU, if any, on this system).
 
 Please work independently and try to make as much
 progress as possible before stopping.
@@ -379,8 +380,12 @@ You may also do your own Halide experimentation or read Halide code/docs.""")
 Read the `build.py` script to understand the build tool.
 DON'T inspect the underlying `dh_hl` tool (experiment infrastructure).
 You may copy the build script and C++ source as you wish, as long as
-the whole generator is in one C++ file. The build tool logs all
-programs as progress for the experiment.""")
+the whole generator is in one C++ file. The build tool logs
+a catalog of programs as progress for the experiment.
+The underlying process group may be killed by SIGINT (^C) safely.
+The tool is safely usable in parallel; the catalog does locking and rollbacks.
+
+""")
 
     chunks.append(f"""
 
@@ -390,7 +395,10 @@ programs as progress for the experiment.""")
   {'the harness' if harness else 'runner.py'}. \
 Overfitting, including making assumptions that would
   break the pipeline on other problem sizes, is explicitly allowed.
-  The scoring is the min of all schedules ever logged, not just the last.
+  The scoring is based on benchmarking all schedules ever logged, not
+  just the last. The score is the schedule with the lowest "cost"; we
+  are intentionally vague about the cost definition, but it will be
+  based on a large number of profiling runs.
 
 * Modify only the Halide schedule, not the Halide algorithm
   (further instructions inside the provided generator C++ source).
@@ -424,7 +432,9 @@ Overfitting, including making assumptions that would
   (Caveat: we ignore the fact the "answer key" is likely in your training data).""")
 
     chunks.append("""
-* Use only Opus 4.8 for sub agents.
+* Use only Opus 4.8 with xhigh effort for sub agents.
+  Comply to the best of your ability (e.g. if you can't control
+  version number, plain Opus is acceptable).
 
 * Use `time.py` to get time elapsed.
 
@@ -433,6 +443,8 @@ Overfitting, including making assumptions that would
 * Unless under severe time pressure, before ending the experiment,
   output a file issues.md listing problems encountered regarding the
   experiment toolchain or custom profiler.
+  PLEASE REMEMBER: if you `2>&1 | head` you will probably skip
+  error messages, and you will get the (successful) return code of `head`.
 
 * Use `end_experiment.py` when all your tasks are done.
   NOTE: this may kill any running sub-agents and background tasks!

@@ -610,7 +610,7 @@ It is in `~/.cache/dendritic_hl/`,
 with the `~/.cache` portion overridable with the `XDG_CACHE_HOME` environment variable.
 
 
-## Locking
+## Locking and Interrupts
 
 All tools acquire the **machine lock**, usually concurrently.
 The profiling step of `build` and any `exec_exclusive` command
@@ -622,6 +622,8 @@ All tools that require a current session (`-s`) acquire an exclusive per-session
 except for a subset of read-only commands, marked when their syntax is introduced.
 This locking *never* fails for correct usage: failure to acquire is diagnosed as an error
 (two concurrent agents using the same session).
+
+The tools may safely be interrupted with SIGINT (^C).
 <!-- impl -->
 
 NOTE: [link to implementation details](impl.md) <!-- Update both docs if you change the tool! -->
@@ -1885,6 +1887,7 @@ This command takes further arguments:
     dh_hl view_benchmark_warnings -C ... {benchmark ID}
 
 Pretty-print the warnings embedded in the referenced benchmark sub-object.
+NOTE: `-s` required for benchmark short IDs.
 
 <!-- help -->
 Takes an optional `--always-show-message` flag.
@@ -1916,6 +1919,7 @@ FUTURE: fix `max_warnings` limit in Halide profiler that silently drops warnings
     dh_hl view_benchmark_stdout -C ... {benchmark ID}
 
 Print the `stdout` captured for the named benchmark.
+NOTE: `-s` required for benchmark short IDs.
 
 
 ### JSON Benchmark Info Tool

@@ -91,7 +91,8 @@ This feature may be useful for parameter sweeps.
 Each generator parameters yields a new Halide binary in a different numbered
 subdirectory of the bin directory.
 
-This build script also logs a "catalog" of Halide schedules found.
+This build script also logs a "catalog" of Halide schedules found,
+excluding any that had ANY parameterized variant fail to build.
 The experiment catalog is targetted by absolute path and not git tracked.
 Therefore this script should work even if a git worktree is used
 or the script is otherwise copied to other locations.
@@ -119,7 +120,11 @@ def _dh(*args, **kwargs):
     except subprocess.CalledProcessError:
         sys.exit(1)
 
-_dh("experiment", "build_external", *sys.argv[1:], HALIDE_PATH)
+try:
+    _dh("experiment", "build_external", *sys.argv[1:], HALIDE_PATH)
+except Exception:
+    sys.stderr.write("WARNING: schedule NOT logged due to build failures\\n")
+    raise
 _dh("experiment", "-C", CATALOG_PATH, "add_schedule_node", cpp_path, json_path, stdout=subprocess.DEVNULL)
 
 print(f"Use ./runner.py {bin_path}/{{parameters idx}}/dh_hl_pipeline.rungen to profile with the official experiment input sizes.")
