@@ -17,7 +17,7 @@ import sys
 import pty
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-LABELS = [f"harness_{h}_guide_{g}" for h in "TF" for g in "TF"]
+LABELS = [f"harness_{h}_guide_{g}" for h in "FT" for g in "FT"]
 
 stop_level = 0
 kill_pid = 0

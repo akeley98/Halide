@@ -467,7 +467,12 @@ Overfitting, including making assumptions that would
 * Use `end_experiment.py` when all your tasks are done.
   NOTE: this may kill any running sub-agents and background tasks!
 
-* DO NOT end the experiment until a minimum of one hour of effort.
+* Use a minimum of FIVE sub-agents delegated to explore the scheduling space.
+  This may be for any non-trivial task, but prime candidates include
+  ideas with risky/uncertain payoff, or to pursue a completely alternative
+  approach than what the main agent is focusing on.
+  NOTE: the build/add-schedule tool takes a global lock non-exclusively.
+  The profiler runner tool takes that same lock exclusively.
 """)
     # Later: customize the last rule.
 
