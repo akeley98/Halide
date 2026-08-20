@@ -185,7 +185,7 @@ PROBLEM_SHORT_NAME = "local_laplacian"
 PROBLEM_ARGV = [
     "<RunGenMain>", "--benchmarks=all",
     "--output_extents=[1536,2560,3]",
-    "input=zero:[1536,2560,3]", "levels=8", "alpha=1", "beta=1",
+    "input=random:0:[1536,2560,3]", "levels=8", "alpha=1", "beta=1",
 ]
 
 def _git(*args):
