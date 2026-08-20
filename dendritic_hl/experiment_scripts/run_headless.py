@@ -458,6 +458,10 @@ Overfitting, including making assumptions that would
 
 * The experiment must end within two hours.
 
+* Work at least one hour before ending the experiment.
+  Try different approaches if stuck in a local minimum
+  and there is not yet one hour of effort spent.
+
 * Unless under severe time pressure, before ending the experiment,
   output a file issues.md listing problems encountered regarding the
   experiment toolchain or custom profiler.
@@ -467,15 +471,9 @@ Overfitting, including making assumptions that would
 * Use `end_experiment.py` when all your tasks are done.
   NOTE: this may kill any running sub-agents and background tasks!
 
-* Use a minimum of FIVE sub-agents delegated to explore the scheduling space.
-  This may be for any non-trivial task, but prime candidates include
-  ideas with risky/uncertain payoff, or to pursue a completely alternative
-  approach than what the main agent is focusing on.
-  NOTE: the build/add-schedule tool takes a global lock non-exclusively.
-  The profiler runner tool takes that same lock exclusively.
+NOTE: the build/add-schedule tool takes a global lock non-exclusively.
+The profiler runner tool takes that same lock exclusively.
 """)
-    # Later: customize the last rule.
-
     assert DEFAULT_MAX_SECONDS >= 7200, "update 2 hour warning"
 
     return "\n".join(chunks)
