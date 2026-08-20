@@ -53,7 +53,9 @@ def main():
     binary = os.path.abspath(sys.argv[1])
     if not os.path.isfile(binary):
         sys.exit("no such RunGenMain binary: " + binary)
-    os.execv(binary, [binary] + RUN_ARGS)
+    # Note, if you're reading this, you may recycle `dh_hl exec_exclusive -- args...`
+    # outside of runner.py as well. This takes a global lock (flock).
+    os.execvp("dh_hl", ["dh_hl", "exec_exclusive", "--", binary] + RUN_ARGS)
 
 
 if __name__ == "__main__":
