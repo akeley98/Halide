@@ -33,9 +33,8 @@ def write_prompt():
 # filled in by write_runner() from PROBLEM_ARGV, so the standalone binary is run
 # exactly as `dh_hl` would run it (idea.md problem argv).
 _RUNNER_TEMPLATE = '''#!/usr/bin/env python3
-"""Run a specific RunGenMain binary with this experiment's standard benchmark
-arguments -- the SAME arguments the harness would pass.  RunGenMain prints its
-profiler table to stdout on exit, so just read the output.
+"""Run a specific RunGenMain binary with this experiment's standard benchmark arguments.
+RunGenMain prints its profiler table to stdout on exit, so just read the output.
 
     ./runner.py path/to/dh_hl_pipeline.rungen
 
