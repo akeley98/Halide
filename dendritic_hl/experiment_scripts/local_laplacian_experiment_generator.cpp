@@ -135,6 +135,7 @@ private:
     // Downsample with a 1 3 3 1 filter.  `name` gives the two separable
     // intermediates readable, unique profiler names (e.g. "gPyramid_1_dx"/"_dy").
     Func downsample(Func f, const std::string &name) {
+        // Experiment limitation: don't schedule downy.
         using Halide::_;
         Func downx(name + "x"), downy(name + "y");
         downy(x, y, _) = (f(x, 2 * y - 1, _) + 3.0f * (f(x, 2 * y, _) + f(x, 2 * y + 1, _)) + f(x, 2 * y + 2, _)) / 8.0f;
@@ -145,6 +146,7 @@ private:
     // Upsample using bilinear interpolation.  `name` names the two separable
     // intermediates (e.g. "outGPyramid_0_ux"/"_uy").
     Func upsample(Func f, const std::string &name) {
+        // Experiment limitation: don't schedule upx.
         using Halide::_;
         Func upx(name + "x"), upy(name + "y");
         upx(x, y, _) = lerp(f((x + 1) / 2, y, _), f((x - 1) / 2, y, _), ((x % 2) * 2 + 1) / 4.0f);
