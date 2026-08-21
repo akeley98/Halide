@@ -342,30 +342,15 @@ WEAK int halide_profiler_instance_end(void *user_context, halide_profiler_instan
             p->wall_time_mean += delta / n;
             p->wall_time_m2 += delta * (x - p->wall_time_mean);
 
-            // Min/max and the K-smallest fast-tail error bar. The struct is
-            // memset to 0, so seed smallest[] to "infinity" on the first run.
-            const int K = HALIDE_PROFILER_WALL_TIME_SMALLEST_K;
+            // Min/max. The struct is memset to 0, so seed both on the first run.
             if (p->runs == 0) {
                 p->wall_time_min = p->wall_time_max = true_duration;
-                for (int i = 0; i < K; i++) {
-                    p->wall_time_smallest[i] = (uint64_t)(-1);
-                }
             }
             if (true_duration < p->wall_time_min) {
                 p->wall_time_min = true_duration;
             }
             if (true_duration > p->wall_time_max) {
                 p->wall_time_max = true_duration;
-            }
-            // Insert into the ascending K-smallest buffer. Common case: one
-            // compare against the largest kept value, then reject.
-            if (true_duration < p->wall_time_smallest[K - 1]) {
-                int i = K - 1;
-                while (i > 0 && p->wall_time_smallest[i - 1] > true_duration) {
-                    p->wall_time_smallest[i] = p->wall_time_smallest[i - 1];
-                    i--;
-                }
-                p->wall_time_smallest[i] = true_duration;
             }
         }
 
@@ -1881,11 +1866,6 @@ WEAK void halide_profiler_report_unlocked(void *user_context, halide_profiler_st
                 // noise). Consumer: variance = wall_time_m2 / runs.
                 field_u64("      ", "wall_time_mean", (uint64_t)(pp->wall_time_mean + 0.5));
                 field_u64("      ", "wall_time_m2", (uint64_t)(pp->wall_time_m2 + 0.5));
-                json << "      \"wall_time_smallest\": [";
-                for (int i = 0; i < HALIDE_PROFILER_WALL_TIME_SMALLEST_K; i++) {
-                    json << (i ? ", " : "") << pp->wall_time_smallest[i];
-                }
-                json << "],\n";
                 json << "      \"funcs\": [";
 
                 for (int i = 0; i < pp->num_funcs; i++) {
