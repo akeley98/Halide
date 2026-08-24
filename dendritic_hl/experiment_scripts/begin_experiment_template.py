@@ -175,18 +175,8 @@ def write_build_helpers():
 # Catalog (always; the LAST step -- `experiment begin` logs the start time).
 # --------------------------------------------------------------------------
 
-# RunGenMain arguments giving the problem sizes that used to be the generator's
-# set_estimates (input/output 1536x2560x3; levels=8, alpha=1, beta=1).
-# --estimate_all no longer works now that the estimates are stripped from the
-# generator, so the sizes are explicit.  Verified end-to-end against ~/Halide:
-# `dh_hl build --profile` compiles this generator and benchmarks it under this
-# problem, with output throughput matching a 1536x2560 frame.
-PROBLEM_SHORT_NAME = "local_laplacian"
-PROBLEM_ARGV = [
-    "<RunGenMain>", "--benchmarks=all",
-    "--output_extents=[1536,2560,3]",
-    "input=random:0:[1536,2560,3]", "levels=8", "alpha=1", "beta=1",
-]
+PROBLEM_SHORT_NAME = "experiment_official"
+PROBLEM_ARGV = @@PROBLEM_ARGV@@
 
 def _git(*args):
     subprocess.run(["git", *args], check=True, cwd=HERE)

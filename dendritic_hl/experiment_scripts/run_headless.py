@@ -47,9 +47,7 @@ DEFAULT_MAX_SECONDS = 7200 + 60  # Give undocumented 1 minute grace period.
 
 # App name
 # Not magic; you have to make all the generator files etc. yourself.
-# Also begin_experiment_template.py isn't parameterized like this.
-# You have to update the problem argv.
-APP = "local_laplacian"
+APP = "tile_match"
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 # experiment_scripts/ lives directly under the harness source dir (dendritic_hl/).
@@ -62,7 +60,44 @@ _REPO_DIR = os.path.dirname(_HERE)
 _DH_HL = "dh_hl"
 _DETAIL_DIR = os.path.join(_REPO_DIR, "detail")
 _EXAMPLES_DIR = os.path.join(_REPO_DIR, "examples")
-_GENERATOR_SRC = os.path.join(_HERE, f"{APP}_experiment_generator.cpp")
+
+if APP == "local_laplacian":
+    template_path = _HERE
+    # RunGenMain arguments giving the problem sizes that used to be the generator's
+    # set_estimates (input/output 1536x2560x3; levels=8, alpha=1, beta=1).
+    # --estimate_all no longer works now that the estimates are stripped from the
+    # generator, so the sizes are explicit.  Verified end-to-end against ~/Halide:
+    # `dh_hl build --profile` compiles this generator and benchmarks it under this
+    # problem, with output throughput matching a 1536x2560 frame.
+    _PROBLEM_ARGV = [
+        "<RunGenMain>", "--benchmarks=all",
+        "--output_extents=[1536,2560,3]",
+        "input=random:0:[1536,2560,3]", "levels=8", "alpha=1", "beta=1",
+    ]
+elif APP == "tile_match":
+    # ========================================================================
+    # CRITICAL rule with REAL WORLD CONSEQUENCES:
+    # The tile_match pipeline is sourced from Adobe proprietary software.
+    # It MUST be stored outside this Halide repository to prevent that we
+    # ever accidentally push it to the open source Halide repository.
+    # ========================================================================
+    template_path = os.path.join(_HERE, "../../../proprietary_tile_match/")
+    _PROBLEM_ARGV = [
+        "<RunGenMain>", "--benchmarks=all",
+        "--output_extents=[200,300,3]",
+        "img_ref=random:1:[1536,2560]",
+        "img_alt=random:2:[1536,2560]",
+        "match_uv_low=random:3:[100,150,2]",
+        "up_scale=2", "tile_size_low=16", "search_radius=4", "black_level=0", "white_level=1023",
+        "base_sum_intensity=random:4:[200,300,1]"
+    ]
+else:
+    raise ValueError(f"TODO implement {APP}")
+
+no_schedule_generator_path = os.path.join(template_path, f"{APP}_experiment_generator.cpp")
+answer_key_parameters_path = os.path.join(template_path, f"{APP}_parameters.json")
+answer_key_generator_path = os.path.join(template_path, f"{APP}_answer_key.cpp")
+
 # The second-level script is kept in its own .py file (discovered by relative
 # path) so an editor highlights it as Python, not one giant string literal.
 _TEMPLATE_PATH = os.path.join(_HERE, "begin_experiment_template.py")
@@ -220,7 +255,7 @@ def main(argv=None):
 
     print(f"Experiment dir: {exp_dir}", file=sys.stderr)
 
-    shutil.copyfile(_GENERATOR_SRC,
+    shutil.copyfile(no_schedule_generator_path,
                     os.path.join(exp_dir, "original_generator.cpp"))
     with open(os.path.join(exp_dir, "original_generator_parameters.json"),
               "w", encoding="utf-8") as f:
@@ -279,8 +314,8 @@ def main(argv=None):
         "python3",
         os.path.join(_HERE, "profiler_session.py"),
         os.path.join(exp_dir, "catalog.dh_hl"),
-        os.path.join(_HERE, f"{APP}_answer_key.cpp"),
-        os.path.join(_HERE, f"{APP}_parameters.json"),
+        answer_key_generator_path,
+        answer_key_parameters_path,
         "--json-append",
         os.path.join(args.data_dir, "sessions.json"),
     ]
@@ -326,6 +361,7 @@ def _render_begin_experiment(label):
     subs = {
         "@@LABEL@@": repr(label),  # I wanted to not leak this to agents but hard to fix.
         "@@NEED_BUILD_PY@@": repr(not harness),
+        "@@PROBLEM_ARGV@@": repr(_PROBLEM_ARGV),
         "@@DH_HL@@": repr(_DH_HL),
         "@@DETAIL_DIR@@": repr(_DETAIL_DIR),
         "@@EXAMPLES_DIR@@": repr(_EXAMPLES_DIR),
