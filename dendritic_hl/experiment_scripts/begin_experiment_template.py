@@ -93,7 +93,7 @@ CATALOG_PATH = @@CATALOG_PATH@@
 HALIDE_PATH = @@HALIDE_PATH@@
 
 if len(sys.argv) != 4:
-    sys.stderr.write(f"Usage: {sys.argv[0]} {{generator C++}} {{JSON parameters}} {{bin dir}}")
+    sys.stderr.write(f"Usage: {sys.argv[0]} {{generator C++}} {{JSON parameters}} {{bin dir}}\\n")
     sys.exit(1)
 
 _, cpp_path, json_path, bin_path = sys.argv
@@ -129,7 +129,7 @@ def _dh(*args, **kwargs):
     except subprocess.CalledProcessError:
         sys.exit(1)
 
-sys.stderr.write("Seconds elapsed: ")
+sys.stderr.write("Seconds elapsed: ")  # No newline to join with dh_hl output
 sys.stderr.flush()
 _dh("experiment", "-C", CATALOG_PATH, "time")
 '''
