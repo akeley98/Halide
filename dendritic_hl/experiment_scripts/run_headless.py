@@ -171,8 +171,13 @@ def main(argv=None):
                         "experiment subdirectory inside")
     parser.add_argument("label", choices=LABELS, help="experiment cell label")
     parser.add_argument("--dir-only", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--begin-end", action=argparse.BooleanOptionalAction, default=False)
     args = parser.parse_args(argv)
     dir_only = args.dir_only
+    begin_end = args.begin_end
+
+    if begin_end and not dir_only:
+        parser.error("--begin-end requires --dir-only (otherwise agent will be confused)")
 
     if not os.path.isdir(args.data_dir):
         parser.error("data_dir is not a directory: {!r} (typo protection)"
@@ -265,7 +270,7 @@ def main(argv=None):
         dir_only=args.dir_only,
     )
 
-    if dir_only:
+    if begin_end:
         subprocess.run(["python3", os.path.join(exp_dir, "begin_experiment.py")])
         subprocess.run(["python3", os.path.join(exp_dir, "end_experiment.py")])
 
