@@ -458,6 +458,9 @@ Overfitting, including making assumptions that would
   The scoring is based on benchmarking all schedules ever logged, not
   just the last. The score is the schedule with the lowest cost,
   based on a large number of benchmarks run strictly after the experiment.
+  The `bound` function is safely allowed as part of this:
+  incorrect `bound` usage for the problem size is detected in benchmarking,
+  and these failed benchmarks are not scored.
 
 * Modify only the Halide schedule, not the Halide algorithm
   (further instructions inside the provided generator C++ source).
