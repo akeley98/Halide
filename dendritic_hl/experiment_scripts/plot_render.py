@@ -229,7 +229,7 @@ def _finish_axes(ax, x_bounds, title, ymin, ymax):
     ax.set_ylim(bottom=ymin, top=ymax)
 
     ax.set_xlabel("seconds since experiment began")
-    ax.set_ylabel("cost  (runtime relative to reference)")
+    ax.set_ylabel("lowest cost  (runtime relative to reference)")
     ax.set_title(title)
     ax.grid(True, which="major", axis="both", alpha=0.25)
 
