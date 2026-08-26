@@ -42,6 +42,11 @@ def main():
     parser.add_argument("data_dir", help="existing directory to create the "
                         "experiment subdirectory inside")
     parser.add_argument("count", type=int, help="Number of experiments of each type")
+    parser.add_argument("--app", required=True,
+                        help="app name, forwarded to run_headless.py --app")
+    parser.add_argument("--template-path", required=True,
+                        help="template directory, forwarded to run_headless.py "
+                        "--template-path (proprietary apps: keep it OUTSIDE this repo)")
     parser.add_argument(
         "--resume",
         type=int,
@@ -70,6 +75,8 @@ def main():
                 os.path.join(_HERE, "run_headless.py"),
                 args.data_dir,
                 label,
+                "--app", args.app,
+                "--template-path", args.template_path,
                 # "--dir-only",
             ],
                 # This prevents ^C SIGINT from getting delivered to the child process.

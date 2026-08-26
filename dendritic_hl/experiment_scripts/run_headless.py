@@ -33,6 +33,7 @@ import tempfile
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 
@@ -45,9 +46,12 @@ initial_prompt = "Hello! You are participating in a study on autonomous LLM-guid
 
 DEFAULT_MAX_SECONDS = 7200 + 60  # Give undocumented 1 minute grace period.
 
-# App name
-# Not magic; you have to make all the generator files etc. yourself.
-APP = "tile_match"
+# App name and template path come from the command line (--app / --template-path)
+# and are bundled into an AppConfig (see below), threaded through main() ->
+# _render_begin_experiment / _make_prompt.  Not magic: you still have to make all
+# the template files yourself, named {app}_experiment_generator.cpp /
+# {app}_parameters.json / {app}_answer_key.cpp / {app}_argv.json inside the
+# template path.
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 # experiment_scripts/ lives directly under the harness source dir (dendritic_hl/).
@@ -61,42 +65,63 @@ _DH_HL = "dh_hl"
 _DETAIL_DIR = os.path.join(_REPO_DIR, "detail")
 _EXAMPLES_DIR = os.path.join(_REPO_DIR, "examples")
 
-if APP == "local_laplacian":
-    template_path = _HERE
-    # RunGenMain arguments giving the problem sizes that used to be the generator's
-    # set_estimates (input/output 1536x2560x3; levels=8, alpha=1, beta=1).
-    # --estimate_all no longer works now that the estimates are stripped from the
-    # generator, so the sizes are explicit.  Verified end-to-end against ~/Halide:
-    # `dh_hl build --profile` compiles this generator and benchmarks it under this
-    # problem, with output throughput matching a 1536x2560 frame.
-    _PROBLEM_ARGV = [
-        "<RunGenMain>", "--benchmarks=all",
-        "--output_extents=[1536,2560,3]",
-        "input=random:0:[1536,2560,3]", "levels=8", "alpha=1", "beta=1",
-    ]
-elif APP == "tile_match":
-    # ========================================================================
-    # CRITICAL rule with REAL WORLD CONSEQUENCES:
-    # The tile_match pipeline is sourced from Adobe proprietary software.
-    # It MUST be stored outside this Halide repository to prevent that we
-    # ever accidentally push it to the open source Halide repository.
-    # ========================================================================
-    template_path = os.path.join(_HERE, "../../../proprietary_tile_match/")
-    _PROBLEM_ARGV = [
-        "<RunGenMain>", "--benchmarks=all",
-        "--output_extents=[200,300,3]",
-        "img_ref=random:1:[1536,2560]",
-        "img_alt=random:2:[1536,2560]",
-        "match_uv_low=random:3:[100,150,2]",
-        "up_scale=2", "tile_size_low=16", "search_radius=4", "black_level=0", "white_level=1023",
-        "base_sum_intensity=random:4:[200,300,1]"
-    ]
-else:
-    raise ValueError(f"TODO implement {APP}")
+# ========================================================================
+# CRITICAL rule with REAL WORLD CONSEQUENCES:
+# Some templates (e.g. tile_match) are sourced from Adobe proprietary software.
+# These MUST be stored outside this Halide repository to prevent that we
+# ever accidentally push it to the open source Halide repository.  That is why
+# the template path is a command-line argument, NOT hardwired here.
+# ========================================================================
 
-no_schedule_generator_path = os.path.join(template_path, f"{APP}_experiment_generator.cpp")
-answer_key_parameters_path = os.path.join(template_path, f"{APP}_parameters.json")
-answer_key_generator_path = os.path.join(template_path, f"{APP}_answer_key.cpp")
+
+def _load_problem_argv(template_path, app):
+    """RunGenMain argv (the fixed problem sizes) for `app`, read from
+    `{app}_argv.json` in the template path.
+
+    Kept as a JSON file in the template rather than baked into this script so
+    proprietary problem sizes stay outside the open-source Halide repo.  The
+    argv is a list of strings whose first element is the `<RunGenMain>`
+    placeholder, e.g. for local_laplacian these were the old generator
+    set_estimates (input/output 1536x2560x3; levels=8, alpha=1, beta=1),
+    stripped from the generator and made explicit because --estimate_all no
+    longer works."""
+    path = os.path.join(template_path, f"{app}_argv.json")
+    with open(path, encoding="utf-8") as f:
+        argv = json.load(f)
+    if not isinstance(argv, list) or not all(isinstance(x, str) for x in argv):
+        raise ValueError(f"{path}: expected a JSON list of strings")
+    return argv
+
+
+@dataclass(frozen=True)
+class AppConfig:
+    """Everything derived from the --app / --template-path CLI pair: the app
+    name, its template directory, the fixed problem argv, and the paths to the
+    three template files.  Built once in main() and threaded through
+    _render_begin_experiment / _make_prompt instead of module globals."""
+    app: str
+    template_path: str
+    problem_argv: tuple            # {app}_argv.json (RunGenMain problem sizes)
+    generator_path: str            # {app}_experiment_generator.cpp (no schedule)
+    parameters_path: str           # {app}_parameters.json (answer key)
+    answer_key_path: str           # {app}_answer_key.cpp
+
+    @classmethod
+    def load(cls, app, template_path):
+        """Build from the app name + template dir, reading the argv JSON and
+        deriving the template-file paths by naming convention."""
+        return cls(
+            app=app,
+            template_path=template_path,
+            # tuple so this frozen config stays immutable/hashable; rendered
+            # back to a list literal in _render_begin_experiment (the generated
+            # script does `[...] + RUN_ARGS`, which needs a list).
+            problem_argv=tuple(_load_problem_argv(template_path, app)),
+            generator_path=os.path.join(template_path, f"{app}_experiment_generator.cpp"),
+            parameters_path=os.path.join(template_path, f"{app}_parameters.json"),
+            answer_key_path=os.path.join(template_path, f"{app}_answer_key.cpp"),
+        )
+
 
 # The second-level script is kept in its own .py file (discovered by relative
 # path) so an editor highlights it as Python, not one giant string literal.
@@ -205,6 +230,14 @@ def main(argv=None):
     parser.add_argument("data_dir", help="existing directory to create the "
                         "experiment subdirectory inside")
     parser.add_argument("label", choices=LABELS, help="experiment cell label")
+    parser.add_argument("--app", required=True,
+                        help="app name; selects {app}_experiment_generator.cpp / "
+                        "{app}_parameters.json / {app}_answer_key.cpp / "
+                        "{app}_argv.json inside the template path")
+    parser.add_argument("--template-path", required=True,
+                        help="directory holding the app's template files. For "
+                        "proprietary apps (e.g. tile_match) this MUST live OUTSIDE "
+                        "this Halide repository -- see the critical rule above.")
     parser.add_argument("--dir-only", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--begin-end", action=argparse.BooleanOptionalAction, default=False)
     args = parser.parse_args(argv)
@@ -217,6 +250,13 @@ def main(argv=None):
     if not os.path.isdir(args.data_dir):
         parser.error("data_dir is not a directory: {!r} (typo protection)"
                      .format(args.data_dir))
+    if not os.path.isdir(args.template_path):
+        parser.error("template-path is not a directory: {!r} (typo protection)"
+                     .format(args.template_path))
+
+    # Bundle the app name + template path (and everything derived from them)
+    # into one AppConfig, threaded through the rest of main().
+    cfg = AppConfig.load(args.app, args.template_path)
 
     # Install dh_hl snapshot with correct guide/harness.
     expected_harness = label_allows_harness(args.label)
@@ -255,7 +295,7 @@ def main(argv=None):
 
     print(f"Experiment dir: {exp_dir}", file=sys.stderr)
 
-    shutil.copyfile(no_schedule_generator_path,
+    shutil.copyfile(cfg.generator_path,
                     os.path.join(exp_dir, "original_generator.cpp"))
     with open(os.path.join(exp_dir, "original_generator_parameters.json"),
               "w", encoding="utf-8") as f:
@@ -271,7 +311,7 @@ def main(argv=None):
     # Write begin_experiment.py
     begin_path = os.path.join(exp_dir, "begin_experiment.py")
     with open(begin_path, "w", encoding="utf-8") as f:
-        f.write(_render_begin_experiment(args.label))
+        f.write(_render_begin_experiment(args.label, cfg))
     os.chmod(begin_path, 0o755)
 
     # Write end_experiment.py
@@ -314,8 +354,8 @@ def main(argv=None):
         "python3",
         os.path.join(_HERE, "profiler_session.py"),
         os.path.join(exp_dir, "catalog.dh_hl"),
-        answer_key_generator_path,
-        answer_key_parameters_path,
+        cfg.answer_key_path,
+        cfg.parameters_path,
         "--json-append",
         os.path.join(args.data_dir, "sessions.json"),
     ]
@@ -326,7 +366,7 @@ def main(argv=None):
     return 0
 
 
-def _render_begin_experiment(label):
+def _render_begin_experiment(label, cfg):
     """Return the text of the `begin_experiment.py` to drop in the new dir, read
     from `begin_experiment_template.py` with this experiment's fixed values baked
     in (absolute paths, so the generated script is location-independent).
@@ -361,11 +401,11 @@ def _render_begin_experiment(label):
     subs = {
         "@@LABEL@@": repr(label),  # I wanted to not leak this to agents but hard to fix.
         "@@NEED_BUILD_PY@@": repr(not harness),
-        "@@PROBLEM_ARGV@@": repr(_PROBLEM_ARGV),
+        "@@PROBLEM_ARGV@@": repr(list(cfg.problem_argv)),
         "@@DH_HL@@": repr(_DH_HL),
         "@@DETAIL_DIR@@": repr(_DETAIL_DIR),
         "@@EXAMPLES_DIR@@": repr(_EXAMPLES_DIR),
-        "@@PROMPT@@": repr(_make_prompt(harness, guide)),
+        "@@PROMPT@@": repr(_make_prompt(harness, guide, cfg.app)),
     }
     with open(_TEMPLATE_PATH, "r", encoding="utf-8") as f:
         text = f.read()
@@ -378,8 +418,9 @@ def _render_begin_experiment(label):
 # Prompt File
 # --------------------------------------------------------------------------
 
-def _make_prompt(harness, guide):
-    """Prompt text, parameterized on (harness, guide)."""
+def _make_prompt(harness, guide, app):
+    """Prompt text, parameterized on (harness, guide) for app name `app`."""
+    APP = app
     chunks = []
 
     chunks.append(f"""\
