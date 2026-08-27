@@ -181,6 +181,9 @@ def _harness_allowed_via_cli():
 
 
 def _unzip_halide(exp_dir):
+    with open(_HALIDE_TGZ_PATH, "rb"):
+        # Just to get a specific error message if Halide.tgz missing
+        pass
     r = subprocess.run(["tar", "-xzf", _HALIDE_TGZ_PATH, "-C", exp_dir])
     if r.returncode != 0:
         raise ValueError("Extract Halide.tgz failed")
@@ -234,10 +237,11 @@ def main(argv=None):
                         help="app name; selects {app}_experiment_generator.cpp / "
                         "{app}_parameters.json / {app}_answer_key.cpp / "
                         "{app}_argv.json inside the template path")
-    parser.add_argument("--template-path", required=True,
+    parser.add_argument("--template-path", required=False,
                         help="directory holding the app's template files. For "
                         "proprietary apps (e.g. tile_match) this MUST live OUTSIDE "
-                        "this Halide repository -- see the critical rule above.")
+                        "this Halide repository -- see the critical rule above.",
+                        default=_HERE)
     parser.add_argument("--dir-only", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--begin-end", action=argparse.BooleanOptionalAction, default=False)
     args = parser.parse_args(argv)
