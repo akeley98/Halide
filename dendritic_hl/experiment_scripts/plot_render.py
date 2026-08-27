@@ -38,7 +38,7 @@ _TS_FMT = "%Y-%m-%dT%H%M%S_%fZ"
 # the future; add/remove/re-color entries here.
 LABEL_STYLE = [
     ("harness_F_guide_F", "harness OFF guide OFF", "#BCBCBC"),
-    ("harness_F_guide_T", "harness OFF guide ON",  "#AAE8AA"),
+    ("harness_F_guide_T", "harness OFF guide ON",  "#95CC95"),
     ("harness_T_guide_F", "harness ON guide OFF",  "#333333"),
     ("harness_T_guide_T", "harness ON guide ON",   "#009500"),
 ]
