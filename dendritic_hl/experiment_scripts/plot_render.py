@@ -17,10 +17,11 @@ Input and output are mandatory.
 """
 
 import argparse
+import bisect
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 # --------------------------------------------------------------------------- #
@@ -72,7 +73,75 @@ def marker_for_schedule(clone_in):
 # --------------------------------------------------------------------------- #
 
 def _parse_ts(text):
+    """Parse a dh_hl timestamp (e.g. '2026-08-13T222943_452308Z'). Naive UTC."""
     return datetime.strptime(text, _TS_FMT)
+
+
+def _parse_token_log_ts(text):
+    """Parse a token_log.jsonl `utc` timestamp -- a DIFFERENT format from dh_hl.
+
+    token_log rows use ISO-8601 with an explicit offset and colons, e.g.
+    '2026-08-20T22:34:40.697342+00:00' (not dh_hl's '..._%fZ').  Returns a
+    tz-aware UTC datetime.
+    """
+    dt = datetime.fromisoformat(text)
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
+def _dh_hl_epoch(text):
+    """dh_hl timestamp string -> UTC epoch seconds (dh_hl stamps are UTC)."""
+    return _parse_ts(text).replace(tzinfo=timezone.utc).timestamp()
+
+
+# Cumulative token fields carried per timeline row / per schedule.
+_TOKEN_FIELDS = ("cum_input", "cum_cache_creation", "cum_cache_read", "cum_output")
+
+
+def _build_token_lookup(timeline):
+    """From a timeline of rows (utc + the _TOKEN_FIELDS) build sorted parallel
+    arrays (epochs, {field: [values]}) for step-function lookup by time.  Empty
+    timeline -> empty arrays (every lookup then yields 0 for all fields)."""
+    rows = sorted(timeline, key=lambda r: _parse_token_log_ts(r["utc"]))
+    epochs = [_parse_token_log_ts(r["utc"]).timestamp() for r in rows]
+    cols = {f: [r.get(f, 0) for r in rows] for f in _TOKEN_FIELDS}
+    return (epochs, cols)
+
+
+def _tokens_as_of(lookup, epoch):
+    """Return {field: cumulative value} as of `epoch`: values at the last timeline
+    row with timestamp <= epoch (step function).  All zero before the first row."""
+    epochs, cols = lookup
+    i = bisect.bisect_right(epochs, epoch) - 1
+    if i < 0:
+        return {f: 0 for f in _TOKEN_FIELDS}
+    return {f: cols[f][i] for f in _TOKEN_FIELDS}
+
+
+# X-axis modes.  Each is:
+#   (filename_suffix, x_of(schedule), x-axis label,
+#    end_x_of(experiment), end_marker_label)
+# The first reproduces the original seconds chart (end marker = experiment end
+# TIME).  The token modes plot cumulative tokens and place the square end marker
+# at each experiment's TOTAL tokens (its final token_log row) so the per-
+# experiment token price is readable at a glance.
+#
+# Token accounting with prompt caching: the input the model actually PROCESSED is
+# cum_input + cum_cache_creation (cache_creation is freshly-prefilled input
+# written to the cache).  cum_cache_read is reused prefix (a cheap reload, not
+# recomputed) and is EXCLUDED here -- counting it would re-add the whole context
+# on every turn.  Output is never cached.
+X_MODES = [
+    ("",               lambda s: s.seconds,
+     "seconds since experiment began",
+     lambda e: e.schedules[-1].seconds,                  "experiment end time"),
+    ("_output_tokens", lambda s: s.cum_output,
+     "cumulative output tokens",
+     lambda e: e.final_cum_output,                       "last token (experiment total)"),
+    ("_inout_tokens",  lambda s: s.cum_input + s.cum_cache_creation + s.cum_output,
+     "cumulative input + output tokens (cache reads excluded)",
+     lambda e: e.final_cum_input + e.final_cum_cache_creation + e.final_cum_output,
+     "last token (experiment total)"),
+]
 
 
 class Schedule:
@@ -93,6 +162,12 @@ class Schedule:
         # Filled in once the whole experiment is known.
         self.name = None        # "{int_seconds}_{n}"
         self.is_best_yet = False
+        # Cumulative token counts as of this schedule's timestamp; filled in by
+        # Experiment once the token timeline is known.
+        self.cum_input = 0
+        self.cum_cache_creation = 0
+        self.cum_cache_read = 0
+        self.cum_output = 0
 
 
 class Experiment:
@@ -107,6 +182,26 @@ class Experiment:
         schedules = [Schedule(s, begin) for s in raw["schedules"]]
         schedules.sort(key=lambda s: s.timestamp)
         self.schedules = schedules
+
+        # Translate each schedule's timestamp -> cumulative tokens via the
+        # experiment's token timeline (empty if no token_log was captured).
+        token_lookup = _build_token_lookup(raw.get("token_timeline", []))
+        epochs, cols = token_lookup
+        self.has_tokens = bool(epochs)
+        for s in schedules:
+            cum = _tokens_as_of(token_lookup, _dh_hl_epoch(s.timestamp))
+            s.cum_input = cum["cum_input"]
+            s.cum_cache_creation = cum["cum_cache_creation"]
+            s.cum_cache_read = cum["cum_cache_read"]
+            s.cum_output = cum["cum_output"]
+
+        # Experiment TOTAL tokens = the last timeline row (the true "token price";
+        # this is slightly past the last schedule, since closing turns -- comment,
+        # close_session, end_experiment -- also spend tokens).  Used to place the
+        # "last token" end marker on the token charts.
+        self.final_cum_input = cols["cum_input"][-1] if epochs else 0
+        self.final_cum_cache_creation = cols["cum_cache_creation"][-1] if epochs else 0
+        self.final_cum_output = cols["cum_output"][-1] if epochs else 0
 
         # Assign "{seconds}_{n}" names: n disambiguates int_seconds collisions,
         # counted in time order.
@@ -167,59 +262,68 @@ def load_experiments(path):
 # Charts (Output A)
 # --------------------------------------------------------------------------- #
 
-def _draw_experiment(ax, exp, scatter_all, x_right):
+def _draw_experiment(ax, exp, scatter_all, x_right, x_of, end_x):
     """Draw one experiment's curve, scatter, and end marker onto `ax`.
 
-    If `scatter_all` is True every schedule is scattered (per-experiment chart);
-    otherwise only "best yet" schedules are (top-level chart).  The curve is
-    extended out to `x_right` (the chart's right margin).
+    `x_of(schedule)` gives the x-coordinate (seconds or a cumulative-token count);
+    the y-coordinate is always cost.  If `scatter_all` is True every schedule is
+    scattered (per-experiment chart); otherwise only "best yet" schedules are
+    (top-level chart).  The curve is extended to `x_right` (chart right margin).
+    `end_x` is the x of the square end marker (experiment end time on the seconds
+    chart; experiment TOTAL tokens on the token charts).
     """
     _pretty, color = _style_for(exp.label)
 
-    # Cost-vs-time curve: f(x) = min cost among schedules with seconds <= x.
+    # Cost-vs-x curve: f(x) = min cost among schedules with x(schedule) <= x.
     # This is the downward staircase through the "best yet" points.  f stays
     # defined (constant at the final best cost) for all x to the right of the
     # last schedule, so extend the curve all the way to the right margin.
+    # (x_of is non-decreasing over time-sorted schedules for every mode, so the
+    # staircase stays monotonic in x; token modes may tie several schedules at
+    # one x, which shows as a vertical step -- expected.)
     corners = exp.best_yet()
-    step_x = [s.seconds for s in corners] + [x_right]
+    step_x = [x_of(s) for s in corners] + [x_right]
     step_y = [s.cost for s in corners] + [corners[-1].cost]
     ax.step(step_x, step_y, where="post", color=color, lw=1.8, zorder=3)
 
-    # Scatter plot: O if clone_in, X otherwise.
-    # Experiment end marker: square at (newest schedule seconds, best cost).
-    # Drawn *behind* the X/O scatter (but above the curve) and made a little
-    # larger so its corners peek out: when the final schedule has ~the same
-    # cost as the best and the two markers overlap, the X/O on top still shows
-    # what kind of schedule the last one was.
-    ax.scatter([exp.end_seconds], [exp.best_cost], color=color, marker="s",
+    # End marker: square at (end_x, best cost).  On the seconds chart end_x is the
+    # newest schedule's time; on the token charts it is the experiment's TOTAL
+    # token count, so the square marks the per-experiment token price on the
+    # best-cost line.  Drawn *behind* the X/O scatter (but above the curve) and a
+    # little larger so its corners peek out when it overlaps a schedule marker.
+    ax.scatter([end_x], [exp.best_cost], color=color, marker="s",
                s=90, zorder=3.5, edgecolors="white", linewidths=0.8)
 
+    # Scatter plot: O if clone_in, X otherwise.
     scattered = exp.schedules if scatter_all else corners
     for s in scattered:
         marker = marker_for_schedule(s.clone_in)
+        x = x_of(s)
         if marker == "x":
             # 'x' is unfilled and can't take an edgecolor, so give it a white
             # halo -- a thicker white 'x' underneath -- which keeps the X shape
             # legible even when it sits on the same-colored end square.
-            ax.scatter([s.seconds], [s.cost], color="white", marker=marker,
+            ax.scatter([x], [s.cost], color="white", marker=marker,
                        s=42, zorder=3.8, linewidths=3.5)
-            ax.scatter([s.seconds], [s.cost], color=color, marker=marker,
+            ax.scatter([x], [s.cost], color=color, marker=marker,
                        s=42, zorder=4, linewidths=1.5)
         else:
             # 'o' gets a thin white edge so light colors stay visible.
-            ax.scatter([s.seconds], [s.cost], color=color, marker=marker,
+            ax.scatter([x], [s.cost], color=color, marker=marker,
                        s=42, zorder=4, edgecolors="white", linewidths=0.8)
 
 
-def _x_bounds(experiments):
-    """Return (left, right) x-limits that fit every plotted scatter point."""
-    xs = [s.seconds for exp in experiments for s in exp.schedules]
+def _x_bounds(experiments, x_of, end_x_of):
+    """Return (left, right) x-limits that fit every plotted scatter point AND
+    every end marker (the token-total marker can sit past the last schedule)."""
+    xs = [x_of(s) for exp in experiments for s in exp.schedules]
+    xs += [end_x_of(exp) for exp in experiments]
     x_lo, x_hi = min(xs), max(xs)
     margin = 0.03 * max(x_hi - x_lo, 1.0)
     return (min(0.0, x_lo) - margin, x_hi + margin)
 
 
-def _finish_axes(ax, x_bounds, title, ymin, ymax):
+def _finish_axes(ax, x_bounds, title, ymin, ymax, xlabel):
     """Apply the shared cost=1 line, bounds, labels, and grid."""
     # Black dashed reference line at cost = 1.
     ax.axhline(1.0, color="black", ls="--", lw=1.0, zorder=1)
@@ -228,14 +332,18 @@ def _finish_axes(ax, x_bounds, title, ymin, ymax):
     # Y bounds come straight from the CLI.
     ax.set_ylim(bottom=ymin, top=ymax)
 
-    ax.set_xlabel("seconds since experiment began")
+    ax.set_xlabel(xlabel)
     ax.set_ylabel("lowest cost  (runtime relative to reference)")
     ax.set_title(title)
     ax.grid(True, which="major", axis="both", alpha=0.25)
 
 
-def _make_legend(ax, plt, labels_in_order):
-    """Add a legend: colored-line label entries, then the marker key entries."""
+def _make_legend(ax, plt, labels_in_order, end_marker_label):
+    """Add a legend: colored-line label entries, then the marker key entries.
+
+    `end_marker_label` is the text for the square end-marker key (e.g.
+    "experiment end time" or "last token (experiment total)").
+    """
     from matplotlib.lines import Line2D
 
     handles, texts = [], []
@@ -251,36 +359,41 @@ def _make_legend(ax, plt, labels_in_order):
     handles.append(Line2D([0], [0], color="black", marker="o", linestyle="None",
                           markersize=8, markerfacecolor="black"))
     texts.append("clone_in found: YES")
-    handles.append(Line2D([0], [0], color="black", marker="s", linestyle="None",
-                          markersize=8, markerfacecolor="black"))
-    texts.append("experiment end time")
+    handles.append(Line2D([0], [0], color="black", marker="s",
+                          linestyle="None", markersize=8,
+                          markerfacecolor="black"))
+    texts.append(end_marker_label)
 
     ax.legend(handles, texts, fontsize=8, framealpha=0.9)
 
 
-def render_top_chart(plt, experiments, out_path, title, ymin, ymax, x_bounds):
+def render_top_chart(plt, experiments, out_path, title, ymin, ymax, x_bounds,
+                     x_of, xlabel, end_x_of, end_marker_label):
     """Top-level chart: every experiment, best-yet scatter only."""
     fig, ax = plt.subplots(figsize=(9, 5.5))
     for exp in experiments:
-        _draw_experiment(ax, exp, scatter_all=False, x_right=x_bounds[1])
-    _finish_axes(ax, x_bounds, title, ymin, ymax)
+        _draw_experiment(ax, exp, scatter_all=False, x_right=x_bounds[1],
+                         x_of=x_of, end_x=end_x_of(exp))
+    _finish_axes(ax, x_bounds, title, ymin, ymax, xlabel)
     # Legend lists every configured label, in configuration order.
-    _make_legend(ax, plt, [label for label, _, _ in LABEL_STYLE])
+    _make_legend(ax, plt, [label for label, _, _ in LABEL_STYLE], end_marker_label)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
 
 
-def render_experiment_chart(plt, exp, out_path, title, ymin, ymax, x_bounds):
+def render_experiment_chart(plt, exp, out_path, title, ymin, ymax, x_bounds,
+                            x_of, xlabel, end_x_of, end_marker_label):
     """Per-experiment chart: one experiment, all schedules scattered.
 
     Uses the same `x_bounds` as the top-level chart so the charts share an
     x-axis and can be flipped through without the axis shifting.
     """
     fig, ax = plt.subplots(figsize=(9, 5.5))
-    _draw_experiment(ax, exp, scatter_all=True, x_right=x_bounds[1])
-    _finish_axes(ax, x_bounds, title, ymin, ymax)
-    _make_legend(ax, plt, [exp.label])
+    _draw_experiment(ax, exp, scatter_all=True, x_right=x_bounds[1],
+                     x_of=x_of, end_x=end_x_of(exp))
+    _finish_axes(ax, x_bounds, title, ymin, ymax, xlabel)
+    _make_legend(ax, plt, [exp.label], end_marker_label)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
@@ -374,25 +487,43 @@ def main(argv=None):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    # X bounds are computed once over all experiments and shared by every
-    # chart, so the axes line up when flipping through them.
-    x_bounds = _x_bounds(experiments)
+    # For each x-axis mode (seconds, output tokens, input+output tokens) render
+    # a top-level chart and one per-experiment chart.  The token charts get the
+    # filename suffix (e.g. chart_output_tokens.png) and omit the end marker.
+    # X bounds are computed once per mode over all experiments and shared by every
+    # chart of that mode, so the axes line up when flipping through them.
+    for suffix, x_of, xlabel, end_x_of, end_marker_label in X_MODES:
+        x_bounds = _x_bounds(experiments, x_of, end_x_of)
 
-    # Top-level chart.
-    render_top_chart(plt, experiments, os.path.join(args.output, "chart.png"),
-                     args.title, args.ymin, args.ymax, x_bounds)
+        render_top_chart(
+            plt, experiments,
+            os.path.join(args.output, "chart" + suffix + ".png"),
+            args.title, args.ymin, args.ymax, x_bounds,
+            x_of, xlabel, end_x_of, end_marker_label)
 
-    # Per-experiment outputs.
+        for exp in experiments:
+            # Per-experiment chart lives at the top level (next to chart.png) so
+            # it is easy to flip through in eog -- deliberately *not* inside the
+            # per-experiment directory.
+            render_experiment_chart(
+                plt, exp,
+                os.path.join(args.output, exp.dir_name + suffix + ".png"),
+                args.title, args.ymin, args.ymax, x_bounds,
+                x_of, xlabel, end_x_of, end_marker_label)
+
+    # Per-experiment source/parameter/cost outputs (written once, not per mode).
     for exp in experiments:
-        # Per-experiment chart lives at the top level (next to chart.png) so it
-        # is easy to flip through in eog -- deliberately *not* inside the
-        # per-experiment directory.
-        render_experiment_chart(
-            plt, exp, os.path.join(args.output, exp.dir_name + ".png"),
-            args.title, args.ymin, args.ymax, x_bounds)
         write_experiment_dir(exp, os.path.join(args.output, exp.dir_name))
 
-    print("wrote {} ({} experiments)".format(args.output, len(experiments)))
+    # Flag experiments that lack token data (their token charts will be flat at
+    # x=0 -- see task note about insufficient logging).
+    no_tokens = [e.dir_name for e in experiments if not e.has_tokens]
+    if no_tokens:
+        sys.stderr.write("WARNING: no token timeline for: {}\n".format(
+            ", ".join(no_tokens)))
+
+    print("wrote {} ({} experiments, {} x-modes)".format(
+        args.output, len(experiments), len(X_MODES)))
 
 
 if __name__ == "__main__":

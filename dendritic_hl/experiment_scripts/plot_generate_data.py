@@ -25,6 +25,24 @@ The schedule object schema is:
     sch["parameters"] -> JSON generator parameters objects: list of object
     sch["cost"] -> runtime relative to reference schedule: number
 
+Each experiment object also carries a token timeline (from the streaming
+launcher's token_log.jsonl, discovered in the `experiment/` dir beside the
+catalog) so a schedule timestamp can be translated to a cumulative token count:
+
+    obj["token_timeline"][i] -> object:
+        row["utc"] -> ISO-8601 timestamp string.  NOTE: this is a DIFFERENT
+            format from dh_hl timestamps (offset "+00:00", not a trailing "Z"),
+            so plot_render.py parses it with a separate parser.
+        row["cum_input"]          -> cumulative uncached INPUT tokens so far
+        row["cum_cache_creation"] -> cumulative cache-creation tokens (these are
+            freshly-prefilled input written to the cache -- real new input work)
+        row["cum_cache_read"]     -> cumulative cache-read tokens (reused prefix;
+            cheap reload, NOT recomputed -- exclude to avoid double counting)
+        row["cum_output"]         -> cumulative OUTPUT tokens so far
+    Rows are in file order (cumulatives are monotonic non-decreasing).  Empty list
+    if no token_log was found.  "Input the model processed" = cum_input +
+    cum_cache_creation; output is never cached.
+
 Usage:
     plot_generate_data.py --sessions {input} -o {output}
 
@@ -68,6 +86,40 @@ def _make_schedule_object(catalog_path, session_id, node_id):
     return dict(id=node_id, timestamp=ts, source=src, parameters=pa, cost=cost)
 
 
+def _load_token_timeline(catalog_path):
+    """Return the token timeline for the experiment owning `catalog_path`.
+
+    token_log.jsonl is written by the streaming launcher into the sibling
+    `experiment/` directory next to `catalog.dh_hl`.  Returns a list of
+    {"utc","cum_input","cum_output"} rows in file order (monotonic cumulatives),
+    or [] (with a warning) if the log is missing.
+    """
+    exp_dir = os.path.dirname(os.path.abspath(catalog_path))
+    tl_path = os.path.join(exp_dir, "experiment", "token_log.jsonl")
+    if not os.path.exists(tl_path):
+        sys.stderr.write("WARNING: no token_log.jsonl found at {}\n".format(tl_path))
+        return []
+    rows = []
+    with open(tl_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            r = json.loads(line)
+            # Keep all four cumulative counters so the renderer can choose the
+            # metric.  Note: "new input the model actually processed" is
+            # cum_input + cum_cache_creation (cache_creation IS freshly-prefilled
+            # input written to the cache); cum_cache_read is reused prefix (cheap
+            # reload, not recomputed) and is what should be excluded to avoid
+            # counting the whole context on every turn.
+            rows.append({"utc": r["utc"],
+                         "cum_input": r["cum_input"],
+                         "cum_cache_creation": r["cum_cache_creation"],
+                         "cum_cache_read": r["cum_cache_read"],
+                         "cum_output": r["cum_output"]})
+    return rows
+
+
 def _make_experiment_object(catalog_path, session_id):
     tool = lambda *args: _dh_hl(args + ("-C", catalog_path, "-s", session_id))
 
@@ -87,7 +139,10 @@ def _make_experiment_object(catalog_path, session_id):
             schedules.append(sch)
     schedules.sort(key=lambda sch: sch["timestamp"])
 
-    return dict(schedules=schedules, begin_timestamp=ts, label=label)
+    token_timeline = _load_token_timeline(catalog_path)
+
+    return dict(schedules=schedules, begin_timestamp=ts, label=label,
+                token_timeline=token_timeline)
 
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__,
