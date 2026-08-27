@@ -77,7 +77,7 @@ def main():
                 label,
                 "--app", args.app,
                 "--template-path", args.template_path,
-                # "--dir-only",
+                "--agent",
             ],
                 # This prevents ^C SIGINT from getting delivered to the child process.
                 start_new_session=True,

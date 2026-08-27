@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Install dh_hl, init one experiment directory, start the LLM Halide scheduling.
 
-    run_headless.py {data_dir} {label}
+    run_headless.py {data_dir} {label} {--agent|--no-agent} --app {app name}
 
 *label* is one of the four ablation cells -- harness_{T,F}_guide_{T,F} -- crossing
 "agent has the dh_hl harness" with "agent has the scheduling guide".  This creates
@@ -9,7 +9,7 @@
 the fixed inputs, the guide contents (harness_F_guide_T), and a generated
 `begin_experiment.py`; running that script later stands up the catalog.
 
-If no --dir-only arg is passed, after the directory is set up and dh_hl installed,
+If --agent is passed, after the directory is set up and dh_hl installed,
 `claude -p` is launched to run the experiment, and the post-experiment profiling is run.
 
 NOTE: for the no-harness cells `begin_experiment.py` ships `runner.py` (run a
@@ -242,14 +242,14 @@ def main(argv=None):
                         "proprietary apps (e.g. tile_match) this MUST live OUTSIDE "
                         "this Halide repository -- see the critical rule above.",
                         default=_HERE)
-    parser.add_argument("--dir-only", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--agent", action=argparse.BooleanOptionalAction, required=True)
     parser.add_argument("--begin-end", action=argparse.BooleanOptionalAction, default=False)
     args = parser.parse_args(argv)
-    dir_only = args.dir_only
+    dir_only = not args.agent
     begin_end = args.begin_end
 
     if begin_end and not dir_only:
-        parser.error("--begin-end requires --dir-only (otherwise agent will be confused)")
+        parser.error("--begin-end requires --no-agent (otherwise agent will be confused)")
 
     if not os.path.isdir(args.data_dir):
         parser.error("data_dir is not a directory: {!r} (typo protection)"
@@ -346,7 +346,7 @@ def main(argv=None):
         raw_log=os.path.join(exp_dir, "experiment/raw_log.jsonl"),
         effort="xhigh",
         session_id=session_id,
-        dir_only=args.dir_only,
+        dir_only=dir_only,
     )
 
     if begin_end:
