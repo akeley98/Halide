@@ -57,6 +57,8 @@ import subprocess
 import sys
 from datetime import datetime
 
+os.environ["DENDRITIC_HL_ALLOW_HARNESS"] = "1"
+
 # ./dh_hl sits one directory up from this script (dendritic_hl/dh_hl).
 DH_HL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                      "dh_hl")
