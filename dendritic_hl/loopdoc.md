@@ -333,6 +333,13 @@ Two Funcs are *not* covered by this default and are picked up later:
   (§7) to describe, it is deferred to §11; it is rare in practice and probably
   an inefficient choice, so postponing it keeps the cleaner concepts uncluttered.
 
+<!-- David Zhao Akeley: added after Adobe internship experiments -->
+WARNING: overriding a Func to be non-inline makes it opaque to bounds analysis.
+For example, an affine helper Func `helper(x) = m * x + b` used to index another
+func `f(helper(x))` may compile correctly by default; however, if `helper`
+is overriden to non-inline, the compiler may error with
+`calls ... in an unbounded way in dimension ...` due to bounds analysis failure.
+
 ---
 
 ## 6. `compute_root`: realize once at the top
