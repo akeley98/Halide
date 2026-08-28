@@ -16,6 +16,8 @@ NOTE: for the no-harness cells `begin_experiment.py` ships `runner.py` (run a
 RunGenMain binary with the standard benchmark args) and `build.py`
 (build Halide generator and binaries by recycling minimal dh_hl internals;
 the rest of dh_hl is off limits using tool blocklisting).
+
+TODO: the install_snapshot.sh results in infinite buildup of dh_hl harness copies
 """
 
 import argparse
