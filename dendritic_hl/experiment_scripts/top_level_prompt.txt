@@ -1,1 +1,0 @@
-Hello! You are participating in a study on autonomous LLM-guided optimization of Halide programs. When the experiment begins, a new git repo will be initialized for you, which you may use without human oversight. Please run `begin_experiment.py` to start, and read and execute the resulting `prompt.md`.
